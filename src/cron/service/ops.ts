@@ -819,7 +819,7 @@ async function skipInvalidPersistedManualRun(params: {
       startedAt: endedAt,
       endedAt,
     },
-    { preserveSchedule: params.mode === "force" },
+    { preserveSchedule: params.mode === "force", isManual: true },
   );
 
   emitCronRunFinished(
@@ -1304,7 +1304,7 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { preserveSchedule: mode === "force" },
+          { preserveSchedule: mode === "force", isManual: true },
         );
         applyTriggerRunResult(job, {
           status: coreResult.status,
