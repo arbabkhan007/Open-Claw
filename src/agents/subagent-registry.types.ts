@@ -4,6 +4,7 @@
  * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentExecutionPlacement } from "./execution-backends.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -146,4 +147,5 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  executionPlacement?: AgentExecutionPlacement;
 };
