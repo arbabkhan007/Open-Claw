@@ -117,6 +117,30 @@ describe("auditGatewayServiceConfig", () => {
     ).toContain("runtime state requires node:sqlite");
   });
 
+  it("reports configured custom service wrappers as expected", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: {
+        HOME: "/tmp",
+        OPENCLAW_EXPECTED_SERVICE_WRAPPER: "/usr/local/bin/openclaw-keychain-wrapper",
+      },
+      platform: "darwin",
+      command: {
+        programArguments: [
+          "/usr/local/bin/openclaw-keychain-wrapper",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(audit.expectedCustomWrapper).toEqual({
+      path: "/usr/local/bin/openclaw-keychain-wrapper",
+      status: "custom, expected",
+    });
+  });
+
   it("flags version-managed node paths", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },

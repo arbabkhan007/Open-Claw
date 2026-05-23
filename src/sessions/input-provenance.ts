@@ -14,6 +14,8 @@ export type InputProvenance = {
   originSessionId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
+  handoffId?: string;
+  replyTo?: string;
   sourceTool?: string;
 };
 
@@ -44,6 +46,8 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     originSessionId: normalizeOptionalString(record.originSessionId),
     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
     sourceChannel: normalizeOptionalString(record.sourceChannel),
+    handoffId: normalizeOptionalString(record.handoffId),
+    replyTo: normalizeOptionalString(record.replyTo),
     sourceTool: normalizeOptionalString(record.sourceTool),
   };
 }
@@ -116,6 +120,8 @@ function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefi
     provenance?.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
     provenance?.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
     provenance?.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
+    provenance?.handoffId ? `handoffId=${provenance.handoffId}` : undefined,
+    provenance?.replyTo ? `replyTo=${provenance.replyTo}` : undefined,
     "isUser=false",
   ].filter(Boolean);
   const header =
