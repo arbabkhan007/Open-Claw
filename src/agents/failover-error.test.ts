@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliMaxTurnsError,
+  isEmbeddedAttemptSessionTakeoverError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -1353,7 +1354,9 @@ describe("failover-error", () => {
     });
 
     it("returns true for direct embedded attempt session takeover errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+      const error = makeEmbeddedTakeoverError();
+      expect(isEmbeddedAttemptSessionTakeoverError(error)).toBe(true);
+      expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
     });
 
     it("returns true when the coordination error is nested via cause", () => {
