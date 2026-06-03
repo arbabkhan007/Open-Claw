@@ -1566,7 +1566,7 @@ async function dispatchReplyFromConfigInner(
         ? { ...ttsPayload, text: directiveOnlyCaptionText }
         : ttsPayload;
       const normalizedPayload = await normalizeReplyMediaPayload(finalTtsPayload);
-      const deliveredMedia = resolveSendableOutboundReplyParts(normalizedPayload).hasMedia;
+      const payloadHasMedia = resolveSendableOutboundReplyParts(normalizedPayload).hasMedia;
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
@@ -1588,7 +1588,9 @@ async function dispatchReplyFromConfigInner(
         return {
           queuedFinal: result.ok,
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
-          deliveredMedia,
+          // Only treat media as delivered when the route actually delivered it, so a
+          // failed/suppressed final send still lets the accumulated-text fallback run.
+          deliveredMedia: payloadHasMedia && isRoutedReplyDelivered(result),
         };
       }
       throwIfFinalDeliveryAborted();
@@ -1664,7 +1666,7 @@ async function dispatchReplyFromConfigInner(
       return {
         queuedFinal,
         routedFinalCount: 0,
-        deliveredMedia,
+        deliveredMedia: payloadHasMedia && queuedFinal,
         ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
       };
     };
