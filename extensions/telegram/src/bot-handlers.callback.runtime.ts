@@ -30,6 +30,7 @@ import type { TelegramGetChat } from "./bot/types.js";
 import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import { isTelegramMessageNotModifiedError } from "./network-errors.js";
 
 export function registerTelegramCallbackQueryHandler(
   { accountId, bot, runtime, telegramDeps, shouldSkipUpdate }: RegisterTelegramHandlerParams,
@@ -228,6 +229,20 @@ export function registerTelegramCallbackQueryHandler(
         return;
       }
 
+      const hasCallbackInlineKeyboard =
+        (callbackMessage.reply_markup?.inline_keyboard?.length ?? 0) > 0;
+      if (hasCallbackInlineKeyboard) {
+        try {
+          await actions.clearCallbackButtons();
+        } catch (editErr) {
+          if (
+            !isTelegramMessageNotModifiedError(editErr) &&
+            !isPermanentTelegramCallbackEditError(editErr)
+          ) {
+            throw new TelegramRetryableCallbackError(editErr);
+          }
+        }
+      }
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
