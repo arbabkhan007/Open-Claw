@@ -541,6 +541,7 @@ import {
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
+  appendRuntimeSelfContextToPrompt,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import { clearToolActivityRun, notifyToolActivity } from "./tool-activity-heartbeat.js";
@@ -4574,6 +4575,10 @@ export async function runEmbeddedAttempt(
             promptForRuntimeContextSplit,
             params.inputProvenance,
           );
+          promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
+            prompt: promptForRuntimeContextSplit,
+            config: params.config ?? getRuntimeConfig(),
+          });
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
