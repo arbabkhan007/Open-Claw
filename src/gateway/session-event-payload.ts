@@ -81,6 +81,9 @@ export function buildGatewaySessionEventFields(params: {
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
     status: sessionRow.status,
+    // Paused (sessions_yield) rows must broadcast their reason with the status;
+    // dropping it here would strand UI reducers without the pause context.
+    pauseReason: sessionRow.pauseReason,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,

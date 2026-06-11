@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
 // Control UI controller manages workboard gateway state.
 
@@ -2930,7 +2931,12 @@ function sessionTitle(session: GatewaySessionRow, recentUserText: string | null)
 }
 
 function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
-  if (session.hasActiveRun === true || session.status === "running") {
+  // Use the shared `isSessionRunActive` so paused (sessions_yield) sessions
+  // are reported as `running` in the Workboard view. A paused session has a
+  // queued continuation pending; treating it as `done` / `review` here would
+  // let the Workboard mark the yield as resolved while the runner is still
+  // about to drain the continuation.
+  if (isSessionRunActive(session)) {
     return "running";
   }
   if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
