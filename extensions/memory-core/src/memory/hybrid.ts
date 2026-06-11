@@ -97,6 +97,7 @@ export async function mergeHybridResults(params: {
       rankingScore: number;
       pathScore: number;
       exactPathSpecificity: ExactPathSpecificity;
+      hasVector: boolean;
     }
   >();
 
@@ -113,6 +114,7 @@ export async function mergeHybridResults(params: {
       rankingScore: 0,
       pathScore: 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
+      hasVector: true,
     });
   }
 
@@ -143,6 +145,7 @@ export async function mergeHybridResults(params: {
         rankingScore: r.rankingScore ?? r.textScore,
         pathScore: r.pathScore ?? 0,
         exactPathSpecificity,
+        hasVector: false,
       });
     }
   }
@@ -161,10 +164,12 @@ export async function mergeHybridResults(params: {
     // synthetic label as text, so its keyword signal is structurally near zero.
     // Drop the text weight for such candidates and renormalize the remaining
     // weights so the score collapses to the vector signal on the same [0,1]
-    // scale as text candidates. Text candidates are unchanged: their weights
-    // already sum to 1, so dividing by weightSum is a no-op.
-    const effectiveTextWeight =
-      params.isNonTextMediaPath?.(entry.path) === true ? 0 : params.textWeight;
+    // scale as text candidates. Only drop the signal when the candidate also has
+    // a vector signal, so a keyword-only media hit keeps its text-weighted score.
+    // Text candidates are unchanged: their weights already sum to 1, so dividing
+    // by weightSum is a no-op.
+    const dropMediaTextSignal = entry.hasVector && params.isNonTextMediaPath?.(entry.path) === true;
+    const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
     const weightSum = params.vectorWeight + effectiveTextWeight;
     const weightedContent =
       params.vectorWeight * entry.vectorScore + effectiveTextWeight * keywordScore;
