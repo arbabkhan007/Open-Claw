@@ -592,7 +592,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
-          const rKey = restartKey(channelId, id);
           restartDeferredToCaller.delete(rKey);
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
@@ -677,8 +676,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (opts.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(opts.deferAccountStartUntil, abort.signal);
+            if (startOptions.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(startOptions.deferAccountStartUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
