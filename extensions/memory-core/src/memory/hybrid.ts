@@ -63,6 +63,7 @@ export async function mergeHybridResults(params: {
   keyword: HybridKeywordResult[];
   vectorWeight: number;
   textWeight: number;
+  isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
@@ -156,7 +157,18 @@ export async function mergeHybridResults(params: {
         : entry.exactPathSpecificity > 0
           ? 0
           : entry.pathScore;
-    const contentScore = params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
+    // Make fusion modality-aware: non-text media (image/audio) only carries a
+    // synthetic label as text, so its keyword signal is structurally near zero.
+    // Drop the text weight for such candidates and renormalize the remaining
+    // weights so the score collapses to the vector signal on the same [0,1]
+    // scale as text candidates. Text candidates are unchanged: their weights
+    // already sum to 1, so dividing by weightSum is a no-op.
+    const effectiveTextWeight =
+      params.isNonTextMediaPath?.(entry.path) === true ? 0 : params.textWeight;
+    const weightSum = params.vectorWeight + effectiveTextWeight;
+    const weightedContent =
+      params.vectorWeight * entry.vectorScore + effectiveTextWeight * keywordScore;
+    const contentScore = weightSum > 0 ? weightedContent / weightSum : 0;
     const hasWeightedContentRelevance = contentScore > 0;
     // With decay enabled, reserve the lower half of an exact tier for path
     // identity and the upper half for content relevance. This lets recency beat
