@@ -167,8 +167,12 @@ export async function mergeHybridResults(params: {
     // scale as text candidates. Only drop the signal when the candidate also has
     // a vector signal, so a keyword-only media hit keeps its text-weighted score.
     // Text candidates are unchanged: their weights already sum to 1, so dividing
-    // by weightSum is a no-op.
-    const dropMediaTextSignal = entry.hasVector && params.isNonTextMediaPath?.(entry.path) === true;
+    // by weightSum is a no-op. Gate the drop on a positive configured vector
+    // weight so a valid keyword match is never removed when vectorWeight is 0.
+    const dropMediaTextSignal =
+      entry.hasVector &&
+      params.vectorWeight > 0 &&
+      params.isNonTextMediaPath?.(entry.path) === true;
     const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
     const weightSum = params.vectorWeight + effectiveTextWeight;
     const weightedContent =
