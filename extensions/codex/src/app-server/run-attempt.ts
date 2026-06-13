@@ -3775,6 +3775,16 @@ export async function runCodexAppServerAttempt(
       emitLifecycleTerminal({
         phase: "end",
         ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+        // sessions_yield aborts the codex turn cleanly while the session stays
+        // active for its queued continuation. The shared gateway lifecycle
+        // projection (resolveYielded in session-lifecycle-state) resolves the
+        // persisted row to `paused` only from `data.yielded`, so the codex lane
+        // must forward it here exactly like the native runner does; without it
+        // the row records done/killed and restart recovery races the follow-up.
+        // Spread after the abort meta so the yield's end_turn wins stopReason.
+        ...(result.yieldDetected
+          ? { yielded: true, livenessState: "paused", stopReason: "end_turn" }
+          : {}),
       });
     }
     return {
