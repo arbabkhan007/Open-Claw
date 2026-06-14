@@ -262,6 +262,10 @@ function restoreCanonicalSecretRefs(
   return projectCanonicalSecretRefsOntoRuntime(sourceConfig, runtimeConfig) as OpenClawConfig;
 }
 
+function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): boolean {
+  return path === `channels.${channel}.channelConfigUpdatedAt`;
+}
+
 function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
   clearCurrentProviderAuthState();
@@ -992,6 +996,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
               return;
             }
+            const includeKnownAccounts =
+              (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
+              (!plan.reloadPlugins &&
+                plan.changedPaths.some((path) => isChannelAccountIndexReloadPath(path, name)));
             params.logChannels.info(`restarting ${name} channel`);
             if (!channelsStoppedBeforePluginReload.has(name)) {
               await params.stopChannel(name, undefined, { manual: false });
@@ -999,7 +1007,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
               return;
             }
-            if (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) {
+            if (includeKnownAccounts) {
               await runOutsideGatewayRootWorkAdmission(() =>
                 params.startChannel(name, undefined, { includeKnownAccounts: true }),
               );
