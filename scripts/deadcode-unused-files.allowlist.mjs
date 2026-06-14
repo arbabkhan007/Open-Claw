@@ -18,6 +18,7 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/matrix/src/plugin-entry.runtime.js",
   "src/agents/gsar.ts",
   "src/agents/subagent-registry.runtime.ts",
+  "src/agents/termination.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
   "src/cli/daemon-cli-compat.ts",
   "src/commands/doctor/shared/deprecation-compat.ts",
