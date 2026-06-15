@@ -35,6 +35,7 @@ import {
   handleSendPolicyCommand,
   handleSessionCommand,
   handleStopCommand,
+  handleStreamCommand,
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSteerCommand } from "./commands-steer.js";
@@ -54,6 +55,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleActivationCommand,
     handleSendPolicyCommand,
     handleFastCommand,
+    handleStreamCommand,
     handleUsageCommand,
     handleSessionCommand,
     handleRestartCommand,
