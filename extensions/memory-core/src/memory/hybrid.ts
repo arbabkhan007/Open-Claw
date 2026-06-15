@@ -98,6 +98,7 @@ export async function mergeHybridResults(params: {
       pathScore: number;
       exactPathSpecificity: ExactPathSpecificity;
       hasVector: boolean;
+      hasKeyword: boolean;
     }
   >();
 
@@ -115,6 +116,7 @@ export async function mergeHybridResults(params: {
       pathScore: 0,
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
       hasVector: true,
+      hasKeyword: false,
     });
   }
 
@@ -129,6 +131,7 @@ export async function mergeHybridResults(params: {
         existing.exactPathSpecificity,
         exactPathSpecificity,
       ) as ExactPathSpecificity;
+      existing.hasKeyword = true;
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
@@ -146,6 +149,7 @@ export async function mergeHybridResults(params: {
         pathScore: r.pathScore ?? 0,
         exactPathSpecificity,
         hasVector: false,
+        hasKeyword: true,
       });
     }
   }
@@ -171,6 +175,7 @@ export async function mergeHybridResults(params: {
     // weight so a valid keyword match is never removed when vectorWeight is 0.
     const dropMediaTextSignal =
       entry.hasVector &&
+      !entry.hasKeyword &&
       params.vectorWeight > 0 &&
       params.isNonTextMediaPath?.(entry.path) === true;
     const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
