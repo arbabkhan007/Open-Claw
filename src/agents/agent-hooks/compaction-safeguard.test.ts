@@ -1551,7 +1551,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const toolCallIds = summaryMessages
       .flatMap((m) => {
         const content = (m as { content?: unknown }).content;
-        if (!Array.isArray(content)) return [];
+        if (!Array.isArray(content)) { return []; }
         return content
           .filter((b) => (b as { type?: string }).type === "toolCall")
           .map((b) => (b as { id?: string }).id)
@@ -1572,10 +1572,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
       maxHistoryShare: 0.01,
       recentTurnsPreserve: 0,
     });
-
-    const compactionHandler = createCompactionHandler();
-    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
-    const mockContext = createCompactionContext({ sessionManager, getApiKeyMock });
 
     // Oldest messages: an orphaned assistant toolCall (no matching toolResult)
     // simulating a provider-side timeout that aborted the turn mid-flight.
@@ -1610,7 +1606,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
       signal: new AbortController().signal,
     };
 
-    const result = await compactionHandler(event, mockContext);
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
     expectCompactionResult(result);
 
     // summarizeInStages must be called (possibly for dropped chunks too).
@@ -1623,7 +1623,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         msgs
           .flatMap((m) => {
             const content = (m as { content?: unknown }).content;
-            if (!Array.isArray(content)) return [];
+            if (!Array.isArray(content)) { return []; }
             return content
               .filter((b) => (b as { type?: string }).type === "toolCall")
               .map((b) => (b as { id?: string }).id)
