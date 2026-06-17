@@ -29,6 +29,10 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("controlUi.githubPreview");
   });
 
+  it("advertises read-only session diagnosis", () => {
+    expect(listGatewayMethods()).toContain("sessions.diagnose");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");

@@ -409,6 +409,10 @@ import {
   SessionsCreateResultSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
+  type SessionsDiagnoseParams,
+  SessionsDiagnoseParamsSchema,
+  type SessionsDiagnoseResult,
+  SessionsDiagnoseResultSchema,
   type SessionsDescribeParams,
   SessionsDescribeParamsSchema,
   type SessionsFilesGetParams,
@@ -768,6 +772,12 @@ export const validateSessionsPreviewParams = lazyCompile<SessionsPreviewParams>(
 );
 export const validateSessionsDescribeParams = lazyCompile<SessionsDescribeParams>(
   SessionsDescribeParamsSchema,
+);
+export const validateSessionsDiagnoseParams = lazyCompile<SessionsDiagnoseParams>(
+  SessionsDiagnoseParamsSchema,
+);
+export const validateSessionsDiagnoseResult = lazyCompile<SessionsDiagnoseResult>(
+  SessionsDiagnoseResultSchema,
 );
 export const validateSessionsResolveParams = lazyCompile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
@@ -1182,6 +1192,8 @@ export {
   SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
+  SessionsDiagnoseParamsSchema,
+  SessionsDiagnoseResultSchema,
   SessionsResolveParamsSchema,
   SessionFileBrowserEntrySchema,
   SessionFileBrowserResultSchema,
@@ -1577,6 +1589,8 @@ export type {
   SessionsCleanupParams,
   SessionsPreviewParams,
   SessionsDescribeParams,
+  SessionsDiagnoseParams,
+  SessionsDiagnoseResult,
   SessionsResolveParams,
   SessionOperationEvent,
   SessionWorktreeInfo,
