@@ -13,6 +13,7 @@ import {
   getActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
@@ -86,7 +87,10 @@ function resolveAgentIdentityName(
   if (!agentId) {
     return undefined;
   }
-  const agent = config?.agents?.list?.find((entry) => entry.id === agentId);
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const agent = config?.agents?.list?.find(
+    (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
+  );
   const name = agent?.identity?.name?.trim();
   return name || undefined;
 }
