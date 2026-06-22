@@ -98,11 +98,11 @@ function compatExplicitlySupportsExtendedThinkingLevel(
     return normalizedMapped === "xhigh" && supportedEfforts.has("xhigh");
   }
 
-  if (supportedEfforts.has(level)) {
-    return true;
+  if (normalizedMapped !== "") {
+    return supportedEfforts.has(normalizedMapped);
   }
 
-  return normalizedMapped !== "" && supportedEfforts.has(normalizedMapped);
+  return supportedEfforts.has(level);
 }
 
 function compatSupportsThinkingLevel<TApi extends Api>(
