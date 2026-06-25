@@ -7,6 +7,7 @@ import {
   addTimerTimeoutGraceMs,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -2531,6 +2532,18 @@ async function runEmbeddedAgentInternal(
           // pre-switch provider on every compaction (#95696).
           const compactionProvider = requestedSelection?.provider ?? provider;
           const compactionModelId = requestedSelection?.model ?? modelId;
+          // Pair the compaction auth profile with the live selection too. A
+          // profile pinned by the switch wins; otherwise keep the run-start
+          // profile only when the provider is unchanged, since a cross-provider
+          // switch leaves that profile's credentials bound to the wrong
+          // provider (#95696).
+          const compactionAuthProfileId =
+            requestedSelection == null
+              ? lastProfileId
+              : (requestedSelection.authProfileId ??
+                (normalizeProviderId(requestedSelection.provider) === normalizeProviderId(provider)
+                  ? lastProfileId
+                  : undefined));
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
@@ -2574,7 +2587,7 @@ async function runEmbeddedAgentInternal(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
-                    authProfileId: lastProfileId,
+                    authProfileId: compactionAuthProfileId,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
@@ -2783,7 +2796,7 @@ async function runEmbeddedAgentInternal(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
-                    authProfileId: lastProfileId,
+                    authProfileId: compactionAuthProfileId,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
