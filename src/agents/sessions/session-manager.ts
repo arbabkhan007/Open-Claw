@@ -19,6 +19,7 @@ import {
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
@@ -1264,11 +1265,9 @@ function getLastActivityTime(entries: FileEntry[]): number | undefined {
     }
 
     const entryTimestamp = (entry as SessionEntryBase).timestamp;
-    if (typeof entryTimestamp === "string") {
-      const t = new Date(entryTimestamp).getTime();
-      if (!Number.isNaN(t)) {
-        lastActivityTime = Math.max(lastActivityTime ?? 0, t);
-      }
+    const t = parseStrictTimestampStringMs(entryTimestamp);
+    if (t !== undefined) {
+      lastActivityTime = Math.max(lastActivityTime ?? 0, t);
     }
   }
 
@@ -1285,9 +1284,8 @@ function getSessionModifiedDate(
     return new Date(lastActivityTime);
   }
 
-  const headerTime =
-    typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
-  return !Number.isNaN(headerTime) ? new Date(headerTime) : statsMtime;
+  const headerTime = parseStrictTimestampStringMs(header.timestamp);
+  return headerTime !== undefined ? new Date(headerTime) : statsMtime;
 }
 
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
@@ -1364,6 +1362,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
     const parentSessionPath = header.parentSession;
 
     const modified = getSessionModifiedDate(entries, header, stats.mtime);
+    const created = parseStrictTimestampStringMs(header.timestamp);
 
     return {
       path: filePath,
@@ -1371,7 +1370,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
       cwd,
       name,
       parentSessionPath,
-      created: new Date(header.timestamp),
+      created: created === undefined ? stats.mtime : new Date(created),
       modified,
       messageCount,
       firstMessage: firstMessage || "(no messages)",
@@ -2701,7 +2700,9 @@ export class SessionManager {
     while (stack.length > 0) {
       const node = stack.pop()!;
       node.children.sort(
-        (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
+        (a, b) =>
+          (parseStrictTimestampStringMs(a.entry.timestamp) ?? 0) -
+          (parseStrictTimestampStringMs(b.entry.timestamp) ?? 0),
       );
       stack.push(...node.children);
     }
