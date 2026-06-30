@@ -244,8 +244,8 @@ async function runEmbeddedFallback(params: {
     runId: params.runId,
     sessionId: params.sessionId,
     lane: params.lane,
-    agentDir: params.agentDir,
     abortSignal: params.abortSignal,
+    agentDir: params.agentDir,
     run: (provider, model, options) =>
       runEmbeddedAgent({
         sessionId,
