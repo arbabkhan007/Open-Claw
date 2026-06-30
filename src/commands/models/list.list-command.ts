@@ -126,8 +126,8 @@ export async function modelsListCommand(
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   // When models.mode is "replace", only show explicitly configured providers.
   const modelsModeReplace = cfg.models?.mode === "replace";
-  const enableSourcePlanCascade =
-    !modelsModeReplace && (Boolean(opts.all) || Boolean(providerFilter));
+  // --all and --provider-filtered browse work regardless of models.mode.
+  const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
   // Full/provider-filtered lists may need runtime, manifest, and registry rows.
   // Defer that planning so default configured-only output stays cheap.
   const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
