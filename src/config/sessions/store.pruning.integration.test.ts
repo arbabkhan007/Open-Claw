@@ -879,7 +879,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(oldOrphanTranscript);
   });
 
-  it("sessions cleanup dry-run does not double-count archives already covered by disk budget", async () => {
+  it("sessions cleanup dry-run reports archive cleanup before disk budget", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -916,10 +916,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
       throw new Error("expected disk budget cleanup summary");
     }
-    expect(diskBudgetSummary.removedFiles).toBe(1);
+    expect(diskBudgetSummary.removedFiles).toBe(0);
     expect(dryRun.previewResults[0]?.summary.archiveCleanup).toEqual({
-      scannedFiles: 0,
-      removedFiles: 0,
+      scannedFiles: 1,
+      removedFiles: 1,
     });
     await expectPathExists(oldArchived);
   });

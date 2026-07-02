@@ -681,6 +681,20 @@ export type {
   SessionEntryLifecycleUpsert,
 };
 
+export type SessionArchivedTranscriptFileCleanupParams = {
+  directories: string[];
+  rules: SessionArchivedTranscriptCleanupRule[];
+  nowMs?: number;
+  dryRun?: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
+  onRemoveFile?: (canonicalPath: string) => void;
+};
+
+export type SessionArchivedTranscriptFileCleanupResult = {
+  removed: number;
+  scanned: number;
+};
+
 export type ResetSessionEntryLifecycleParams = {
   /** Runs after the persisted entry rotates and retired transcripts are archived. */
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
