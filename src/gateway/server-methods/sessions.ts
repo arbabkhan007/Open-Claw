@@ -1210,6 +1210,7 @@ function listDiagnoseCandidateRows(params: {
 
 function scoreDiagnoseCandidate(params: {
   row: DiagnoseRow;
+  sessionFile?: string;
   context: GatewayRequestContext;
   cfg: OpenClawConfig;
   agentId?: string;
@@ -1226,10 +1227,12 @@ function scoreDiagnoseCandidate(params: {
   const diagnostic = getDiagnosticSessionStateSnapshot({
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
+    ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
+    ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
   });
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: params.row.sessionId,
@@ -1326,6 +1329,7 @@ async function resolveDiagnoseTarget(params: {
       candidate,
       score: scoreDiagnoseCandidate({
         row: candidate.row,
+        sessionFile: candidate.entry.sessionFile,
         context,
         cfg,
         agentId: candidate.agentId,
