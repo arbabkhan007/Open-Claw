@@ -513,16 +513,16 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
         window.title = UIStrings.welcomeTitle
-        window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         window.styleMask = Self.windowStyleMask
         // Keep the focused dialog width while letting taller displays give setup more breathing room.
-        window.contentMinSize = NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+        window.contentMinSize = NSSize(width: OnboardingView.windowWidth, height: OnboardingView.minimumWindowHeight)
         window.contentMaxSize = NSSize(width: OnboardingView.windowWidth, height: .greatestFiniteMagnitude)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.delegate = self
-        window.center()
+        window.setContentSize(Self.preferredOnboardingContentSize)
+        window.setFrame(Self.onboardingWindowFrame(size: window.frame.size), display: false)
         DockIconManager.shared.temporarilyShowDock()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -542,6 +542,21 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     func restart() {
         self.close()
         self.show()
+    }
+
+    static var preferredOnboardingContentSize: NSSize {
+        NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+    }
+
+    static func onboardingWindowFrame(
+        size: NSSize,
+        on screen: NSScreen? = NSScreen.main
+    ) -> NSRect {
+        WindowPlacement.centeredFrame(size: size, on: screen)
+    }
+
+    static func onboardingWindowFrame(size: NSSize, in bounds: NSRect) -> NSRect {
+        WindowPlacement.centeredFrame(size: size, in: bounds)
     }
 
     func windowShouldClose(_: NSWindow) -> Bool {
@@ -606,6 +621,7 @@ struct OnboardingView: View {
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
+    static let minimumWindowHeight: CGFloat = 640
 
     let pageWidth: CGFloat = Self.windowWidth
     let connectionPageIndex = 1
@@ -631,7 +647,7 @@ struct OnboardingView: View {
     }
 
     static func contentHeight(for windowHeight: CGFloat, usesCompactHero: Bool) -> CGFloat {
-        let availableHeight = max(Self.windowHeight, windowHeight)
+        let availableHeight = max(Self.minimumWindowHeight, windowHeight)
         let heroHeight: CGFloat = usesCompactHero ? 78 : 145
         return availableHeight - heroHeight - 72
     }
