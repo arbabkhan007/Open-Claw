@@ -106,6 +106,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getApiKeyForModel,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
@@ -1536,6 +1537,19 @@ async function runEmbeddedAgentInternal(
         lastProfileId = lockedProfileId;
       } else if (forwardedPluginHarnessProfileId) {
         lastProfileId = forwardedPluginHarnessProfileId;
+      }
+      if (agentHarness.id === "claude-bridge" && lastProfileId && !apiKeyInfo) {
+        // The Claude bridge owns transport, so it skips generic runtime-auth bootstrap,
+        // but still needs the selected Anthropic profile materialized for its child env.
+        apiKeyInfo = await getApiKeyForModel({
+          model: runtimeModel,
+          cfg: params.config,
+          profileId: lastProfileId,
+          store: attemptAuthProfileStore,
+          agentDir,
+          workspaceDir: resolvedWorkspace,
+          lockedProfile: lastProfileId === lockedProfileId,
+        });
       }
       startupStages.mark("auth");
       notifyExecutionPhase("auth", { provider, model: modelId });
@@ -3626,6 +3640,7 @@ async function runEmbeddedAgentInternal(
             runAborted: aborted,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
+            preserveDraftPreviewOnFinalReply: attempt.preserveDraftPreviewOnFinalReply,
           });
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,
