@@ -74,6 +74,7 @@ test("sessions.diagnose returns read-only live and stored evidence without trans
   );
 
   expect(result.ok).toBe(true);
+  console.error(JSON.stringify(result.payload, null, 2));
   expect(result.payload).toMatchObject({
     ok: true,
     outcome: "diagnosed",
@@ -388,6 +389,62 @@ test("sessions.diagnose keeps the source agent for global fallback rows", async 
       "openclaw health --verbose",
     ],
   });
+});
+
+test("sessions.diagnose scopes unknown fallback active runs to the requested agent", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  const now = Date.now();
+  await writeSessionStore({
+    storePath: mainStorePath,
+    entries: {
+      unknown: sessionStoreEntry("sess-main-unknown", { updatedAt: 10 }),
+    },
+  });
+  await writeSessionStore({
+    storePath: workStorePath,
+    entries: {
+      unknown: sessionStoreEntry("sess-work-unknown", { updatedAt: 20 }),
+    },
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>(
+    "sessions.diagnose",
+    { key: "unknown", agentId: "work" },
+    {
+      context: {
+        chatAbortControllers: new Map([
+          [
+            "run-main-unknown",
+            {
+              controller: new AbortController(),
+              sessionId: "sess-main-unknown",
+              sessionKey: "unknown",
+              agentId: "main",
+              startedAtMs: now - 1_000,
+              expiresAtMs: now + 60_000,
+              kind: "agent",
+            },
+          ],
+        ]),
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload.outcome).toBe("diagnosed");
+  expect(result.payload.session).toMatchObject({
+    key: "unknown",
+    sessionId: "sess-work-unknown",
+    agentId: "work",
+    hasActiveRun: false,
+  });
+  expect(result.payload.live.gatewayRun.hasActiveRun).toBe(false);
+  expect(result.payload.live.gatewayRun.runs).toEqual([]);
+  expect(result.payload.nextChecks).toEqual([
+    "openclaw sessions --agent work tail --session-key unknown",
+    "openclaw sessions --agent work export-trajectory --session-key unknown",
+    "openclaw health --verbose",
+  ]);
 });
 
 test("sessions.diagnose rejects key agent mismatch with agentId", async () => {

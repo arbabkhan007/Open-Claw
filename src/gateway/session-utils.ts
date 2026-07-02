@@ -1509,6 +1509,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
+  allowUnknownAgentId?: boolean;
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTargetWithStore {
@@ -1527,8 +1528,11 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     sessionKey: key,
   });
   const requestedAgentId = normalizeOptionalString(params.agentId);
+  const isAgentScopedUnscopedKey =
+    canonicalKey === "global" ||
+    (canonicalKey === "unknown" && params.allowUnknownAgentId === true);
   const agentId =
-    canonicalKey === "global" && requestedAgentId
+    isAgentScopedUnscopedKey && requestedAgentId
       ? normalizeAgentId(requestedAgentId)
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   const { storePath, store } = resolveGatewaySessionStoreLookup({
@@ -1561,6 +1565,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
+  allowUnknownAgentId?: boolean;
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {

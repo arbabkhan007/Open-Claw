@@ -36,7 +36,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { getEmbeddedRunDiagnosticSnapshot } from "../../agents/embedded-agent-runner/run-state.js";
 import {
@@ -86,7 +90,11 @@ import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-sess
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
@@ -105,7 +113,6 @@ import {
 import {
   buildDashboardSessionKey,
   createGatewaySession,
-  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
 } from "../session-create-service.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import {
@@ -254,12 +261,14 @@ function loadSessionEntriesForTarget(params: {
   key: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  allowUnknownAgentId?: boolean;
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     clone: false,
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.allowUnknownAgentId ? { allowUnknownAgentId: true } : {}),
   });
   const store = target.store;
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
@@ -508,6 +517,65 @@ function resolveSessionMessageSubscriptionKey(params: {
   return params.canonicalKey === "global" && agentId
     ? `agent:${agentId}:global`
     : params.canonicalKey;
+}
+
+type RequestedGlobalAgentIdResolution =
+  | { ok: true; agentId?: string }
+  | { ok: false; error: ReturnType<typeof errorShape> };
+
+function resolveRequestedGlobalAgentId(
+  cfg: OpenClawConfig,
+  key: string,
+  explicitAgentId?: string,
+  options?: { allowUnknownAgentId?: boolean },
+): RequestedGlobalAgentIdResolution {
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  const parsed = parseAgentSessionKey(key);
+  const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  const isAgentScopedUnscopedKey =
+    canonicalKey === "global" ||
+    (canonicalKey === "unknown" && options?.allowUnknownAgentId === true);
+  if (requestedAgentId) {
+    const agentId = normalizeAgentId(requestedAgentId);
+    if (!listAgentIds(cfg).includes(agentId)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+      };
+    }
+    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    if (!isAgentScopedUnscopedKey) {
+      const keyAgentId = parsed?.agentId
+        ? normalizeAgentId(parsed.agentId)
+        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
+      if (keyAgentId !== agentId) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+        };
+      }
+    }
+    return { ok: true, agentId };
+  }
+  if (!parsed?.agentId) {
+    return { ok: true };
+  }
+  const inferredAgentId = normalizeAgentId(parsed.agentId);
+  if (isAgentScopedUnscopedKey && !listAgentIds(cfg).includes(inferredAgentId)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
+    };
+  }
+  return {
+    ok: true,
+    agentId: isAgentScopedUnscopedKey ? inferredAgentId : undefined,
+  };
 }
 
 async function interruptSessionRunIfActive(params: {
@@ -941,7 +1009,7 @@ function hasDiagnoseTrackedActiveRun(params: {
     if (active.sessionKey !== params.key) {
       return false;
     }
-    if (params.key !== "global") {
+    if (!isUnscopedSessionKeySentinel(params.key)) {
       return true;
     }
     const requestedAgentId = normalizeAgentId(params.agentId ?? params.defaultAgentId);
@@ -1153,6 +1221,7 @@ function scoreDiagnoseCandidate(params: {
     canonicalKey: params.row.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     defaultAgentId,
+    scopeUnknownByAgent: true,
   });
   const diagnostic = getDiagnosticSessionStateSnapshot({
     sessionId: params.row.sessionId,
@@ -1203,7 +1272,7 @@ async function resolveDiagnoseTarget(params: {
     throw new Error("choose only one of key, sessionId, or label for sessions.diagnose");
   }
   const requestedAgentId = p.key
-    ? resolveRequestedGlobalAgentId(cfg, p.key, p.agentId)
+    ? resolveRequestedGlobalAgentId(cfg, p.key, p.agentId, { allowUnknownAgentId: true })
     : resolveRequestedGlobalAgentId(cfg, "global", p.agentId);
   if (!requestedAgentId.ok) {
     throw new Error(requestedAgentId.error.message);
@@ -1213,6 +1282,7 @@ async function resolveDiagnoseTarget(params: {
       key: p.key,
       cfg,
       ...(requestedAgentId.agentId ? { agentId: requestedAgentId.agentId } : {}),
+      allowUnknownAgentId: true,
     });
     if (!entry) {
       return null;
@@ -1448,6 +1518,7 @@ async function buildDiagnoseResult(params: {
     canonicalKey: target.key,
     ...(target.agentId ? { agentId: target.agentId } : {}),
     defaultAgentId,
+    scopeUnknownByAgent: true,
     now,
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
