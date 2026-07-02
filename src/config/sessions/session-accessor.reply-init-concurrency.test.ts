@@ -36,23 +36,25 @@ const WAIT_TIMEOUT_MS = 10_000;
 const SESSION_KEY = "agent:main:main";
 const AGENT_ID = "main";
 
-async function waitForFile(filePath: string): Promise<void> {
+async function readJsonFile<T>(filePath: string): Promise<T> {
+  return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+}
+
+async function waitForJsonFile<T>(filePath: string): Promise<T> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
+  let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await fs.access(filePath);
-      return;
-    } catch {
+      return await readJsonFile<T>(filePath);
+    } catch (error) {
+      lastError = error;
       await new Promise((resolve) => {
         setTimeout(resolve, POLL_MS);
       });
     }
   }
-  throw new Error(`timeout waiting for ${filePath}`);
-}
-
-async function readJsonFile<T>(filePath: string): Promise<T> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`timeout waiting for parseable JSON at ${filePath}: ${message}`);
 }
 
 function createReplyInitChildScript(sessionAccessorUrl: string): string {
@@ -195,8 +197,9 @@ describe("reply session initialization concurrency", () => {
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      await waitForFile(readyPath);
-      const snapshot = await readJsonFile<{ currentEntry?: unknown; revision: string }>(readyPath);
+      const snapshot = await waitForJsonFile<{ currentEntry?: unknown; revision: string }>(
+        readyPath,
+      );
       expect(snapshot.revision).toBe(JSON.stringify({ sessionId: "existing-session" }));
 
       await updateSessionEntry(
@@ -207,7 +210,7 @@ describe("reply session initialization concurrency", () => {
       await fs.writeFile(proceedPath, "go\n", "utf8");
       await waitForChild(child);
 
-      const result = await readJsonFile<ChildResult>(resultPath);
+      const result = await waitForJsonFile<ChildResult>(resultPath);
       expect(result).toMatchObject({
         ok: true,
         sessionEntry: {

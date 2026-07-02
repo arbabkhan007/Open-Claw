@@ -84,9 +84,9 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -110,10 +110,7 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
-import {
-  buildDashboardSessionKey,
-  createGatewaySession,
-} from "../session-create-service.js";
+import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import {
   resolveSessionStoreAgentId,
