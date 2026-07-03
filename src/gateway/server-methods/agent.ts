@@ -60,6 +60,7 @@ import {
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { normalizeToolName } from "../../agents/tool-policy-shared.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
@@ -1134,6 +1135,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
+      toolsAllow?: string[];
       bootstrapContextMode?: "full" | "lightweight";
       // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
@@ -2875,6 +2877,14 @@ export const agentHandlers: GatewayRequestHandlers = {
               lane: request.lane,
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
+              toolsAllow:
+                request.toolsAllow === undefined
+                  ? undefined
+                  : Array.from(
+                      new Set(
+                        request.toolsAllow.map((entry) => normalizeToolName(entry)).filter(Boolean),
+                      ),
+                    ),
               extraSystemPrompt: request.extraSystemPrompt,
               bootstrapContextMode: request.bootstrapContextMode,
               bootstrapContextRunKind: request.bootstrapContextRunKind,

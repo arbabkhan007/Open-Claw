@@ -965,9 +965,9 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             const includeDisabled = Boolean(params.includeDisabled);
             let offset = 0;
             let result: unknown;
-            let shouldContinue = true;
+            let shouldContinueListing = true;
             let useCompactList = true;
-            while (shouldContinue) {
+            while (shouldContinueListing) {
               try {
                 result = await callGateway("cron.list", gatewayOpts, {
                   includeDisabled,
@@ -985,11 +985,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
                 continue;
               }
               if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-                shouldContinue = false;
+                shouldContinueListing = false;
               } else {
                 const nextOffset = readCronListNextOffset(result, offset);
                 if (nextOffset === undefined) {
-                  shouldContinue = false;
+                  shouldContinueListing = false;
                 } else {
                   offset = nextOffset;
                 }
