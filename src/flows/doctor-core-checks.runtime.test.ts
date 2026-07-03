@@ -55,6 +55,7 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
+  resolveProviderToolSchemaNormalizeCacheKey: () => null,
 }));
 
 vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
