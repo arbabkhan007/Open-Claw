@@ -550,8 +550,8 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     static func onboardingWindowFrame(
         size: NSSize,
-        on screen: NSScreen? = NSScreen.main
-    ) -> NSRect {
+        on screen: NSScreen? = NSScreen.main) -> NSRect
+    {
         WindowPlacement.centeredFrame(size: size, on: screen)
     }
 
