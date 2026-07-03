@@ -14,11 +14,13 @@ export function splitShellArgs(raw: string): string[] | null {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let tokenStarted = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (tokenStarted) {
       tokens.push(buf);
       buf = "";
+      tokenStarted = false;
     }
   };
 
@@ -27,10 +29,12 @@ export function splitShellArgs(raw: string): string[] | null {
     if (escaped) {
       buf += ch;
       escaped = false;
+      tokenStarted = true;
       continue;
     }
     if (!inSingle && !inDouble && ch === "\\") {
       escaped = true;
+      tokenStarted = true;
       continue;
     }
     if (inSingle) {
@@ -38,6 +42,7 @@ export function splitShellArgs(raw: string): string[] | null {
         inSingle = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
@@ -47,26 +52,30 @@ export function splitShellArgs(raw: string): string[] | null {
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += next;
         i += 1;
+        tokenStarted = true;
         continue;
       }
       if (ch === '"') {
         inDouble = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
     if (ch === "'") {
       inSingle = true;
+      tokenStarted = true;
       continue;
     }
     if (ch === '"') {
       inDouble = true;
+      tokenStarted = true;
       continue;
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (ch === "#" && buf.length === 0) {
+    if (ch === "#" && !tokenStarted) {
       break;
     }
     if (/\s/.test(ch)) {
@@ -74,6 +83,7 @@ export function splitShellArgs(raw: string): string[] | null {
       continue;
     }
     buf += ch;
+    tokenStarted = true;
   }
 
   if (escaped || inSingle || inDouble) {

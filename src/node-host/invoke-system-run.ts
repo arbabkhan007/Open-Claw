@@ -9,6 +9,7 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
+  commandRequiresOpenClawLifecycleApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
   maxAsk,
@@ -536,7 +537,17 @@ async function evaluateSystemRunPolicyPhase(
       env: parsed.env,
       segments,
     }) && !(security === "full" && ask === "off");
-  if (requiresSecurityAuditSuppressionApproval && !policy.approvedByAsk) {
+  const requiresOpenClawLifecycleApproval =
+    commandRequiresOpenClawLifecycleApproval({
+      command: parsed.commandText,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      segments,
+    }) && !(security === "full" && ask === "off");
+  if (
+    (requiresSecurityAuditSuppressionApproval || requiresOpenClawLifecycleApproval) &&
+    !policy.approvedByAsk
+  ) {
     policy = {
       allowed: false,
       eventReason: "approval-required",
@@ -587,6 +598,7 @@ async function evaluateSystemRunPolicyPhase(
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval &&
+      !requiresOpenClawLifecycleApproval &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({
