@@ -40,6 +40,15 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+      },
       input: ["text"],
       cost: {
         input: 1.74,
@@ -62,6 +71,15 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+      },
       input: ["text"],
       cost: {
         input: 0.14,
