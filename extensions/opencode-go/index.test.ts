@@ -43,8 +43,20 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
   return requireRecord(entry, `supplemental catalog entry ${id}`);
 }
 
+const deepSeekV4ThinkingProfileLevelIds = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+const deepSeekV4ThinkingProfile = {
+  levels: deepSeekV4ThinkingProfileLevelIds.map((id) => ({ id })),
+  defaultLevel: "high",
+};
 const deepSeekV4ThinkingLevelMap = {
-  off: null,
   minimal: "high",
   low: "high",
   medium: "high",
@@ -55,6 +67,7 @@ const deepSeekV4ThinkingLevelMap = {
 
 function expectDeepSeekV4ThinkingLevels(model: ProviderRuntimeModel) {
   expect(model.thinkingLevelMap).toEqual(deepSeekV4ThinkingLevelMap);
+  expect(clampThinkingLevel(model, "off")).toBe("off");
   expect(clampThinkingLevel(model, "high")).toBe("high");
   expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
   expect(clampThinkingLevel(model, "max")).toBe("max");
@@ -134,6 +147,15 @@ describe("opencode-go provider plugin", () => {
     expect([...models.keys()]).toEqual(expectedModelIds);
     expectDeepSeekV4ThinkingLevels(requireMapEntry(models, "deepseek-v4-pro"));
     expectDeepSeekV4ThinkingLevels(requireMapEntry(models, "deepseek-v4-flash"));
+    expect(
+      provider.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "deepseek-v4-pro" }),
+    ).toEqual(deepSeekV4ThinkingProfile);
+    expect(
+      provider.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "deepseek-v4-flash" }),
+    ).toEqual(deepSeekV4ThinkingProfile);
+    expect(
+      provider.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "glm-5" }),
+    ).toBeUndefined();
     const supplemental = await provider.augmentModelCatalog?.({
       entries: [...models.values()].map((model) => ({
         provider: model.provider,
@@ -427,41 +449,42 @@ describe("opencode-go provider plugin", () => {
     expect(fallback.models.map((model) => model.id)).toContain("minimax-m3");
   });
 
-  it("disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload = {
-        model: "deepseek-v4-flash",
-        reasoning_effort: "off",
-        reasoning: "off",
+  it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(
+    "disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go for %s",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const capturedPayloads: Record<string, unknown>[] = [];
+      const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+        const payload = {
+          model: modelId,
+          reasoning_effort: "off",
+          reasoning: "off",
+        };
+        (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(
+          payload,
+        );
+        capturedPayloads.push(payload);
+        return {} as never;
       };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
 
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode-go",
-      modelId: "deepseek-v4-flash",
-      thinkingLevel: "off",
-    } as never);
+      const streamFn = provider.wrapStreamFn?.({
+        streamFn: baseStreamFn as never,
+        providerId: "opencode-go",
+        modelId,
+        thinkingLevel: "off",
+      } as never);
 
-    expect(streamFn).toBeTypeOf("function");
-    await streamFn?.(
-      { provider: "opencode-go", id: "deepseek-v4-flash" } as never,
-      {} as never,
-      {},
-    );
+      expect(streamFn).toBeTypeOf("function");
+      await streamFn?.({ provider: "opencode-go", id: modelId } as never, {} as never, {});
 
-    expect(capturedPayloads).toEqual([
-      {
-        model: "deepseek-v4-flash",
-        thinking: { type: "disabled" },
-      },
-    ]);
-  });
+      expect(capturedPayloads).toEqual([
+        {
+          model: modelId,
+          thinking: { type: "disabled" },
+        },
+      ]);
+    },
+  );
 
   it.each([
     ["high", "high"],

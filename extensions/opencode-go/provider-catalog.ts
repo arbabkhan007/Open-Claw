@@ -1,6 +1,9 @@
 // Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderRuntimeModel,
+  ProviderThinkingProfile,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
@@ -23,6 +26,20 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+const OPENCODE_GO_DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+const OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_IDS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+const OPENCODE_GO_DEEPSEEK_V4_THINKING_PROFILE = {
+  levels: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_IDS.map((id) => ({ id })),
+  defaultLevel: "high",
+} satisfies ProviderThinkingProfile;
 
 type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
@@ -41,7 +58,6 @@ const OPENCODE_GO_MODELS = (
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       thinkingLevelMap: {
-        off: null,
         minimal: "high",
         low: "high",
         medium: "high",
@@ -72,7 +88,6 @@ const OPENCODE_GO_MODELS = (
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       thinkingLevelMap: {
-        off: null,
         minimal: "high",
         low: "high",
         medium: "high",
@@ -432,6 +447,21 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
   return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId);
+}
+
+export function isOpencodeGoDeepSeekV4ModelId(modelId: unknown): boolean {
+  return (
+    typeof modelId === "string" &&
+    OPENCODE_GO_DEEPSEEK_V4_MODEL_IDS.has(modelId.trim().toLowerCase())
+  );
+}
+
+export function resolveOpencodeGoThinkingProfile(
+  modelId: string,
+): ProviderThinkingProfile | undefined {
+  return isOpencodeGoDeepSeekV4ModelId(modelId)
+    ? OPENCODE_GO_DEEPSEEK_V4_THINKING_PROFILE
+    : undefined;
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

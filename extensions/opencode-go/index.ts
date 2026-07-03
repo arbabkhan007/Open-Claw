@@ -11,6 +11,7 @@ import {
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
   resolveOpencodeGoModel,
+  resolveOpencodeGoThinkingProfile,
 } from "./provider-catalog.js";
 import { createOpencodeGoWrapper } from "./stream.js";
 
@@ -136,6 +137,7 @@ export default definePluginEntry({
       },
       augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
       ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
+      resolveThinkingProfile: ({ modelId }) => resolveOpencodeGoThinkingProfile(modelId),
       wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,
     });
