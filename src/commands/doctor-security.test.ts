@@ -1,8 +1,10 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -28,6 +30,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
   let prevServiceKind: string | undefined;
+  let networkInterfacesSpy: MockInstance<typeof os.networkInterfaces> | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -41,6 +44,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_SERVICE_KIND;
+    networkInterfacesSpy?.mockRestore();
+    networkInterfacesSpy = undefined;
   });
 
   afterEach(() => {
@@ -64,9 +69,30 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } else {
       process.env.OPENCLAW_SERVICE_KIND = prevServiceKind;
     }
+    networkInterfacesSpy?.mockRestore();
+    networkInterfacesSpy = undefined;
   });
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
+
+  function mockLocalInterfaces(address: string, family: "IPv4" | "IPv6" = "IPv4") {
+    networkInterfacesSpy?.mockRestore();
+    networkInterfacesSpy = vi.spyOn(os, "networkInterfaces");
+    networkInterfacesSpy.mockReturnValue(
+      makeNetworkInterfacesSnapshot({
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        eth0: [{ address, family }],
+      }),
+    );
+  }
+
+  function mockNetworkInterfaceDiscoveryFailure() {
+    networkInterfacesSpy?.mockRestore();
+    networkInterfacesSpy = vi.spyOn(os, "networkInterfaces");
+    networkInterfacesSpy.mockImplementation(() => {
+      throw new Error("interface discovery failed");
+    });
+  }
 
   async function withExecApprovalsFile(
     file: Record<string, unknown>,
@@ -307,6 +333,72 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("WARNING");
     expect(message).toContain("trusted-proxy authentication");
     expect(message).not.toContain("CRITICAL");
+  });
+
+  it("rejects host IPv4 interface trusted-proxy entries as exposure auth proof", async () => {
+    mockLocalInterfaces("10.0.0.10");
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.10"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("unsafe trusted-proxy authentication");
+    expect(message).toContain("host interface addresses");
+    expect(message).not.toContain("with trusted-proxy authentication");
+  });
+
+  it("rejects host IPv6 interface trusted-proxy entries as exposure auth proof", async () => {
+    mockLocalInterfaces("fd7a:115c:a1e0::1234", "IPv6");
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["fd7a:115c:a1e0::1234"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("unsafe trusted-proxy authentication");
+    expect(message).toContain("host interface addresses");
+    expect(message).not.toContain("with trusted-proxy authentication");
+  });
+
+  it("rejects trusted-proxy auth proof when interface discovery fails", async () => {
+    mockNetworkInterfaceDiscoveryFailure();
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.10"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("unsafe trusted-proxy authentication");
+    expect(message).toContain("unavailable interface checks");
+    expect(message).not.toContain("with trusted-proxy authentication");
   });
 
   it("warns when OPENCLAW_GATEWAY_TOKEN env conflicts with gateway.auth.token config (#74271)", async () => {

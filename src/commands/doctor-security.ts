@@ -11,7 +11,12 @@ import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isLoopbackAddress, isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import {
+  isLoopbackAddress,
+  isLoopbackHost,
+  resolveGatewayBindHost,
+  resolveLocalInterfaceAddressMatch,
+} from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   loadExecApprovals,
@@ -121,7 +126,13 @@ function isHostScopedTrustedProxyEntry(entry: string, allowLoopback: boolean): b
     }
   }
 
-  return !isLoopbackAddress(address) || allowLoopback;
+  if (isLoopbackAddress(address)) {
+    return allowLoopback;
+  }
+
+  // Match trusted-proxy runtime auth: a host interface source is rejected, and
+  // interface discovery failures fail closed before identity headers are trusted.
+  return resolveLocalInterfaceAddressMatch(address) === false;
 }
 
 function resolveTrustedProxyAuthProblem(params: {
@@ -177,7 +188,8 @@ function trustedProxyAuthProblemLines(
     case "unsafe_proxy_source":
       return [
         `- CRITICAL: Gateway bound to ${bindDescriptor} with unsafe trusted-proxy authentication.`,
-        "  gateway.trustedProxies must be narrow proxy IPs for trusted-proxy auth proof; broad CIDRs/default routes are not safe proof.",
+        "  gateway.trustedProxies must be runtime-accepted narrow proxy IPs for trusted-proxy auth proof.",
+        "  broad CIDRs/default routes, host interface addresses, or unavailable interface checks are not safe proof.",
         "  Fix: use exact proxy IPs or host-scoped /32 or /128 entries; enable allowLoopback only for a deliberate same-host proxy.",
       ];
   }
