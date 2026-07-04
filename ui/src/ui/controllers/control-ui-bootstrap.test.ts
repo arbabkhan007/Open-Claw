@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+} from "../../../../src/gateway/control-ui-contract.js";
 import { resolveUiHourCycleOptions, setUiTimeFormatPreference } from "../format.ts";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
@@ -16,6 +19,8 @@ function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
 describe("loadControlUiBootstrapConfig", () => {
   afterEach(() => {
     setUiTimeFormatPreference("auto");
+    document.documentElement.removeAttribute("style");
+    document.documentElement.removeAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE);
   });
 
   it("threads agents.defaults.timeFormat into the UI hour-cycle preference", async () => {
@@ -108,6 +113,101 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("applies configured seamColor to Control UI accent variables", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        seamColor: "#1A2b3C",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      chatMessageMaxWidth: null,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    const rootStyle = document.documentElement.style;
+    expect(rootStyle.getPropertyValue("--accent")).toBe("#1A2b3C");
+    expect(rootStyle.getPropertyValue("--ring")).toBe("#1A2b3C");
+    expect(rootStyle.getPropertyValue("--primary")).toBe("#1A2b3C");
+    expect(rootStyle.getPropertyValue("--accent-hover")).toBe(
+      "color-mix(in srgb, var(--accent) 82%, white 18%)",
+    );
+    expect(rootStyle.getPropertyValue("--accent-subtle")).toBe(
+      "color-mix(in srgb, var(--accent) 16%, transparent)",
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it("removes server seamColor variables when bootstrap color is missing or invalid", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          basePath: "",
+          assistantName: "Main",
+          assistantAvatar: "M",
+          assistantAgentId: "main",
+          seamColor: "00aaee",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          basePath: "",
+          assistantName: "Main",
+          assistantAvatar: "M",
+          assistantAgentId: "main",
+          seamColor: "lobster",
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      chatMessageMaxWidth: null,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#00aaee");
+
+    await loadControlUiBootstrapConfig(state);
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--ring")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--focus-ring")).toBe("");
+
+    vi.unstubAllGlobals();
+  });
+
   it("can refresh runtime bootstrap settings without clobbering session identity", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -148,6 +248,115 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.embedSandboxMode).toBe("trusted");
     expect(state.allowExternalEmbedUrls).toBe(true);
 
+    vi.unstubAllGlobals();
+  });
+
+  it("reloads the document when the terminal flips from disabled to enabled", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "false");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: false }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: true }),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const reload = vi.fn();
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost", reload },
+    } as unknown as Window & typeof globalThis);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      terminalEnabled: true,
+    };
+
+    // Page served with the terminal disabled: strict CSP, flag lands false.
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+    expect(state.terminalEnabled).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+
+    // The enabling gateway restart refetches bootstrap over the same document,
+    // whose CSP still lacks the WASM allowances — the UI must reload for them.
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+    expect(reload).toHaveBeenCalledTimes(1);
+    // The flag stays false until the reload delivers the fresh document.
+    expect(state.terminalEnabled).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("enables the terminal without reloading when the document CSP already allows it", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: true }),
+      }) as unknown as typeof fetch,
+    );
+    const reload = vi.fn();
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost", reload },
+    } as unknown as Window & typeof globalThis);
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      terminalEnabled: false,
+    };
+
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+
+    expect(state.terminalEnabled).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("reloads the document when disabling removes the terminal CSP allowance", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: false }),
+      }) as unknown as typeof fetch,
+    );
+    const reload = vi.fn();
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost", reload },
+    } as unknown as Window & typeof globalThis);
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      terminalEnabled: true,
+    };
+
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(state.terminalEnabled).toBe(true);
     vi.unstubAllGlobals();
   });
 
