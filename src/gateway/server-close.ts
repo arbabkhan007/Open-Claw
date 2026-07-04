@@ -655,6 +655,7 @@ export function createGatewayCloseHandler(
     healthInterval: ReturnType<typeof setInterval>;
     dedupeCleanup: ReturnType<typeof setInterval>;
     mediaCleanup: ReturnType<typeof setInterval> | null;
+    dailySessionReset: ReturnType<typeof setInterval> | null;
     agentUnsub: (() => void) | null;
     heartbeatUnsub: (() => void) | null;
     transcriptUnsub: (() => void) | null;
@@ -857,6 +858,9 @@ export function createGatewayCloseHandler(
       clearInterval(params.tickInterval);
       clearInterval(params.healthInterval);
       clearInterval(params.dedupeCleanup);
+      if (params.dailySessionReset) {
+        clearInterval(params.dailySessionReset);
+      }
       if (params.mediaCleanup) {
         clearInterval(params.mediaCleanup);
       }
