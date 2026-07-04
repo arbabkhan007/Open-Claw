@@ -591,4 +591,24 @@ describe("normalizeAssistantReplayContent", () => {
     expect(content.some((b) => b.type === "thinking")).toBe(true);
     expect(content.some((b) => b.type === "toolCall")).toBe(true);
   });
+
+  it("drops orphaned thinking when metadata strip reveals NO_REPLY (#99772 metadata path)", () => {
+    // When stripInternalMetadataForDisplay removes metadata and reveals
+    // NO_REPLY text, hasSilentText must be set so the orphaned-thinking
+    // guard fires. Without this fix, the metadata-stripped path silently
+    // drops the text without marking hasSilentText.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "stale reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nNO_REPLY` },
+        ],
+        "stop",
+      ),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    // The yield-turn assistant with orphaned thinking should be dropped
+    expect(out).toStrictEqual([messages[0]]);
+  });
 });

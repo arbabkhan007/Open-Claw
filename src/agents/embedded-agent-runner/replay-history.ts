@@ -250,8 +250,12 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
     }
     touched = true;
     const trimmed = strippedText.trim();
-    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+    const isStrippedSilent = trimmed && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    if (trimmed && !isStrippedSilent) {
       sanitizedContent.push({ ...block, text: strippedText });
+    }
+    if (isStrippedSilent) {
+      hasSilentText = true;
     }
   }
   if (!touched) {
