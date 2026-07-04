@@ -226,6 +226,7 @@ function normalizeAssistantReplayTextContent(message: AgentMessage, replayConten
 
 function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
   let touched = false;
+  let hasSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
@@ -243,6 +244,7 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
         sanitizedContent.push(block);
       } else {
         touched = true;
+        hasSilentText = true;
       }
       continue;
     }
@@ -256,6 +258,23 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
     return message;
   }
   if (sanitizedContent.length === 0) {
+    return null;
+  }
+  // When a silent-reply text block was dropped and the remaining content is
+  // only thinking blocks (no tool_use, no text), drop the entire message.
+  // Keeping orphaned thinking blocks causes adjacent assistant messages to
+  // merge in provider payloads, producing [thinking, thinking, tool_use]
+  // which Anthropic rejects as "cannot be modified" (#99620).
+  if (
+    hasSilentText &&
+    sanitizedContent.every((block) => {
+      if (!block || typeof block !== "object") {
+        return true;
+      }
+      const type = (block as { type?: unknown }).type;
+      return type === "thinking" || type === "redacted_thinking";
+    })
+  ) {
     return null;
   }
   return { ...message, content: sanitizedContent } as AgentMessage;
