@@ -8,6 +8,7 @@ import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
+import { fetchKimiUsage, normalizeKimiUsageBaseUrl } from "./usage.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
@@ -108,6 +109,23 @@ export default definePluginEntry({
         ],
         defaultLevel: "off",
       }),
+      resolveUsageAuth: async (ctx) => {
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          providerIds: [PROVIDER_ID, "kimi-code", "kimi-coding"],
+          envDirect: [ctx.env.KIMI_API_KEY, ctx.env.KIMICODE_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async (ctx) => {
+        const explicitProvider = findExplicitProviderConfig(
+          ctx.config.models?.providers as Record<string, unknown> | undefined,
+          PROVIDER_ID,
+        );
+        const baseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
+        return await fetchKimiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
+          baseUrl: normalizeKimiUsageBaseUrl(baseUrl),
+        });
+      },
       wrapStreamFn: wrapKimiProviderStream,
     });
   },
