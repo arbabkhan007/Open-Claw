@@ -1342,6 +1342,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: config schema
   - H3: config validate
   - H2: Values
+  - H2: Runtime context
   - H2: config set modes
   - H3: Provider builder flags
   - H2: config patch
@@ -9718,6 +9719,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Channel behavior
   - H2: Reaction level
   - H2: Related
+
+## tools/runtime.md
+
+- Route: /tools/runtime
+- Headings:
+  - H2: Enable it
+  - H2: Exposure modes
+  - H2: The runtime tool
+  - H2: Notes
 
 ## tools/searxng-search.md
 
