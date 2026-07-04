@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Api, AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyAssistantFailoverReason,
@@ -103,6 +103,21 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
     api: "azure-openai-responses",
     provider: "azure-openai-responses-devdiv",
     baseUrl: "https://example.openai.azure.com/openai/responses",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+}
+
+function createNativeResponsesModel(): Model<"openai-responses"> {
+  return {
+    id: "gpt-5.5",
+    name: "GPT-5.5",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -839,6 +854,113 @@ describe("openai transport stream", () => {
       expect(summary).toContain("payload=");
       expect(summary).toContain("sk-abc");
       expect(summary).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
+  it("does not traverse Chat Completions payload diagnostics when payload debug is off", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    try {
+      const params = {
+        model: "gpt-5.5",
+        stream: true,
+        get messages(): unknown {
+          throw new Error("messages getter should not be evaluated when payload debug is off");
+        },
+        get tools(): unknown {
+          throw new Error("tools getter should not be evaluated when payload debug is off");
+        },
+      };
+
+      expect(testing.formatCompletionsPayloadDebugSummary(params)).toBe("");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
+  it("redacts full Chat Completions payload debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const summary = testing.formatCompletionsPayloadDebugSummary({
+        model: "gpt-5.5",
+        stream: true,
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "exec", arguments: "{}" } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_1", content: "OC99241_TEXT_ONLY_MARKER" },
+        ],
+        tools: [{ type: "function", function: { name: "exec" } }],
+        apiKey: "sk-abcdefghijklmnopqrstuvwxyz",
+      });
+      expect(summary).toContain("payload=");
+      // full-redacted is for short-lived local diagnostics only: secret-like
+      // values are redacted/capped, but prompt/message/tool-result text remains.
+      expect(summary).toContain("OC99241_TEXT_ONLY_MARKER");
+      expect(summary).toContain("sk-abc");
+      expect(summary).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
+  it("includes text-only tool results in redacted Responses payload debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const model = createNativeResponsesModel();
+      const assistantMessage = {
+        ...createResponsesAssistantOutput(model as never),
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1|fc_1",
+            name: "exec",
+            arguments: {},
+          },
+        ],
+        timestamp: 1,
+      } as AssistantMessage;
+      const toolResultMessage: ToolResultMessage = {
+        role: "toolResult",
+        toolCallId: "call_1|fc_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "OC99241_TEXT_ONLY_MARKER" }],
+        isError: false,
+        timestamp: 2,
+      };
+      const params = buildOpenAIResponsesParams(
+        model as Model,
+        {
+          systemPrompt: "system",
+          messages: [assistantMessage, toolResultMessage],
+          tools: [],
+        },
+        {},
+      ) as unknown as { input?: Array<Record<string, unknown>> };
+      const summary = testing.summarizeResponsesPayload(params);
+      expect(summary).toContain("payload=");
+      expect(summary).toContain("OC99241_TEXT_ONLY_MARKER");
+      expect(summary).not.toContain("attached image");
+      expect(summary).not.toContain("attached media");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
@@ -11969,5 +12091,233 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     const resolved = testing.getCompat(customReasoningProxyModel as never);
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
+  });
+
+  // issue #99241: text-only toolResult content must survive the provider-boundary
+  // transform without being replaced by image/attachment placeholders.
+  describe("issue #99241 – text-only toolResult provider boundary preservation", () => {
+    const MARKER = "EXACT_TOOL_TEXT_99241_BOUNDARY";
+
+    const responsesModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+
+    const completionsModel = {
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    } satisfies Model<"openai-completions">;
+
+    it("preserves text-only toolResult in Responses function_call_output", () => {
+      const params = buildOpenAIResponsesParams(
+        responsesModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-responses" as const,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_99241",
+                  name: "read_file",
+                  arguments: { path: "/tmp/test.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_99241",
+              toolName: "read_file",
+              content: [{ type: "text", text: MARKER }],
+              isError: false,
+              timestamp: 2,
+            },
+            { role: "user", content: "summarize", timestamp: 3 },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as {
+        input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+      };
+
+      const output = params.input?.find((item) => item.type === "function_call_output");
+      expect(output).toBeDefined();
+
+      // The marker text must be present in the serialized provider payload.
+      const outputText = output?.output as string;
+      expect(typeof outputText).toBe("string");
+      const serializedPayload = JSON.stringify(params);
+      expect(outputText).toContain(MARKER);
+      expect(serializedPayload).toContain(MARKER);
+
+      // Text-only tool results must not acquire media placeholders or image fields.
+      expect(serializedPayload).not.toContain("attached");
+      expect(serializedPayload).not.toContain("attachments");
+      expect(serializedPayload).not.toContain("image_url");
+      expect(serializedPayload).not.toContain("input_image");
+      expect(serializedPayload).not.toContain("data:image/");
+    });
+
+    it("preserves text-only toolResult in Completions messages", () => {
+      const params = buildOpenAICompletionsParams(
+        completionsModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-completions" as const,
+              provider: "deepseek",
+              model: "deepseek-v4-pro",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_99241",
+                  name: "read_file",
+                  arguments: { path: "/tmp/test.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_99241",
+              toolName: "read_file",
+              content: [{ type: "text", text: MARKER }],
+              isError: false,
+              timestamp: 2,
+            },
+            { role: "user", content: "summarize", timestamp: 3 },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: unknown[] };
+
+      // Find the tool result message in the converted output.
+      const toolMsg = params.messages.find(
+        (m): m is { role: string; content: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          "role" in m &&
+          (m as { role?: unknown }).role === "tool" &&
+          "content" in m &&
+          (m as { content?: unknown }).content === MARKER,
+      );
+      expect(toolMsg).toBeDefined();
+      expect(toolMsg?.content).toBe(MARKER);
+      const serializedPayload = JSON.stringify(params);
+      expect(serializedPayload).toContain(MARKER);
+
+      // Text-only tool results must not acquire media placeholders or image fields.
+      expect(serializedPayload).not.toContain("attached");
+      expect(serializedPayload).not.toContain("attachments");
+      expect(serializedPayload).not.toContain("image_url");
+      expect(serializedPayload).not.toContain("input_image");
+      expect(serializedPayload).not.toContain("data:image/");
+    });
+
+    it("does not inject image placeholders for text-only toolResult even with mixed content models", () => {
+      // Model supports images but toolResult is text-only
+      const params = buildOpenAIResponsesParams(
+        { ...responsesModel, input: ["text", "image"] },
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-responses" as const,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_99241b",
+                  name: "web_search",
+                  arguments: { query: "test" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_99241b",
+              toolName: "web_search",
+              content: [{ type: "text", text: MARKER }],
+              isError: false,
+              timestamp: 2,
+            },
+            { role: "user", content: "done", timestamp: 3 },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as {
+        input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+      };
+
+      const output = params.input?.find((item) => item.type === "function_call_output");
+      expect(output).toBeDefined();
+
+      const outputText = output?.output as string;
+      expect(typeof outputText).toBe("string");
+      const serializedPayload = JSON.stringify(params);
+      expect(outputText).toContain(MARKER);
+      expect(serializedPayload).toContain(MARKER);
+      expect(serializedPayload).not.toContain("attached");
+      expect(serializedPayload).not.toContain("attachments");
+      expect(serializedPayload).not.toContain("image_url");
+      expect(serializedPayload).not.toContain("input_image");
+      expect(serializedPayload).not.toContain("data:image/");
+    });
   });
 });
