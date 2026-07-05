@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -138,33 +139,36 @@ export async function appendCronRunLog(params: {
   entry: CronRunLogEntry;
   opts?: AppendCronRunLogOptions;
 }) {
+  // Normalize the jobId on write the same way reads do (assertSafeCronRunLogJobId
+  // trims + validates). Otherwise a jobId with surrounding whitespace is stored
+  // verbatim while reads trim before querying — the row is written but never read
+  // back — and a jobId containing "/" or "\\" is rejected on read yet silently
+  // accepted on write. Normalizing here keeps the write/read roundtrip symmetric.
+  const normalizedJobId = assertSafeCronRunLogJobId(params.entry.jobId);
+  const entry =
+    normalizedJobId === params.entry.jobId
+      ? params.entry
+      : { ...params.entry, jobId: normalizedJobId };
   const storeKey = cronStoreKey(params.storePath);
-  const writeKey = cronRunLogWriteKey(params.storePath, params.entry.jobId);
-  const prev = writesByTarget.get(writeKey) ?? Promise.resolve();
+  const writeKey = cronRunLogWriteKey(params.storePath, entry.jobId);
   // Keep writes for the same store/job ordered so prune-by-count cannot race a later insert.
-  const next = prev
-    .catch(() => undefined)
-    .then(async () => {
+  await enqueueKeyedTask({
+    tails: writesByTarget,
+    key: writeKey,
+    task: async () => {
       runOpenClawStateWriteTransaction(({ db }) => {
-        insertCronRunLogEntry(db, storeKey, params.entry);
+        insertCronRunLogEntry(db, storeKey, entry);
         if (params.opts?.keepLines !== false) {
           pruneCronRunLogRows(
             db,
             storeKey,
-            params.entry.jobId,
+            entry.jobId,
             params.opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
           );
         }
       });
-    });
-  writesByTarget.set(writeKey, next);
-  try {
-    await next;
-  } finally {
-    if (writesByTarget.get(writeKey) === next) {
-      writesByTarget.delete(writeKey);
-    }
-  }
+    },
+  });
 }
 
 /** Reads recent run-log entries synchronously for startup/task reconciliation paths. */
