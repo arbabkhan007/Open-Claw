@@ -2113,6 +2113,7 @@ export async function runEmbeddedAttempt(
         nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
           surface: promptSurface,
         }),
+        commandInventory: params.commandInventory,
         runtimeInfo,
         messageToolHints,
         toolSchemaDirectoryPrompt,
