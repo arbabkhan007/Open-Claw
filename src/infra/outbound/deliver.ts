@@ -91,6 +91,7 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
+import { assertAgentSessionOwnership } from "./session-owner.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -732,6 +733,20 @@ function sessionKeyForDeliveryDiagnostics(params: {
   return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
 }
 
+function assertDeliveryOwnership(params: {
+  session?: OutboundSessionContext;
+  mirror?: DeliveryMirror;
+}): void {
+  assertAgentSessionOwnership({
+    ownerLabel: "deliverOutboundPayloads",
+    agentIds: [params.session?.agentId, params.mirror?.agentId],
+    sessionKeys: [
+      { sessionKey: params.session?.key, label: "session key" },
+      { sessionKey: params.mirror?.sessionKey, label: "mirror session key" },
+    ],
+  });
+}
+
 function deliveryKindForPayload(
   payload: ReplyPayload,
   payloadSummary: NormalizedOutboundPayload,
@@ -1273,6 +1288,7 @@ export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+  assertDeliveryOwnership(params);
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
   const queuePayloadsChanged = queuePayloads.some((payload, index) => payload !== payloads[index]);
