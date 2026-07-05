@@ -1,4 +1,5 @@
 // Tests follow-up runner delivery, transcript persistence, and no-reply contracts.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -53,6 +54,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
   }
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
+const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -143,7 +145,10 @@ function registerFollowupTestSessionStore(
   storePath: string,
   sessionStore: Record<string, SessionEntry>,
 ): void {
+  fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
+  fsSync.writeFileSync(storePath, JSON.stringify(sessionStore));
   FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+  FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 }
 
 async function incrementRunCompactionCountForFollowupTest(
@@ -381,8 +386,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
       run.queuedLifecycle?.onComplete?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
-    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal">) =>
-      run.abortSignal?.aborted === true,
+    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
+      run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
   }));
   vi.doMock("./session-run-accounting.js", () => ({
@@ -579,6 +584,10 @@ afterEach(() => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  for (const storePath of FOLLOWUP_TEST_SESSION_STORE_PATHS) {
+    fsSync.rmSync(storePath, { force: true });
+  }
+  FOLLOWUP_TEST_SESSION_STORE_PATHS.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
   clearSessionStoreCacheForTest();
@@ -1463,6 +1472,127 @@ describe("createFollowupRunner runtime config", () => {
       expect.objectContaining({
         payload: { text: "persisted CLI followup" },
         mirror: false,
+      }),
+    );
+  });
+
+  it("does not deliver durable reasoning for a queued CLI followup when reasoning payloads are disabled", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "internal reasoning", isReasoning: true },
+        { text: "final answer" },
+      ],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+      opts: { reasoningPayloadsEnabled: false },
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "final answer" },
+      }),
+    );
+    expect(
+      routeReplyMock.mock.calls.some((call) => {
+        const payload = requireRecord(
+          requireRecord(call[0], "route reply params").payload,
+          "payload",
+        );
+        return payload.isReasoning === true;
+      }),
+    ).toBe(false);
+  });
+
+  // Resolver-level gate, not an end-to-end delivery proof: route-reply.js is
+  // mocked above (routeReplyMock), but resolveFollowupDeliveryPayloads is the
+  // REAL implementation, so this still proves the gate itself fires correctly
+  // for a queued CLI followup — the runner only forwards a reasoning payload
+  // to routing when opts.reasoningPayloadsEnabled is true. Whether the
+  // real routeReply then delivers it is a separate, pre-existing question:
+  // routeReply unconditionally suppresses isReasoning payloads on the
+  // origin-routing branch (route-reply.ts:131, shouldSuppressReasoningPayload,
+  // predates this change, shared with the embedded runner) and that
+  // suppression is intentionally out of scope here — see route-reply.test.ts.
+  it("passes the durable reasoning payload through to routing for a queued CLI followup when reasoning payloads are enabled", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "internal reasoning", isReasoning: true },
+        { text: "final answer" },
+      ],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+      opts: { reasoningPayloadsEnabled: true },
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    // Proves the resolver kept the reasoning payload (it survived
+    // resolveFollowupDeliveryPayloads) and the runner routed it — not that a
+    // real channel received it (routeReply is mocked; see comment above).
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "internal reasoning", isReasoning: true },
+      }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "final answer" },
       }),
     );
   });
@@ -3165,6 +3295,60 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
+  it("keeps internal tool lifecycle events out of queued channel progress", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "wait",
+            hideFromChannelProgress: true,
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: {
+            phase: "start",
+            itemId: "tool:wait-1",
+            title: "wait",
+            hideFromChannelProgress: true,
+          },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+  });
+
   it("keeps queued follow-up progress quiet when verbose state is missing", async () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
@@ -4061,6 +4245,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     persistSpy.mockImplementationOnce(async (params) => {
       const nextEntry: SessionEntry = {
@@ -4118,6 +4303,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
 
     const cfg = {
       messages: {
@@ -4300,6 +4486,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -4365,7 +4552,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       totalTokensFresh: true,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "internal announce complete" }],

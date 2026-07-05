@@ -252,6 +252,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
@@ -476,6 +477,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  if (params.disableTools) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
