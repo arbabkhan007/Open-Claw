@@ -41,6 +41,7 @@ import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolInFlightCoalescer } from "./dynamic-tool-execution.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
@@ -292,6 +293,7 @@ export async function runCodexAppServerSideQuestion(
       nativeProviderWebSearchSupport,
       signal: runAbortController.signal,
     });
+    const dynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
     removeRequestHandler = client.addRequestHandler(async (request) => {
       if (request.method === "account/chatgptAuthTokens/refresh") {
         return (await refreshCodexAppServerAuthTokens({
@@ -357,12 +359,14 @@ export async function runCodexAppServerSideQuestion(
       };
       emitDynamicToolStartedDiagnostic(diagnosticContext);
       try {
-        const response = await handleSideDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs,
-        });
+        const response = await dynamicToolInFlightCoalescer.run(call, () =>
+          handleSideDynamicToolCallWithTimeout({
+            call,
+            toolBridge,
+            signal: runAbortController.signal,
+            timeoutMs,
+          }),
+        );
         emitDynamicToolTerminalDiagnostic({
           ...diagnosticContext,
           response,

@@ -174,6 +174,7 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import {
+  createCodexDynamicToolInFlightCoalescer,
   handleDynamicToolCallWithTimeout,
   hasPendingDynamicToolTerminalDiagnostic,
   isDynamicToolTerminalDiagnosticEvent,
@@ -1687,6 +1688,7 @@ export async function runCodexAppServerAttempt(
     | undefined;
   let terminalDynamicToolReleaseCheckScheduled = false;
   let currentTurnHadNonTerminalDynamicToolResult = false;
+  const dynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
   const turnIdRef: { current?: string } = {};
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
   const userInputBridgeRef: {
@@ -2440,28 +2442,30 @@ export async function runCodexAppServerAttempt(
         }
       });
       try {
-        const response = await handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs: dynamicToolTimeoutMs,
-          toolCallOrdinal,
-          onAgentToolResult: params.onAgentToolResult,
-          onFallbackSelected: () => {
-            if (toolCallOrdinal !== undefined) {
-              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-            }
-          },
-          onTimeout: () => {
-            trajectoryRecorder?.recordEvent("tool.timeout", {
-              threadId: call.threadId,
-              turnId: call.turnId,
-              toolCallId: call.callId,
-              name: call.tool,
-              timeoutMs: dynamicToolTimeoutMs,
-            });
-          },
-        });
+        const response = await dynamicToolInFlightCoalescer.run(call, () =>
+          handleDynamicToolCallWithTimeout({
+            call,
+            toolBridge,
+            signal: runAbortController.signal,
+            timeoutMs: dynamicToolTimeoutMs,
+            toolCallOrdinal,
+            onAgentToolResult: params.onAgentToolResult,
+            onFallbackSelected: () => {
+              if (toolCallOrdinal !== undefined) {
+                suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+              }
+            },
+            onTimeout: () => {
+              trajectoryRecorder?.recordEvent("tool.timeout", {
+                threadId: call.threadId,
+                turnId: call.turnId,
+                toolCallId: call.callId,
+                name: call.tool,
+                timeoutMs: dynamicToolTimeoutMs,
+              });
+            },
+          }),
+        );
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
           // The underlying tool may ignore cancellation and finish after the
