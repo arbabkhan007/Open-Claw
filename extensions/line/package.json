@@ -8,12 +8,12 @@
   },
   "type": "module",
   "dependencies": {
-    "@line/bot-sdk": "11.0.1",
+    "@line/bot-sdk": "11.1.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "2026.5.28"
+    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.6.11"

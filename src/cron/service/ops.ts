@@ -19,7 +19,7 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload, CronStoreFile } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -253,7 +253,7 @@ export async function start(state: CronServiceState) {
   if (state.stopped) {
     return;
   }
-  const deferredCatchupJobIds = await runMissedJobs(state, {
+  await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
     deferAgentTurnJobs: true,
   });
@@ -266,10 +266,7 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const changed = recomputeNextRunsForMaintenance(state, {
-      recomputeExpired: true,
-      skipFutureRepairJobIds: deferredCatchupJobIds,
-    });
+    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     if (changed) {
       await persist(state);
     }
@@ -353,7 +350,8 @@ function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsSchedule
     opts?.scheduleKind === "all" ||
     opts?.scheduleKind === "at" ||
     opts?.scheduleKind === "every" ||
-    opts?.scheduleKind === "cron"
+    opts?.scheduleKind === "cron" ||
+    opts?.scheduleKind === "on-exit"
   ) {
     return opts.scheduleKind;
   }
@@ -475,17 +473,58 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
+type CronRollbackSnapshot = {
+  store: CronStoreFile | null;
+  pendingCatchupDeferralJobIds: Set<string>;
+};
+
+// Rolls the live scheduler state back to its pre-mutation snapshot when the
+// durable write fails. recomputeNextRunsForMaintenance mutates schedule state
+// across all jobs and drops catch-up deferral markers for removed/disabled
+// jobs, so restoring only the touched job would leave siblings and deferrals
+// ahead of disk; without the rollback a failed add/update/remove keeps
+// running, reverting, or resurrecting jobs the caller was told did not apply.
+async function persistOrRestore(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  postPersistAutoDisableNotifications: Array<() => void> = [],
+) {
+  try {
+    await persist(state);
+  } catch (err) {
+    state.store = snapshot.store;
+    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
+    throw err;
+  }
+  for (const notify of postPersistAutoDisableNotifications) {
+    notify();
+  }
+}
+
+function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
+  return {
+    store: state.store ? structuredClone(state.store) : null,
+    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
+  };
+}
+
 /** Adds a cron job, recomputes scheduler state, persists, and re-arms the timer. */
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
-    recomputeNextRunsForMaintenance(state);
+    // Auto-disable notifications describe durable state, so publish them only
+    // after the write succeeds instead of leaking a rolled-back transition.
+    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    recomputeNextRunsForMaintenance(state, {
+      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+    });
 
-    await persist(state);
+    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
     armTimer(state);
 
     state.deps.log.info(
@@ -515,6 +554,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     const nextJob = structuredClone(job);
@@ -583,7 +623,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     }
 
-    await persist(state);
+    await persistOrRestore(state, snapshot);
     armTimer(state);
     emit(state, {
       jobId: id,
@@ -604,13 +644,17 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
-    recomputeNextRunsForMaintenance(state);
+    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    recomputeNextRunsForMaintenance(state, {
+      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+    });
 
-    await persist(state);
+    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
@@ -641,6 +685,11 @@ type PreparedManualRun =
       executionJob: CronJob;
     }
   | { ok: false };
+
+type ManualRunOptions = {
+  runId?: string;
+  payload?: CronPayload;
+};
 
 type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
@@ -850,7 +899,7 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-  opts?: { runId?: string },
+  opts?: ManualRunOptions,
 ): Promise<PreparedManualRun> {
   const preflight = await inspectManualRunPreflight(state, id, mode);
   if (!preflight.ok) {
@@ -897,6 +946,9 @@ async function prepareManualRun(
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const executionJob = structuredClone(job);
+    if (opts?.payload) {
+      executionJob.payload = structuredClone(opts.payload);
+    }
     return {
       ok: true,
       ran: true,
@@ -1046,7 +1098,7 @@ export async function run(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-  opts?: { runId?: string },
+  opts?: ManualRunOptions,
 ) {
   const prepared = await prepareManualRun(state, id, mode, opts);
   if (!prepared.ok || !prepared.ran) {
