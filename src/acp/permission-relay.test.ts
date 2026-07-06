@@ -92,19 +92,32 @@ describe("ACP permission relay helpers", () => {
   });
 
   it("parses Gateway exec.approval.requested payloads", () => {
-    expect(
-      parseGatewayExecApprovalRequestEventPayload({
-        id: "approval-raw",
-        request: {
-          command: "echo raw",
-          host: "gateway",
-          sessionKey: "agent:main:main",
-        },
-      }),
-    ).toEqual({
+    const structuredEvent = parseGatewayExecApprovalRequestEventPayload({
+      id: "approval-raw",
+      request: {
+        command: "echo raw",
+        host: "gateway",
+        sessionKey: "agent:main:main",
+        title: "Run echo raw",
+        toolCallId: "tool-raw",
+      },
+    });
+
+    expect(structuredEvent).toEqual({
       approvalId: "approval-raw",
       command: "echo raw",
       host: "gateway",
+      title: "Run echo raw",
+      toolCallId: "tool-raw",
+    });
+    expect(
+      buildAcpPermissionRequest({
+        sessionId: "session-1",
+        event: structuredEvent!,
+      }).toolCall,
+    ).toMatchObject({
+      toolCallId: "tool-raw",
+      title: "Run echo raw",
     });
 
     expect(parseGatewayExecApprovalRequestEventPayload({ id: "approval-raw" })).toBeNull();
