@@ -9,7 +9,7 @@ import {
   TimeLimit,
   all,
   any,
-  type TerminationCondition,
+  TerminationCondition,
   type TerminationState,
 } from "./termination.js";
 
@@ -138,6 +138,38 @@ describe("OrCondition", () => {
 
   it("functional any() alias works", () => {
     expect(any(new TextMention("DONE"), new MaxIterations(5))).toBeInstanceOf(OrCondition);
+  });
+
+  it("hard bound fires even when a sibling branch rejects", async () => {
+    const rejectingScorer = new CustomCondition(() => {
+      throw new Error("scorer unavailable");
+    });
+    const cond = rejectingScorer.or(new MaxIterations(3));
+    const [stop, reason] = await cond.check(state({ turn: 3, replyText: "still working" }));
+    expect(stop).toBe(true);
+    expect(reason).toBe("max_iterations");
+  });
+
+  it("hard bound fires even when a sibling branch never settles", async () => {
+    class StalledCondition extends TerminationCondition {
+      check(): Promise<readonly [boolean, string | null]> {
+        return new Promise(() => {});
+      }
+    }
+    const cond = new StalledCondition().or(new MaxIterations(2));
+    const [stop, reason] = await cond.check(state({ turn: 2, replyText: "still working" }));
+    expect(stop).toBe(true);
+    expect(reason).toBe("max_iterations");
+  });
+
+  it("propagates a branch error only when no branch stops", async () => {
+    const rejectingScorer = new CustomCondition(() => {
+      throw new Error("scorer unavailable");
+    });
+    const cond = rejectingScorer.or(new MaxIterations(5));
+    await expect(cond.check(state({ turn: 1, replyText: "still working" }))).rejects.toThrow(
+      "scorer unavailable",
+    );
   });
 });
 

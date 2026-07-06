@@ -59,13 +59,52 @@ export class OrCondition extends TerminationCondition {
   }
 
   async check(state: TerminationState): Promise<readonly [boolean, string | null]> {
-    for (const cond of this.conditions) {
-      const [stop, reason] = await cond.check(state);
-      if (stop) {
-        return [true, reason];
+    // Hard safety bounds (e.g. MaxIterations) must fire even when a sibling
+    // async branch (e.g. a GSAR scorer) stalls or rejects, so branches run
+    // concurrently and the first stop verdict settles the check. A rejected
+    // branch counts as "did not fire"; its error propagates only when no
+    // branch stops, so a broken scorer stays visible without ever delaying
+    // or masking the hard bound.
+    return await new Promise((resolve, reject) => {
+      let pending = this.conditions.length;
+      let firstError: unknown;
+      let sawError = false;
+      if (pending === 0) {
+        resolve([false, null]);
+        return;
       }
-    }
-    return [false, null];
+      const settleBranch = () => {
+        pending -= 1;
+        if (pending > 0) {
+          return;
+        }
+        if (sawError) {
+          reject(firstError instanceof Error ? firstError : new Error(String(firstError)));
+          return;
+        }
+        resolve([false, null]);
+      };
+      for (const cond of this.conditions) {
+        Promise.resolve()
+          .then(() => cond.check(state))
+          .then(
+            ([stop, reason]) => {
+              if (stop) {
+                resolve([true, reason]);
+                return;
+              }
+              settleBranch();
+            },
+            (err: unknown) => {
+              if (!sawError) {
+                sawError = true;
+                firstError = err;
+              }
+              settleBranch();
+            },
+          );
+      }
+    });
   }
 
   override reset(): void {
