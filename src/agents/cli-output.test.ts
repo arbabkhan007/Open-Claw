@@ -1769,9 +1769,9 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
-  it("streams plugin-parsed JSONL text, thinking, and native tool events", () => {
+  it("streams plugin-parsed JSONL text, thinking stream, and native tool events", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
-    const commentary: string[] = [];
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
     const starts: CliToolUseStartDelta[] = [];
     const results: CliToolResultDelta[] = [];
     const parser = createCliJsonlStreamingParser({
@@ -1831,7 +1831,7 @@ describe("createCliJsonlStreamingParser", () => {
         return undefined;
       },
       onAssistantDelta: (delta) => deltas.push(delta),
-      onCommentaryText: (text) => commentary.push(text),
+      onThinkingDelta: (delta) => thinking.push(delta),
       onToolUseStart: (delta) => starts.push(delta),
       onToolResult: (delta) => results.push(delta),
     });
@@ -1873,7 +1873,9 @@ describe("createCliJsonlStreamingParser", () => {
         usage: undefined,
       },
     ]);
-    expect(commentary).toEqual(["Need a file read"]);
+    expect(thinking).toEqual([
+      { text: "Need a file read", delta: "Need a file read", isReasoningSnapshot: true },
+    ]);
     expect(starts).toEqual([
       { toolCallId: "call-1", name: "read_file", args: { path: "README.md" } },
     ]);

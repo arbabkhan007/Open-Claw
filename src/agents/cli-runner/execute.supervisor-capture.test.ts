@@ -530,12 +530,17 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
   it("keeps plugin JSONL display tool events out of delivery evidence", async () => {
     const toolEvents: Array<Record<string, unknown>> = [];
+    const thinkingEvents: Array<Record<string, unknown>> = [];
     const stop = onAgentEvent((event) => {
       if (event.stream === "tool") {
         toolEvents.push(event.data);
       }
+      if (event.stream === "thinking") {
+        thinkingEvents.push(event.data);
+      }
     });
     const chunks = [
+      `${JSON.stringify({ type: "thinking", text: "planning send" })}\n`,
       `${JSON.stringify({ type: "text", text: "sending" })}\n`,
       `${JSON.stringify({
         type: "tool_call",
@@ -598,6 +603,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
             if (parsed.type === "text") {
               return { kind: "text", text: parsed.text ?? "" };
             }
+            if (parsed.type === "thinking") {
+              return { kind: "thinking", text: parsed.text ?? "" };
+            }
             if (parsed.type === "result") {
               return { kind: "result", text: parsed.result };
             }
@@ -630,6 +638,13 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.text).toBe("sending");
       expect(result.didSendViaMessagingTool).toBeUndefined();
       expect(getCliMessagingDeliveryEvidence(result)).toBeUndefined();
+      expect(thinkingEvents).toEqual([
+        expect.objectContaining({
+          text: "planning send",
+          delta: "planning send",
+          isReasoningSnapshot: true,
+        }),
+      ]);
       expect(toolEvents).toEqual([
         expect.objectContaining({
           phase: "start",

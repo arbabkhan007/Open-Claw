@@ -1160,10 +1160,11 @@ export function createCliJsonlStreamingParser(params: {
       return;
     }
     if (event.kind === "thinking") {
-      const text = event.text.trim();
-      if (text) {
-        params.onCommentaryText?.(text);
+      if (!event.text || !params.onThinkingDelta) {
+        return;
       }
+      const streamed = thinkingTracker.streamedByIndex.get(0) ?? "";
+      emitClaudeThinking(thinkingTracker, 0, streamed, event.text, params.onThinkingDelta);
       return;
     }
     if (event.kind === "toolStart") {
