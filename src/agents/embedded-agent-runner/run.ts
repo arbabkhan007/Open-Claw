@@ -1724,6 +1724,7 @@ async function runEmbeddedAgentInternal(
         config?: RunEmbeddedAgentParams["config"];
         agentDir?: RunEmbeddedAgentParams["agentDir"];
         modelId?: string;
+        rawError?: string;
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason) {
@@ -1742,6 +1743,7 @@ async function runEmbeddedAgentInternal(
           agentDir,
           runId: params.runId,
           modelId: failure.modelId,
+          rawError: failure.rawError,
         });
       };
       const markAuthProfileSuccessAfterRun = () => {
@@ -3252,6 +3254,7 @@ async function runEmbeddedAgentInternal(
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
+                  rawError: errorText,
                 }).catch((err: unknown) => {
                   log.warn(`prompt profile failure mark failed: ${String(err)}`);
                 });
@@ -3290,6 +3293,7 @@ async function runEmbeddedAgentInternal(
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
+                  rawError: errorText,
                 });
               } catch (err) {
                 log.warn(`prompt profile failure mark failed: ${String(err)}`);
@@ -3961,6 +3965,7 @@ async function runEmbeddedAgentInternal(
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
                 modelId,
+                rawError: assistantForFailover?.errorMessage,
               });
             }
             return {
@@ -4050,6 +4055,7 @@ async function runEmbeddedAgentInternal(
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
                 modelId,
+                rawError: assistantForFailover?.errorMessage,
               });
             }
 
