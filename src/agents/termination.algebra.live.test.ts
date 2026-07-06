@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Message, Model } from "../llm/types.js";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import {
   computeGroundednessScore,
   evaluateGroundedness,
@@ -26,7 +27,6 @@ import {
 } from "./gsar.js";
 import {
   completeSimpleWithLiveTimeout,
-  extractAssistantText,
   resolveLiveDirectModel,
 } from "./live-cache-test-support.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";

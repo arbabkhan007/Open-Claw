@@ -438,10 +438,10 @@ describe("Anthropic vs OpenAI — full OpenClaw task suite", () => {
           reply: "Found. [DONE]",
           partition: { grounded: 5, ungrounded: 0, contradicted: 0, complementary: 1 },
         },
-        ...Array(3).fill({
+        ...Array.from({ length: 3 }, () => ({
           reply: "—",
           partition: { grounded: 0, ungrounded: 0, contradicted: 0, complementary: 0 },
-        }),
+        })),
       ],
       gpt: [
         {
@@ -478,10 +478,10 @@ describe("Anthropic vs OpenAI — full OpenClaw task suite", () => {
           reply: "Review done. Policy change is correct. DONE",
           partition: { grounded: 6, ungrounded: 0, contradicted: 0, complementary: 2 },
         },
-        ...Array(3).fill({
+        ...Array.from({ length: 3 }, () => ({
           reply: "—",
           partition: { grounded: 0, ungrounded: 0, contradicted: 0, complementary: 0 },
-        }),
+        })),
       ],
       gpt: [
         {
@@ -514,10 +514,10 @@ describe("Anthropic vs OpenAI — full OpenClaw task suite", () => {
           reply: "Running process.memoryUsage()... RSS=312MB. DONE",
           partition: { grounded: 4, ungrounded: 0, contradicted: 0, complementary: 0 },
         },
-        ...Array(4).fill({
+        ...Array.from({ length: 4 }, () => ({
           reply: "—",
           partition: { grounded: 0, ungrounded: 0, contradicted: 0, complementary: 0 },
-        }),
+        })),
       ],
       gpt: [
         {
