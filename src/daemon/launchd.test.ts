@@ -235,6 +235,19 @@ function launchctlCommandNames(): string[] {
   return state.launchctlCalls.map(([command]) => command ?? "");
 }
 
+function launchctlCallsWithoutSystemConflictProbe(): string[][] {
+  return state.launchctlCalls.filter(
+    ([command, target]) => command !== "print" || !target?.startsWith("system/"),
+  );
+}
+
+function expectNoLaunchAgentActivationCalls(): void {
+  const activationCommands = new Set(["enable", "bootstrap", "kickstart"]);
+  expect(state.launchctlCalls.filter(([command]) => activationCommands.has(command ?? ""))).toEqual(
+    [],
+  );
+}
+
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   if (file === "launchctl") {
     return args;
@@ -1209,6 +1222,27 @@ describe("launchd bootstrap repair", () => {
       detail: "launchctl kickstart failed: permission denied",
     });
   });
+
+  it("refuses bootstrap repair when the same label is loaded as a system LaunchDaemon", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemServiceLoaded = true;
+      const repair = await repairLaunchAgentBootstrap({ env: createDefaultLaunchdEnv() });
+
+      expect(repair.ok).toBe(false);
+      if (repair.ok) {
+        throw new Error("expected bootstrap repair to fail");
+      }
+      expect(repair.status).toBe("system-launchdaemon-conflict");
+      expect(repair.detail).toContain(
+        "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
+      );
+      expect(repair.detail).not.toContain(
+        "/Library/LaunchDaemons/ai.openclaw.gateway.plist",
+      );
+      expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
 });
 
 describe("launchd install", () => {
@@ -1216,18 +1250,25 @@ describe("launchd install", () => {
     await withProcessPlatform("darwin", async () => {
       state.systemServiceLoaded = true;
       const env = createDefaultLaunchdEnv();
+      let message = "";
 
-      await expect(
-        installLaunchAgent({
+      try {
+        await installLaunchAgent({
           env,
           stdout: new PassThrough(),
           programArguments: defaultProgramArguments,
-        }),
-      ).rejects.toThrow("Existing system LaunchDaemon system/ai.openclaw.gateway detected");
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
 
+      expect(message).toContain(
+        "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
+      );
+      expect(message).not.toContain("/Library/LaunchDaemons/ai.openclaw.gateway.plist");
       expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
-      expect(launchctlCommandNames()).not.toContain("bootstrap");
+      expectNoLaunchAgentActivationCalls();
     });
   });
 
@@ -1246,7 +1287,7 @@ describe("launchd install", () => {
 
       expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
-      expect(launchctlCommandNames()).not.toContain("bootstrap");
+      expectNoLaunchAgentActivationCalls();
     });
   });
 
@@ -2040,7 +2081,7 @@ describe("launchd install", () => {
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
-    expect(state.launchctlCalls).toEqual([
+    expect(launchctlCallsWithoutSystemConflictProbe()).toEqual([
       ["enable", serviceId],
       ["kickstart", "-k", serviceId],
     ]);
@@ -2083,7 +2124,12 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCallsWithoutSystemConflictProbe().map(([command]) => command)).toEqual([
+      "enable",
+      "bootout",
+      "enable",
+      "bootstrap",
+    ]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -2121,7 +2167,13 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap", "print"]);
+    expect(launchctlCallsWithoutSystemConflictProbe().map(([command]) => command)).toEqual([
+      "enable",
+      "bootout",
+      "enable",
+      "bootstrap",
+      "print",
+    ]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -2294,6 +2346,25 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).not.toContain("bootout");
   });
 
+  it("refuses restart before activation when the same label is a system LaunchDaemon", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemServiceLoaded = true;
+
+      await expect(
+        restartLaunchAgent({
+          env: createDefaultLaunchdEnv(),
+          stdout: new PassThrough(),
+        }),
+      ).rejects.toThrow(
+        "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
+      );
+
+      expect(state.launchctlCalls).toEqual([["print", "system/ai.openclaw.gateway"]]);
+      expectNoLaunchAgentActivationCalls();
+      expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+    });
+  });
+
   it("surfaces the original kickstart failure when the service is still loaded", async () => {
     const env = createDefaultLaunchdEnv();
     state.kickstartError = "Input/output error";
@@ -2344,7 +2415,29 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
-    expect(state.launchctlCalls).toStrictEqual([]);
+    expectNoLaunchAgentActivationCalls();
+  });
+
+  it("refuses detached restart handoff when the same label is a system LaunchDaemon", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemServiceLoaded = true;
+      const env = createDefaultLaunchdEnv();
+
+      await expect(
+        withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+          restartLaunchAgent({
+            env,
+            stdout: new PassThrough(),
+          }),
+        ),
+      ).rejects.toThrow(
+        "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
+      );
+
+      expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+      expect(state.launchctlCalls).toEqual([["print", "system/ai.openclaw.gateway"]]);
+      expectNoLaunchAgentActivationCalls();
+    });
   });
 
   it("hands plist reload off when current LaunchAgent needs rewritten paths", async () => {
@@ -2384,7 +2477,7 @@ describe("launchd install", () => {
       waitForPid: process.pid,
     });
     expect(state.files.get(plistPath)).toContain("/Users/test/Library/Logs/openclaw/gateway.log");
-    expect(state.launchctlCalls).toStrictEqual([]);
+    expectNoLaunchAgentActivationCalls();
   });
 
   it("surfaces detached handoff failures", async () => {
@@ -2429,7 +2522,7 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
-    expect(state.launchctlCalls).toStrictEqual([]);
+    expectNoLaunchAgentActivationCalls();
   });
 
   it("does not hand restart off for unrelated inherited XPC service names", async () => {

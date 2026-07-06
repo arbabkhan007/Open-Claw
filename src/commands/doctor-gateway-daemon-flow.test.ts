@@ -730,6 +730,30 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
+  it("reports system LaunchDaemon conflicts without installing or restarting a user service", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({
+      status: "unknown",
+      missingSupervision: true,
+    });
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail: "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+    });
+
+    const runtime = await runAutoRepair();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway LaunchAgent bootstrap failed: Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+    );
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("skips restart prompt when gateway is healthy after recent restart handoff in normal doctor flow", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);

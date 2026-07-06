@@ -382,10 +382,16 @@ async function execLaunchctl(
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
 }
 
-type SystemLaunchDaemonConflict = {
-  serviceTarget: string;
-  plistPath: string;
-};
+type SystemLaunchDaemonConflict =
+  | {
+      detectedBy: "launchctl";
+      serviceTarget: string;
+    }
+  | {
+      detectedBy: "plist";
+      serviceTarget: string;
+      plistPath: string;
+    };
 
 async function resolveSystemLaunchDaemonConflict(
   label: string,
@@ -397,14 +403,30 @@ async function resolveSystemLaunchDaemonConflict(
   const serviceTarget = `system/${label}`;
   const printed = await execLaunchctl(["print", serviceTarget]);
   if (printed.code === 0) {
-    return { serviceTarget, plistPath };
+    return { detectedBy: "launchctl", serviceTarget };
   }
   try {
     await fs.access(plistPath);
-    return { serviceTarget, plistPath };
+    return { detectedBy: "plist", serviceTarget, plistPath };
   } catch {
     return null;
   }
+}
+
+function formatSystemLaunchDaemonConflict(conflict: SystemLaunchDaemonConflict): string {
+  const detection =
+    conflict.detectedBy === "launchctl"
+      ? `Existing system LaunchDaemon ${conflict.serviceTarget} detected by launchctl.`
+      : `Existing system LaunchDaemon plist detected at ${conflict.plistPath}.`;
+  const recovery =
+    conflict.detectedBy === "launchctl"
+      ? `Keep the system LaunchDaemon, or unload it with \`sudo launchctl bootout ${conflict.serviceTarget}\` and remove its actual plist before retrying.`
+      : `Keep the system LaunchDaemon, or remove it first with \`sudo launchctl bootout ${conflict.serviceTarget}\` and \`sudo rm ${conflict.plistPath}\`, then retry.`;
+  return [
+    detection,
+    "Refusing to create or activate a gui-domain LaunchAgent for the same gateway label because duplicate launchd managers can restart-loop the gateway.",
+    recovery,
+  ].join("\n");
 }
 
 async function assertNoSystemLaunchDaemonConflict(label: string): Promise<void> {
@@ -414,13 +436,7 @@ async function assertNoSystemLaunchDaemonConflict(label: string): Promise<void> 
   }
   // A system-domain job owns this label across users; adding a gui LaunchAgent
   // would create dueling KeepAlive managers for the same gateway port.
-  throw new Error(
-    [
-      `Existing system LaunchDaemon ${conflict.serviceTarget} detected at ${conflict.plistPath}.`,
-      "Refusing to install a gui-domain LaunchAgent for the same gateway label because duplicate launchd managers can restart-loop the gateway.",
-      `Keep the system LaunchDaemon, or remove it first with \`sudo launchctl bootout ${conflict.serviceTarget}\` and \`sudo rm ${conflict.plistPath}\`, then rerun \`openclaw gateway install\`.`,
-    ].join("\n"),
-  );
+  throw new Error(formatSystemLaunchDaemonConflict(conflict));
 }
 
 export function parseLaunchctlListOpenClawUpdateJobs(
@@ -800,6 +816,7 @@ type LaunchAgentBootstrapRepairResult =
       status: "bootstrap-failed" | "kickstart-failed";
       detail?: string;
     }
+  | { ok: false; status: "system-launchdaemon-conflict"; detail: string }
   | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
 
 function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
@@ -821,6 +838,14 @@ export async function repairLaunchAgentBootstrap(args: {
   const warn =
     args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
+  const conflict = await resolveSystemLaunchDaemonConflict(label);
+  if (conflict) {
+    return {
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail: formatSystemLaunchDaemonConflict(conflict),
+    };
+  }
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   let repairStatus: "repaired" | "already-loaded" = "repaired";
@@ -1288,6 +1313,7 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
+  await assertNoSystemLaunchDaemonConflict(label);
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
