@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Live demo: termination algebra + GSAR — agent conversations with real reasoning.
+ * Demo: termination algebra + GSAR — agent conversations with scripted replies.
  *
  * Run (no API key needed — uses realistic mock Claude replies):
  *   node --import tsx/esm scripts/demo-gsar-algebra.ts
  *
- * Run with real Anthropic API:
- *   ANTHROPIC_API_KEY=sk-ant-... node --import tsx/esm scripts/demo-gsar-algebra.ts --live
+ * For real-API proof, use the live test instead:
+ *   OPENCLAW_LIVE_TEST=1 pnpm test:live -- src/agents/termination.algebra.live.test.ts
  */
 
 import {
@@ -336,7 +336,7 @@ async function main(): Promise<void> {
     "Task: What are Claude Sonnet 4.6 rate limits?  (Agent searches docs, improves grounding)",
     "Search for evidence. Annotate each claim [G]/[U]/[X]/[K].",
     gsarRecovery,
-    new GroundednessCondition(gsarScorer),
+    new GroundednessCondition(gsarScorer).or(new MaxIterations(5)),
     { showGsar: true },
   );
 
