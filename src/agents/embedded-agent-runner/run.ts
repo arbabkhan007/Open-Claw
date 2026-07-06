@@ -2,6 +2,7 @@
  * Top-level embedded-agent run orchestration entrypoint.
  */
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
@@ -37,6 +38,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -140,6 +142,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -266,6 +269,7 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+type BeforeAgentFinalizeRevisionTranscriptReset = "removed" | "not_found" | "error";
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -354,6 +358,66 @@ function resolveAttemptDispatchApiKey(params: {
 
 function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
   return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
+}
+
+function resolveAssistantRevisionMatchText(
+  assistant: EmbeddedRunAttemptForRunner["lastAssistant"],
+): string | undefined {
+  return (
+    normalizeOptionalString(resolveFinalAssistantVisibleText(assistant)) ??
+    normalizeOptionalString(resolveFinalAssistantRawText(assistant))
+  );
+}
+
+function shouldPreserveBeforeAgentFinalizeRevisionTrailingEntry(
+  entry: ReturnType<SessionManager["getEntries"]>[number],
+): boolean {
+  return (
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info" ||
+    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message))
+  );
+}
+
+function resetBeforeAgentFinalizeRevisionTranscript(params: {
+  sessionFile: string;
+  sessionId: string;
+  runId: string;
+  lastAssistant: EmbeddedRunAttemptForRunner["lastAssistant"];
+}): BeforeAgentFinalizeRevisionTranscriptReset {
+  const expectedText = resolveAssistantRevisionMatchText(params.lastAssistant);
+  if (!expectedText) {
+    return "not_found";
+  }
+  if (!existsSync(params.sessionFile)) {
+    return "not_found";
+  }
+  try {
+    const sessionManager = SessionManager.open(params.sessionFile);
+    // The revision pass is authoritative. Remove the rejected terminal answer
+    // before retrying so the model does not see it as finalized history.
+    const removed = sessionManager.removeTrailingEntries(
+      (entry) => {
+        if (entry.type !== "message" || entry.message.role !== "assistant") {
+          return false;
+        }
+        return (
+          resolveAssistantRevisionMatchText(
+            entry.message as EmbeddedRunAttemptForRunner["lastAssistant"],
+          ) === expectedText
+        );
+      },
+      { preserveTrailing: shouldPreserveBeforeAgentFinalizeRevisionTrailingEntry },
+    );
+    return removed > 0 ? "removed" : "not_found";
+  } catch (err) {
+    log.warn(
+      `before_agent_finalize transcript reset failed before retry: ` +
+        `runId=${params.runId} sessionId=${params.sessionId} error=${formatErrorMessage(err)}`,
+    );
+    return "error";
+  }
 }
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -4113,6 +4177,12 @@ async function runEmbeddedAgentInternal(
             !emptyAssistantReplyIsSilent;
           if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
             beforeAgentFinalizeRevisionAttempts += 1;
+            const revisionTranscriptReset = resetBeforeAgentFinalizeRevisionTranscript({
+              sessionFile: activeSessionFile ?? params.sessionFile,
+              sessionId: activeSessionId ?? params.sessionId,
+              runId: params.runId,
+              lastAssistant: sessionLastAssistant,
+            });
             nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
               beforeAgentFinalizeRevisionReason,
             );
@@ -4123,7 +4193,8 @@ async function runEmbeddedAgentInternal(
             log.warn(
               `before_agent_finalize requested one more pass: ` +
                 `runId=${params.runId} sessionId=${params.sessionId} ` +
-                `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+                `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS} ` +
+                `transcriptReset=${revisionTranscriptReset}`,
             );
             continue;
           }
