@@ -12,6 +12,7 @@ import { startCodexAttemptThread } from "./attempt-startup.js";
 import { defaultLeasedCodexAppServerClientFactory } from "./client-factory.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CodexAppServerStartupAbortedError, CodexAppServerStartupTimeoutError } from "./errors.js";
 import {
   clearSharedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,

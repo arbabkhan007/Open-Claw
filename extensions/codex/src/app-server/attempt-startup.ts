@@ -207,10 +207,10 @@ export async function startCodexAttemptThread(params: {
             attemptedClient = activeStartupClient;
             startupClientForAbandonedRequestCleanup = activeStartupClient;
             if (startupAbandoned) {
-              throw new Error("codex app-server startup timed out");
+              throw new CodexAppServerStartupTimeoutError();
             }
             if (startupAbandonController.signal.aborted) {
-              throw new Error("codex app-server startup aborted");
+              throw new CodexAppServerStartupAbortedError();
             }
             await ensureCodexComputerUse({
               client: activeStartupClient,
@@ -279,7 +279,7 @@ export async function startCodexAttemptThread(params: {
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);
               if (startupAbandonController.signal.aborted) {
                 await releaseStartupSandboxEnvironment();
-                throw new Error("codex app-server startup aborted");
+                throw new CodexAppServerStartupAbortedError();
               }
               if (
                 params.sandbox?.enabled &&
@@ -360,7 +360,7 @@ export async function startCodexAttemptThread(params: {
               );
               if (startupAbandonController.signal.aborted) {
                 await releaseStartupSandboxEnvironment();
-                throw new Error("codex app-server startup aborted");
+                throw new CodexAppServerStartupAbortedError();
               }
               startupSandboxEnvironmentAcquired = false;
               startupAttemptSucceeded = true;
@@ -490,17 +490,17 @@ export async function startCodexAttemptThread(params: {
 
 function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    (error.message === "codex app-server startup timed out" ||
-      error.message === "codex app-server startup aborted")
+    error instanceof CodexAppServerStartupTimeoutError ||
+    error instanceof CodexAppServerStartupAbortedError
   );
 }
 
 function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (shouldClearSharedClientAfterStartupAbandon(error) || error.message.endsWith(" timed out"))
-  );
+  return shouldClearSharedClientAfterStartupAbandon(error);
+}
+
+function isErrnoException(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && typeof (error as Record<string, unknown>).code === "string";
 }
 
 function shouldClearSharedClientAfterStartupFailure(params: {
@@ -510,7 +510,7 @@ function shouldClearSharedClientAfterStartupFailure(params: {
   if (!(params.error instanceof Error)) {
     return !params.spawnedBy;
   }
-  if (params.error.message.includes("write EPIPE")) {
+  if (isErrnoException(params.error) && params.error.code === "EPIPE") {
     return true;
   }
   return !params.spawnedBy;
