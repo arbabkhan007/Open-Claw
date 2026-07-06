@@ -1006,30 +1006,42 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nkeep me\n",
     });
 
-    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
-    let readFileSyncCalls = 0;
+    const originalRead = syncFs.read.bind(syncFs);
+    let readCalls = 0;
     let threwTransient = false;
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
-      target: unknown,
-      options: unknown,
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
     ) => {
-      readFileSyncCalls += 1;
+      readCalls += 1;
       if (!threwTransient) {
         threwTransient = true;
-        throw Object.assign(new Error("Unknown system error -11: read"), {
-          code: "EAGAIN",
-          errno: -11,
-        });
+        // Surface the transient failure through the async fd read callback the
+        // way the bootstrap reader consumes it, so the retry path re-opens a
+        // fresh fd and reads again on the next attempt.
+        callback(
+          Object.assign(new Error("Unknown system error -11: read"), {
+            code: "EAGAIN",
+            errno: -11,
+          }),
+          0,
+          buffer,
+        );
+        return;
       }
-      return originalReadFileSync(target as never, options as never);
-    }) as typeof syncFs.readFileSync);
+      originalRead(fd, buffer, offset, length, position, callback);
+    }) as typeof syncFs.read);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
-      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      expect(readCalls).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("keep me");
@@ -1046,12 +1058,28 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n",
     });
 
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
-      throw Object.assign(new Error("Unknown system error -11: read"), {
-        code: "EAGAIN",
-        errno: -11,
-      });
-    }) as typeof syncFs.readFileSync);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
+    ) => {
+      void fd;
+      void offset;
+      void length;
+      void position;
+      // Keep failing every async fd read so all retry attempts are exhausted.
+      callback(
+        Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        }),
+        0,
+        buffer,
+      );
+    }) as typeof syncFs.read);
 
     try {
       // Unlike the template check, this reader returns an io failure (not a
