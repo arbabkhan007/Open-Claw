@@ -35,6 +35,8 @@ import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
@@ -47,8 +49,11 @@ import type {
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
+const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -70,6 +75,12 @@ export type CoreHealthCheckDeps = {
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
   readonly collectProviderCatalogProjectionFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
+  readonly collectGatewayHealthFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
+  readonly collectGatewayDaemonFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
 };
@@ -116,12 +127,28 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
 }
 
+async function collectGatewayHealthFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectGatewayHealthFindings(ctx);
+}
+
+async function collectGatewayDaemonFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectGatewayDaemonFindings(ctx);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
   collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
+  collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
+  collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -187,6 +214,33 @@ const commandOwnerCheck: HealthCheck = {
         path: "commands.ownerAllowFrom",
         fixHint:
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
+      },
+    ];
+  },
+};
+
+const skillWorkshopToolPolicyCheck: HealthCheck = {
+  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+  kind: "core",
+  description: "Autonomous Skill Workshop capture has a callable review tool.",
+  source: "doctor",
+  async detect(ctx) {
+    const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+      config: ctx.cfg,
+      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+    });
+    if (!diagnostic) {
+      return [];
+    }
+    return [
+      {
+        checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+        severity: "warning",
+        message: diagnostic.detail,
+        path: diagnostic.source,
+        target: diagnostic.agentId,
+        requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
+        fixHint: diagnostic.fix,
       },
     ];
   },
@@ -632,11 +686,12 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
-const legacyWhatsAppCrontabCheck: HealthCheck = {
+const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
   description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
   source: "doctor",
+  defaultEnabled: false,
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
       await import("../commands/doctor/cron/index.js");
@@ -651,6 +706,19 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
         text: warning,
       }),
     ];
+  },
+};
+
+const legacyCronStoreCheck: SplitHealthCheckInput = {
+  id: "core/doctor/legacy-cron-store",
+  kind: "core",
+  description: "Legacy cron store, run-log, and payload state is normalized.",
+  source: "doctor",
+  defaultEnabled: false,
+  async detect(ctx) {
+    const { collectLegacyCronStoreHealthFindings } =
+      await import("../commands/doctor/cron/index.js");
+    return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
   },
 };
 
@@ -735,6 +803,32 @@ const gatewayPlatformNotesCheck: HealthCheck = {
     );
   },
 };
+
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+  return {
+    id: GATEWAY_HEALTH_CHECK_ID,
+    kind: "core",
+    description: "Gateway reachability is represented as structured findings.",
+    source: "doctor",
+    defaultEnabled: false,
+    async detect(ctx) {
+      return deps.collectGatewayHealthFindings(ctx);
+    },
+  };
+}
+
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+  return {
+    id: GATEWAY_DAEMON_CHECK_ID,
+    kind: "core",
+    description: "Local Gateway daemon service state is represented as structured findings.",
+    source: "doctor",
+    defaultEnabled: false,
+    async detect(ctx) {
+      return deps.collectGatewayDaemonFindings(ctx);
+    },
+  };
+}
 
 const sessionLocksCheck: SplitHealthCheckInput = {
   id: SESSION_LOCKS_CHECK_ID,
@@ -987,12 +1081,15 @@ const uiProtocolFreshnessCheck: HealthCheck = {
   },
 };
 
-function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createWorkspaceSuggestionsCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/workspace-suggestions",
     kind: "core",
     description:
       "Workspace backup and memory-system suggestions are captured as structured findings.",
+    defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
@@ -1016,12 +1113,15 @@ function createConvertedWorkflowChecks(
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    legacyCronStoreCheck,
     codexSessionRoutesCheck,
     sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
     gatewayPlatformNotesCheck,
+    createGatewayHealthCheck(deps),
+    createGatewayDaemonCheck(deps),
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
@@ -1030,6 +1130,7 @@ function createConvertedWorkflowChecks(
     createProviderCatalogProjectionCheck(deps),
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
+    skillWorkshopToolPolicyCheck,
   ];
 }
 
