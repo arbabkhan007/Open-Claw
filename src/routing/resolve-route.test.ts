@@ -116,6 +116,35 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("preserves explicit main bindings when agents.list has other agents", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "alpha" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", accountId: "default" },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "direct", id: "user-1" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      matchedBy: "binding.account",
+      lastRoutePolicy: "main",
+    });
+  });
+
   test.each([
     { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
     {
