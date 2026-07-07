@@ -87,6 +87,7 @@ import {
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import { resolveExecDetail } from "./tool-display-exec.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -1576,12 +1577,14 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
       );
+      const approvalToolCallId = normalizeOptionalString(toolCallId);
+      const approvalTitle = resolveExecDetail(params);
       const resolveExecEnvPrepared = isResolveExecEnvPrepared(args as ExecToolArgs);
       const deferredResolveExecEnvState = getDeferredResolveExecEnvPreparedState(params);
       const preparedWorkdirState = getResolvedExecWorkdirPreparedState(params);
@@ -1876,6 +1879,8 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            title: approvalTitle,
+            toolCallId: approvalToolCallId,
             workdir,
             env,
             requestedEnv,
@@ -1917,6 +1922,8 @@ export function createExecTool(
         if (host === "gateway" && !bypassApprovals) {
           const gatewayResult = await processGatewayAllowlist({
             command: params.command,
+            title: approvalTitle,
+            toolCallId: approvalToolCallId,
             workdir,
             env,
             pathPrepend: defaultPathPrepend,

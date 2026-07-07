@@ -10,6 +10,8 @@ import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 /** Full parameter bundle for Node-hosted exec command execution. */
 export type ExecuteNodeHostCommandParams = {
   command: string;
+  title?: string;
+  toolCallId?: string;
   workdir: string | undefined;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;

@@ -80,6 +80,8 @@ import type { AgentToolResult } from "./runtime/index.js";
 /** Full input bundle for gateway-host allowlist and approval processing. */
 type ProcessGatewayAllowlistParams = {
   command: string;
+  title?: string;
+  toolCallId?: string;
   workdir: string;
   env: Record<string, string>;
   pathPrepend?: string[];
@@ -812,6 +814,8 @@ export async function processGatewayAllowlist(
       await registerExecApprovalRequestForHostOrThrow({
         approvalId,
         command: params.command,
+        title: params.title,
+        toolCallId: params.toolCallId,
         env: params.requestedEnv,
         workdir: params.workdir,
         host: "gateway",

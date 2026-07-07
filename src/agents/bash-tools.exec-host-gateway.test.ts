@@ -85,6 +85,9 @@ function exactCommandMarker(command: string): string {
 }
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
+const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() =>
+  vi.fn(async () => undefined),
+);
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
   vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
@@ -210,7 +213,7 @@ vi.mock("../infra/exec-auto-review.js", () => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
-  registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
+  registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,
 }));
 
 vi.mock("./bash-tools.exec-host-shared.js", () => ({
@@ -370,6 +373,7 @@ describe("processGatewayAllowlist", () => {
       details: { status: "approval-pending" },
       content: [],
     });
+    registerExecApprovalRequestForHostOrThrowMock.mockReset();
     createAndRegisterDefaultExecApprovalRequestMock.mockReset();
     createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
       approvalId: "req-1",
@@ -515,6 +519,37 @@ describe("processGatewayAllowlist", () => {
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("passes exec caller metadata into gateway approval registration", async () => {
+    createAndRegisterDefaultExecApprovalRequestMock.mockImplementationOnce(async (params) => {
+      await params.register("approval-1");
+      return {
+        approvalId: "approval-1",
+        approvalSlug: "slug-1",
+        warningText: "",
+        expiresAtMs: Date.now() + 60_000,
+        preResolvedDecision: null,
+        initiatingSurface: "origin",
+        sentApproverDms: false,
+        unavailableReason: null,
+      };
+    });
+
+    await runGatewayAllowlist({
+      command: "echo ok",
+      title: "Run echo ok",
+      toolCallId: "tool-raw",
+    });
+
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "echo ok",
+        title: "Run echo ok",
+        toolCallId: "tool-raw",
+        host: "gateway",
+      }),
+    );
   });
 
   it("emits security events for gateway exec approval requests and denials", async () => {

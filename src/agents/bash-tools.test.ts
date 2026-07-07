@@ -26,6 +26,7 @@ import {
 } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { getBashShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -726,8 +727,26 @@ describe("tool descriptions", () => {
 
 beforeEach(() => {
   callIdCounter = 0;
+  vi.mocked(callGatewayTool).mockClear();
+  vi.mocked(callGatewayTool).mockResolvedValue({ ok: true });
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
+});
+
+describe("exec approval metadata", () => {
+  it("passes exec tool call metadata into approval requests", async () => {
+    const tool = createTestExecTool({ security: "full", ask: "always" });
+
+    await tool.execute("tool-raw", { command: shellEcho("raw") });
+
+    const approvalRequestCall = vi
+      .mocked(callGatewayTool)
+      .mock.calls.find(([method]) => method === "exec.approval.request");
+    expect(approvalRequestCall?.[2]).toMatchObject({
+      title: expect.stringContaining("raw"),
+      toolCallId: "tool-raw",
+    });
+  });
 });
 
 describe("exec tool backgrounding", () => {

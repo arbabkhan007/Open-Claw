@@ -40,6 +40,13 @@ const GATEWAY_CONNECT_TIMEOUT_MS = 120_000;
 const EXEC_APPROVAL_E2E_TIMEOUT_MS = 180_000;
 
 type Cleanup = () => Promise<void> | void;
+type GatewayEvent = { event?: string; payload?: unknown };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
 
 describe("gateway-hosted exec approvals", () => {
   const cleanup: Cleanup[] = [];
@@ -116,6 +123,11 @@ describe("gateway-hosted exec approvals", () => {
       });
       cleanup.push(() => server.close());
 
+      let resolveRequestedEvent: (event: GatewayEvent) => void = () => {};
+      const requestedEventPromise = new Promise<GatewayEvent>((resolve) => {
+        resolveRequestedEvent = resolve;
+      });
+
       const operator = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         token,
@@ -125,6 +137,11 @@ describe("gateway-hosted exec approvals", () => {
         scopes: [ADMIN_SCOPE],
         requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
         timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        onEvent: (event) => {
+          if (event.event === "exec.approval.requested") {
+            resolveRequestedEvent(event);
+          }
+        },
       });
       cleanup.push(() => disconnectGatewayClient(operator));
 
@@ -156,6 +173,17 @@ describe("gateway-hosted exec approvals", () => {
       if (pending.details.status !== "approval-pending") {
         throw new Error("expected approval-pending exec result");
       }
+
+      const requestedEvent = await withTimeout(
+        requestedEventPromise,
+        10_000,
+        "exec approval requested event",
+      );
+      const requestedPayload = asRecord(requestedEvent.payload);
+      const request = asRecord(requestedPayload?.request);
+      expect(requestedPayload?.id).toBe(pending.details.approvalId);
+      expect(request?.toolCallId).toBe("exec-approval-e2e");
+      expect(request?.title).toEqual(expect.stringContaining("smoke"));
 
       await operator.request(
         "exec.approval.resolve",
