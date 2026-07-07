@@ -5,6 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
+import { ExecApprovalManager } from "../gateway/exec-approval-manager.js";
+import { createExecApprovalHandlers } from "../gateway/server-methods/exec-approval.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { promptAgent } from "./translator.prompt-harness.test-support.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -58,6 +60,8 @@ function createApprovalRequestEvent(params: {
   approvalId?: string;
   sessionKey?: string;
   command?: string;
+  title?: string;
+  toolCallId?: string;
 }): EventFrame {
   return {
     type: "event",
@@ -70,6 +74,8 @@ function createApprovalRequestEvent(params: {
         command: params.command ?? "echo raw",
         host: "gateway",
         sessionKey: params.sessionKey ?? SESSION_KEY,
+        title: params.title,
+        toolCallId: params.toolCallId,
       },
     },
   } as EventFrame;
@@ -233,7 +239,12 @@ describe("ACP translator permission relay", () => {
     const approvalId = "approval-raw";
 
     await harness.agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId, command: "echo raw" }),
+      createApprovalRequestEvent({
+        approvalId,
+        command: "echo raw",
+        title: "Run echo raw",
+        toolCallId: "tool-raw",
+      }),
     );
     await harness.agent.handleGatewayEvent(
       createApprovalEvent({ runId: harness.runId, approvalId, toolCallId: "tool-late" }),
@@ -245,7 +256,8 @@ describe("ACP translator permission relay", () => {
     });
 
     const { toolCall, rawInput } = requestPermissionPayload(harness.requestPermission);
-    expect(toolCall.toolCallId).toBe("exec:approval-raw");
+    expect(toolCall.toolCallId).toBe("tool-raw");
+    expect(toolCall.title).toBe("Run echo raw");
     expect(rawInput.approvalId).toBe(approvalId);
     expect(rawInput.command).toBe("echo hydrated");
     expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
@@ -253,6 +265,88 @@ describe("ACP translator permission relay", () => {
       decision: "allow-once",
     });
 
+    await cleanupHarness(harness);
+  });
+
+  it("relays metadata from a Gateway-produced exec approval request event", async () => {
+    const gatewayManager = new ExecApprovalManager();
+    const gatewayHandlers = createExecApprovalHandlers(gatewayManager);
+    const gatewayBroadcasts: Array<{ event: string; payload: unknown }> = [];
+    const gatewayContext = {
+      getRuntimeConfig: () => ({}),
+      broadcast: (event: string, payload: unknown) => {
+        gatewayBroadcasts.push({ event, payload });
+      },
+      hasExecApprovalClients: () => true,
+    };
+    const gatewayRequestPromise = gatewayHandlers["exec.approval.request"]({
+      params: {
+        id: "approval-gateway-raw",
+        twoPhase: true,
+        host: "gateway",
+        command: "echo raw",
+        commandArgv: ["echo", "raw"],
+        cwd: "/tmp",
+        sessionKey: SESSION_KEY,
+        timeoutMs: 2000,
+        title: "Run echo raw",
+        toolCallId: "tool-raw",
+      } as never,
+      respond: vi.fn() as never,
+      context: gatewayContext as never,
+      client: null,
+      req: { id: "req-approval", type: "req", method: "exec.approval.request" },
+      isWebchatConnect: () => false,
+    });
+    await vi.waitFor(() => {
+      expect(gatewayBroadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(
+        true,
+      );
+    });
+    const requested = gatewayBroadcasts.find((entry) => entry.event === "exec.approval.requested")!;
+    const harness = await createHarness({
+      resolveApproval: async (requestParams) =>
+        await new Promise((resolve, reject) => {
+          void Promise.resolve(
+            gatewayHandlers["exec.approval.resolve"]({
+              params: requestParams as never,
+              respond: ((ok: boolean, result: unknown, error: unknown) => {
+                if (!ok) {
+                  reject(new Error(String(error)));
+                  return;
+                }
+                resolve(result);
+              }) as never,
+              context: gatewayContext as never,
+              client: null,
+              req: { id: "req-resolve", type: "req", method: "exec.approval.resolve" },
+              isWebchatConnect: () => false,
+            }),
+          ).catch(reject);
+        }),
+    });
+
+    await harness.agent.handleGatewayEvent({
+      type: "event",
+      event: requested.event,
+      payload: requested.payload,
+    } as EventFrame);
+
+    await vi.waitFor(() => {
+      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
+      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
+    });
+
+    const { toolCall, rawInput } = requestPermissionPayload(harness.requestPermission);
+    expect(toolCall.toolCallId).toBe("tool-raw");
+    expect(toolCall.title).toBe("Run echo raw");
+    expect(rawInput.approvalId).toBe("approval-gateway-raw");
+    expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-gateway-raw",
+      decision: "allow-once",
+    });
+
+    await gatewayRequestPromise;
     await cleanupHarness(harness);
   });
 

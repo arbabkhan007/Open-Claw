@@ -162,6 +162,8 @@ export function createExecApprovalHandlers(
       const p = params as {
         id?: string;
         command: string;
+        title?: string;
+        toolCallId?: string;
         commandArgv?: string[];
         env?: Record<string, string>;
         cwd?: string;
@@ -195,6 +197,8 @@ export function createExecApprovalHandlers(
       const explicitId = normalizeOptionalString(p.id) ?? null;
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
+      const title = normalizeOptionalString(p.title);
+      const toolCallId = normalizeOptionalString(p.toolCallId);
       const approvalContext = resolveSystemRunApprovalRequestContext({
         host,
         command: p.command,
@@ -308,6 +312,8 @@ export function createExecApprovalHandlers(
       );
       const request = {
         command: sanitizedCommandText,
+        title: title ? sanitizeExecApprovalDisplayText(title) : undefined,
+        toolCallId,
         commandPreview:
           host === "node" || !approvalContext.commandPreview
             ? undefined

@@ -3005,6 +3005,16 @@ describe("exec approval handlers", () => {
       expect(validateExecApprovalRequestParams(params)).toBe(true);
     });
 
+    it("accepts approval metadata fields", () => {
+      expect(
+        validateExecApprovalRequestParams({
+          ...baseParams,
+          title: "Run echo raw",
+          toolCallId: "tool-raw",
+        }),
+      ).toBe(true);
+    });
+
     it("accepts unavailable optional decisions", () => {
       expect(
         validateExecApprovalRequestParams({
@@ -3199,6 +3209,34 @@ describe("exec approval handlers", () => {
       respond: resolveRespond,
       context,
     });
+    await requestPromise;
+  });
+
+  it("broadcasts sanitized exec approval metadata from the gateway request contract", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "echo raw",
+        commandArgv: ["echo", "raw"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+        title: "Run echo raw",
+        toolCallId: "tool-raw",
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.title).toBe("Run echo raw");
+    expect(request.toolCallId).toBe("tool-raw");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({ handlers, id, respond: resolveRespond, context });
     await requestPromise;
   });
 
