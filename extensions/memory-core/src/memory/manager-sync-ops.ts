@@ -603,6 +603,7 @@ export abstract class MemoryManagerSyncOps {
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
         extraPaths: this.settings.extraPaths,
+        excludePaths: this.settings.excludePaths,
         multimodal: {
           enabled: this.settings.multimodal.enabled,
           modalities: this.settings.multimodal.modalities,
@@ -2440,6 +2441,7 @@ export abstract class MemoryManagerSyncOps {
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
         extraPaths: this.settings.extraPaths,
+        excludePaths: this.settings.excludePaths,
         multimodal: {
           enabled: this.settings.multimodal.enabled,
           modalities: this.settings.multimodal.modalities,
@@ -2763,6 +2765,7 @@ export abstract class MemoryManagerSyncOps {
         scopeHash: resolveConfiguredScopeHash({
           workspaceDir: this.workspaceDir,
           extraPaths: this.settings.extraPaths,
+          excludePaths: this.settings.excludePaths,
           multimodal: {
             enabled: this.settings.multimodal.enabled,
             modalities: this.settings.multimodal.modalities,

@@ -8271,6 +8271,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Hybrid search config
   - H3: Full example
   - H2: Additional memory paths
+  - H3: Excluding paths
   - H2: Multimodal memory (Gemini)
   - H2: Embedding cache
   - H2: Batch indexing

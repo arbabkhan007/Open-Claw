@@ -293,7 +293,11 @@ function mergeConfig(
     ...(overrides?.extraPaths ?? []),
   ]);
   const extraPaths = uniqueStrings(rawPaths);
-  const excludePaths = overrides?.excludePaths ?? defaults?.excludePaths;
+  const rawExcludePaths = normalizeStringEntries([
+    ...(defaults?.excludePaths ?? []),
+    ...(overrides?.excludePaths ?? []),
+  ]);
+  const excludePaths = uniqueStrings(rawExcludePaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,

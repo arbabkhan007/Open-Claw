@@ -103,6 +103,7 @@ function configuredMetaSourcesDiffer(params: {
 export function resolveConfiguredScopeHash(params: {
   workspaceDir: string;
   extraPaths?: string[];
+  excludePaths?: string[];
   multimodal: {
     enabled: boolean;
     modalities: string[];
@@ -112,9 +113,13 @@ export function resolveConfiguredScopeHash(params: {
   const extraPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths)
     .map((value) => value.replace(/\\/g, "/"))
     .toSorted();
+  const excludePaths = (params.excludePaths ?? [])
+    .map((value) => value.replace(/\\/g, "/"))
+    .toSorted();
   return hashText(
     JSON.stringify({
       extraPaths,
+      excludePaths,
       multimodal: {
         enabled: params.multimodal.enabled,
         modalities: [...params.multimodal.modalities].toSorted(),
