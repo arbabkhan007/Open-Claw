@@ -11802,6 +11802,8 @@ public struct ExecApprovalGetParams: Codable, Sendable {
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String?
+    public let title: String?
+    public let toolcallid: String?
     public let commandargv: [String]?
     public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
@@ -11829,6 +11831,8 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public init(
         id: String? = nil,
         command: String? = nil,
+        title: String? = nil,
+        toolcallid: String? = nil,
         commandargv: [String]? = nil,
         systemrunplan: [String: AnyCodable]? = nil,
         env: [String: AnyCodable]? = nil,
@@ -11839,7 +11843,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         ask: AnyCodable? = nil,
         warningtext: AnyCodable? = nil,
         unavailabledecisions: [String]? = nil,
-        commandspans: [[String: AnyCodable]]? = nil,
+        commandspans: [[String: AnyCodable]]? = nil
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable? = nil,
         sessionkey: AnyCodable? = nil,
@@ -11855,6 +11859,8 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     {
         self.id = id
         self.command = command
+        self.title = title
+        self.toolcallid = toolcallid
         self.commandargv = commandargv
         self.systemrunplan = systemrunplan
         self.env = env
@@ -11883,6 +11889,8 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case command
+        case title
+        case toolcallid = "toolCallId"
         case commandargv = "commandArgv"
         case systemrunplan = "systemRunPlan"
         case env
