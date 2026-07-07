@@ -365,7 +365,6 @@ async function runDispatch(params: {
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   toolsAllow?: string[];
   ttsChannel?: string;
-  abortSignal?: AbortSignal;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -384,7 +383,6 @@ async function runDispatch(params: {
     abortSignal: params.abortSignal,
     inboundAudio: false,
     ttsChannel: params.ttsChannel,
-    abortSignal: params.abortSignal,
     suppressUserDelivery: params.suppressUserDelivery,
     suppressReplyLifecycle: params.suppressReplyLifecycle,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
