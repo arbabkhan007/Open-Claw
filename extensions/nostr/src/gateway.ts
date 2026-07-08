@@ -195,6 +195,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 return;
               }
               const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              if (!sanitizedText.trim()) {
+                return;
+              }
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
                 cfg: ctx.cfg,
                 channel: "nostr",
