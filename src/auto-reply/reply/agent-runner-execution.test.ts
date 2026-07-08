@@ -387,6 +387,8 @@ type EmbeddedAgentParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => Promise<void> | void;
+  deferTerminalLifecycle?: boolean;
+  deferAssistantStreamDelivery?: boolean;
 };
 
 function createMockTypingSignaler(): TypingSignaler {
@@ -1377,6 +1379,65 @@ describe("runAgentTurnWithFallback", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("streams embedded assistant deltas live when a partial-reply preview is present", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { onPartialReply },
+      }),
+    );
+
+    const embeddedCall = requireRecord(
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
+    ) as EmbeddedAgentParams;
+    expect(embeddedCall.deferTerminalLifecycle).toBe(true);
+    expect(embeddedCall.deferAssistantStreamDelivery).toBe(false);
+  });
+
+  it("streams embedded assistant deltas live on the Control UI event bus", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+    state.isInternalMessageChannelMock.mockImplementation((value: unknown) => value === "webchat");
+    const followupRun = createFollowupRun();
+    followupRun.run.messageProvider = "webchat";
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    const embeddedCall = requireRecord(
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
+    ) as EmbeddedAgentParams;
+    expect(embeddedCall.deferTerminalLifecycle).toBe(true);
+    expect(embeddedCall.deferAssistantStreamDelivery).toBe(false);
+  });
+
+  it("keeps embedded assistant stream deferral default when no live preview exists", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    const embeddedCall = requireRecord(
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
+    ) as EmbeddedAgentParams;
+    expect(embeddedCall.deferTerminalLifecycle).toBe(true);
+    expect(embeddedCall.deferAssistantStreamDelivery).toBeUndefined();
   });
 
   it("freezes abort ownership only after model fallback settles", async () => {

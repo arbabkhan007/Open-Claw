@@ -2621,6 +2621,10 @@ async function runAgentTurnWithFallbackInternal(
                 : undefined);
             return (async () => {
               let attemptCompactionCount = 0;
+              // Control UI/WebChat consumes assistant deltas from the live agent event bus;
+              // letting the terminal gate defer them collapses the visible reply to run end.
+              const deferAssistantStreamDelivery =
+                shouldSurfaceToControlUi || params.opts?.onPartialReply ? false : undefined;
               const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
                 runId,
                 sessionKey: params.sessionKey,
@@ -2709,6 +2713,9 @@ async function runAgentTurnWithFallbackInternal(
                     abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                     deferTerminalLifecycle: true,
+                    // Live preview surfaces need assistant deltas before finalization;
+                    // block-only replies keep the historical terminal gate.
+                    deferAssistantStreamDelivery,
                     onExecutionStarted: (info) => {
                       if (info?.lifecycleGeneration) {
                         lifecycleGeneration = info.lifecycleGeneration;
