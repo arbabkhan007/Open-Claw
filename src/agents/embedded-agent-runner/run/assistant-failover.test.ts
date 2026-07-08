@@ -23,6 +23,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     idleTimedOut: false,
     timedOutDuringCompaction: false,
     timedOutDuringToolExecution: false,
+    timedOutByRunBudget: false,
     allowSameModelTimeoutRetry: false,
     allowSameModelRateLimitRetry: true,
     assistantProfileFailureReason: null,
