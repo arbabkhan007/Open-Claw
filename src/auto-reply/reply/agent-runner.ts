@@ -2631,6 +2631,7 @@ export async function runReplyAgent(params: {
           {
             skipMaintenance: true,
             takeCacheOwnership: true,
+            requireWriteSuccess: true,
           },
         );
       }
