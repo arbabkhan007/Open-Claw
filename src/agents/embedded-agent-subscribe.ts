@@ -198,6 +198,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
+    deferAssistantStreamDelivery:
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferAssistantStreamDelivery !== false,
     deferredBlockReplies: [],
     deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
@@ -291,7 +294,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     options?: { emitPartialReply?: boolean },
   ) => {
     const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
-    if (state.deferBlockReplyDelivery) {
+    if (state.deferAssistantStreamDelivery) {
       state.deferredAssistantEvents.push(delivery);
       return;
     }
@@ -1247,6 +1250,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
+    state.deferAssistantStreamDelivery =
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferAssistantStreamDelivery !== false;
     clearDeferredAssistantEvents();
     clearDeferredBlockReplies();
     state.pendingAssistantReplyDirectives = undefined;

@@ -3726,6 +3726,7 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          deferAssistantStreamDelivery: params.deferAssistantStreamDelivery,
           terminalLifecyclePhase:
             (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
               ? "finishing"

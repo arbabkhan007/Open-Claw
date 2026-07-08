@@ -291,6 +291,7 @@ export function handleAgentEnd(
 
   const deliverTerminal = () => {
     ctx.state.deferBlockReplyDelivery = false;
+    ctx.state.deferAssistantStreamDelivery = false;
     ctx.flushDeferredAssistantEvents();
     ctx.flushDeferredBlockReplies();
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });

@@ -155,6 +155,50 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });
 
+  it("keeps assistant stream live when only block replies wait for terminal delivery", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    const onBeforeTerminalDelivery = vi.fn(async () => undefined);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-live-assistant-stream",
+      onAgentEvent,
+      onPartialReply,
+      onBlockReply,
+      onBeforeTerminalDelivery,
+      deferAssistantStreamDelivery: false,
+      blockReplyBreak: "message_end",
+    });
+
+    emitAssistantTextDeltaAndEnd({
+      emit,
+      text: "Visible stream.",
+    });
+
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
+    expect(onPartialReply).toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emit({
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Visible stream." }],
+          stopReason: "stop",
+        },
+      ],
+      willRetry: false,
+    });
+
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Visible stream." }),
+      expect.objectContaining({ assistantMessageIndex: expect.any(Number) }),
+    );
+    expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
+  });
+
   it("does not send final-only assistant events through partial replies", async () => {
     const onPartialReply = vi.fn();
     const onBeforeTerminalDelivery = vi.fn(async () => undefined);

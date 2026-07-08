@@ -126,6 +126,7 @@ export type EmbeddedAgentSubscribeState = {
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
+  deferAssistantStreamDelivery: boolean;
   deferredBlockReplies: BlockReplyPayload[];
   deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;

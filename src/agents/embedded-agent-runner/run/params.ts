@@ -264,6 +264,11 @@ export type RunEmbeddedAgentParams = {
    * final lifecycle "end" or "error" after fallback and post-turn work settle.
    */
   deferTerminalLifecycle?: boolean;
+  /**
+   * Keep assistant stream events live even when block reply/lifecycle terminal
+   * delivery is gated. Control UI/WebChat consume these events directly.
+   */
+  deferAssistantStreamDelivery?: boolean;
   /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   lane?: string;
