@@ -1,6 +1,8 @@
 // Cron simple register tests cover basic cron command registration and execution.
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 
 const callGatewayFromCli = vi.fn();
@@ -14,15 +16,32 @@ vi.mock("../gateway-rpc.js", async () => {
   };
 });
 
-const { loadCronJobForShow } = await import("./register.cron-simple.js");
+const { loadCronJobForShow, registerCronSimpleCommands } =
+  await import("./register.cron-simple.js");
 
 const opts: GatewayRpcOpts = {} as GatewayRpcOpts;
+const originalStderrIsTTY = process.stderr.isTTY;
+
+function createCronProgram(): Command {
+  const program = new Command();
+  program.exitOverride();
+  registerCronSimpleCommands(program);
+  return program;
+}
+
+function setStderrIsTTY(value: boolean | undefined): void {
+  Object.defineProperty(process.stderr, "isTTY", {
+    value,
+    configurable: true,
+  });
+}
 
 describe("loadCronJobForShow pagination guard (regression for #83856)", () => {
   beforeEach(() => {
     callGatewayFromCli.mockReset();
   });
   afterEach(() => {
+    setStderrIsTTY(originalStderrIsTTY);
     vi.restoreAllMocks();
   });
 
@@ -67,5 +86,45 @@ describe("loadCronJobForShow pagination guard (regression for #83856)", () => {
     });
     const result = await loadCronJobForShow(opts, "missing");
     expect(result.job).toBeUndefined();
+  });
+});
+
+describe("cron disable hint", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      return { ok: true };
+    });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    setStderrIsTTY(originalStderrIsTTY);
+    vi.restoreAllMocks();
+  });
+
+  it("does not write the disabled-list hint to non-interactive stderr", async () => {
+    setStderrIsTTY(false);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await createCronProgram().parseAsync(["disable", "job-1"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { enabled: false },
+    });
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it("writes the disabled-list hint for interactive stderr", async () => {
+    setStderrIsTTY(true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await createCronProgram().parseAsync(["disable", "job-1"], { from: "user" });
+
+    expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
   });
 });
