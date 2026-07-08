@@ -112,6 +112,7 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   type ResolvedProviderAuth,
+  resolveEnvApiKey,
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
@@ -1404,6 +1405,16 @@ async function runEmbeddedAgentInternal(
               ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
             ]
           : profileOrder;
+      const hasEnvAuthFallback =
+        !lockedProfileId &&
+        !pluginHarnessOwnsTransport &&
+        providerOrderedProfiles.length > 0 &&
+        Boolean(
+          resolveEnvApiKey(provider, process.env, {
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+          }),
+        );
       const profileCandidates = pluginHarnessOwnsTransport
         ? lockedProfileId
           ? [lockedProfileId]
@@ -1413,7 +1424,7 @@ async function runEmbeddedAgentInternal(
         : lockedProfileId
           ? [lockedProfileId]
           : providerOrderedProfiles.length > 0
-            ? providerOrderedProfiles
+            ? [...providerOrderedProfiles, ...(hasEnvAuthFallback ? [undefined] : [])]
             : [undefined];
       const pluginHarnessForwardedProfileCandidates = pluginHarnessOwnsTransport
         ? profileCandidates.filter(isForwardablePluginHarnessAuthProfile)

@@ -748,6 +748,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureAuthProfileStoreWithoutExternalProfiles:
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
     getApiKeyForModel: mockedGetApiKeyForModel,
+    resolveEnvApiKey: vi.fn(() => null),
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     shouldPreferExplicitConfigApiKeyAuth: mockedShouldPreferExplicitConfigApiKeyAuth,
   }));
