@@ -31,6 +31,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -47,6 +48,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -186,13 +188,17 @@ type TelegramPromptContextMessageForDedupe = {
 function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
 ): string | undefined {
-  if (typeof message.body !== "string" || !message.body.trim()) {
+  if (typeof message.body !== "string") {
+    return undefined;
+  }
+  const visibleBody = stripInlineDirectiveTagsForDelivery(message.body).text.trim();
+  if (!visibleBody) {
     return undefined;
   }
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
   }
-  return `${message.timestamp_ms}:${message.body.trim()}`;
+  return `${message.timestamp_ms}:${visibleBody}`;
 }
 
 export const registerTelegramHandlers = ({
@@ -261,7 +267,7 @@ export const registerTelegramHandlers = ({
   type PromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
-  const mediaGroupProcessingByKey = new Map<string, Promise<void>>();
+  const mediaGroupProcessingQueue = new KeyedAsyncQueue();
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(telegramDeps.resolveStorePath(cfg.session?.store)),
   });
@@ -282,20 +288,16 @@ export const registerTelegramHandlers = ({
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
-  const textFragmentProcessingByKey = new Map<string, Promise<void>>();
+  const textFragmentProcessingQueue = new KeyedAsyncQueue();
 
   const queueBufferedProcessing = async (
-    processingByKey: Map<string, Promise<void>>,
+    queue: KeyedAsyncQueue,
     key: string,
     task: () => Promise<void>,
   ) => {
-    const previous = processingByKey.get(key) ?? Promise.resolve();
-    const current = previous.then(task).catch(() => undefined);
-    processingByKey.set(key, current);
-    await current;
-    if (processingByKey.get(key) === current) {
-      processingByKey.delete(key);
-    }
+    await queue.enqueue(key, async () => {
+      await task().catch(() => undefined);
+    });
   };
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
@@ -1177,7 +1179,7 @@ export const registerTelegramHandlers = ({
   };
 
   const queueTextFragmentFlush = async (entry: TextFragmentEntry) => {
-    await queueBufferedProcessing(textFragmentProcessingByKey, entry.key, async () => {
+    await queueBufferedProcessing(textFragmentProcessingQueue, entry.key, async () => {
       await flushTextFragments(entry);
     });
   };
@@ -1741,6 +1743,75 @@ export const registerTelegramHandlers = ({
   const isPermanentTelegramCallbackEditError = (err: unknown): boolean =>
     isTelegramEditTargetMissingError(err) || isTelegramMessageHasNoTextError(err);
 
+  const TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS = [250, 1000, 2500] as const;
+  const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  const resolvePluginCallbackSubmitText = (submitText: unknown): string | undefined => {
+    if (typeof submitText !== "string") {
+      return undefined;
+    }
+    const trimmed = submitText.trim();
+    return trimmed ? trimmed : undefined;
+  };
+
+  const isReplySessionInitConflictError = (err: unknown): boolean =>
+    REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(err instanceof Error ? err.message : err));
+
+  const isReplySessionInitConflictResult = (result: TelegramMessageProcessingResult): boolean =>
+    result.kind === "failed-retryable" && isReplySessionInitConflictError(result.error);
+
+  const processPluginCallbackSubmitText = async (params: {
+    callbackId: string;
+    syntheticCtx: Parameters<typeof processMessageWithReplyChain>[0]["ctx"];
+    syntheticMessage: Parameters<typeof processMessageWithReplyChain>[0]["msg"];
+    storeAllowFrom: Parameters<typeof processMessageWithReplyChain>[0]["storeAllowFrom"];
+  }): Promise<"completed" | "skipped"> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = await processMessageWithReplyChain({
+          ctx: params.syntheticCtx,
+          msg: params.syntheticMessage,
+          allMedia: [],
+          storeAllowFrom: params.storeAllowFrom,
+          options: {
+            spooledReplay: true,
+            forceWasMentioned: true,
+            messageIdOverride: params.callbackId,
+          },
+        });
+        if (result.kind === "completed") {
+          return "completed";
+        }
+        if (result.kind === "skipped") {
+          return "skipped";
+        }
+        const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
+        if (!isReplySessionInitConflictResult(result) || retryDelayMs === undefined) {
+          throw new TelegramRetryableCallbackError(result.error);
+        }
+        logVerbose(
+          `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
+        );
+        await sleep(retryDelayMs);
+        continue;
+      } catch (err) {
+        const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
+        if (!isReplySessionInitConflictError(err) || retryDelayMs === undefined) {
+          throw err;
+        }
+        logVerbose(
+          `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
+        );
+        await sleep(retryDelayMs);
+      }
+    }
+  };
+
   const resolveTelegramEventAuthorizationContext = async (params: {
     chatId: number;
     isGroup: boolean;
@@ -2252,7 +2323,7 @@ export const registerTelegramHandlers = ({
         );
         existing.timer = setTimeout(() => {
           mediaGroupBuffer.delete(mediaGroupKey);
-          void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+          void queueBufferedProcessing(mediaGroupProcessingQueue, mediaGroupKey, async () => {
             await processMediaGroup(existing);
           });
         }, mediaGroupTimeoutMs);
@@ -2280,7 +2351,7 @@ export const registerTelegramHandlers = ({
           ),
           timer: setTimeout(() => {
             mediaGroupBuffer.delete(mediaGroupKey);
-            void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+            void queueBufferedProcessing(mediaGroupProcessingQueue, mediaGroupKey, async () => {
               await processMediaGroup(entry);
             });
           }, mediaGroupTimeoutMs),
@@ -2673,6 +2744,37 @@ export const registerTelegramHandlers = ({
           deleteMessage: async () => {
             await deleteCallbackMessage();
           },
+        },
+        afterInvoke: async (result) => {
+          if (result?.handled === false) {
+            return;
+          }
+          const submitText = resolvePluginCallbackSubmitText(result?.submitText);
+          if (!submitText) {
+            return;
+          }
+          const { ctx: syntheticCtx, message: syntheticMessage } =
+            buildCallbackSyntheticTextContext({
+              ctx,
+              callbackMessage,
+              callback,
+              text: submitText,
+              isForum,
+            });
+          const submitOutcome = await processPluginCallbackSubmitText({
+            callbackId: callback.id,
+            syntheticCtx,
+            syntheticMessage,
+            storeAllowFrom,
+          });
+          if (submitOutcome === "skipped") {
+            return;
+          }
+          // The agent turn already completed. Cleanup failure must not release
+          // callback dedupe and replay the submitted turn.
+          await clearCallbackButtons().catch((err: unknown) => {
+            logVerbose(`telegram plugin callback button cleanup skipped: ${String(err)}`);
+          });
         },
       });
       if (pluginCallback.handled) {

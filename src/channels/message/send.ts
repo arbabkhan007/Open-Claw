@@ -107,6 +107,98 @@ export type DurableMessageBatchSendResult =
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     };
 
+type SerializedDurableMessagePayloadTarget = {
+  provider?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
+};
+
+export type SerializedDurableMessagePayloadOutcome =
+  | {
+      index: number;
+      status: "sent";
+      resultCount: number;
+      target?: SerializedDurableMessagePayloadTarget;
+    }
+  | {
+      index: number;
+      status: "suppressed";
+      reason: DurableMessageSuppressionReason;
+      hookEffect?: {
+        cancelReason?: string;
+        metadata?: Record<string, unknown>;
+      };
+    }
+  | {
+      index: number;
+      status: "failed";
+      error: string;
+      sentBeforeError: boolean;
+      stage: DurableMessageFailureStage;
+      target?: SerializedDurableMessagePayloadTarget;
+    };
+
+function serializeDurableMessagePayloadTarget(
+  target: ChannelOutboundTargetRef | undefined,
+): SerializedDurableMessagePayloadTarget | undefined {
+  if (!target) {
+    return undefined;
+  }
+  const provider = target.channel.trim();
+  const to = target.to.trim();
+  const accountId = target.accountId?.trim();
+  const serialized = {
+    ...(provider ? { provider } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(to ? { to } : {}),
+    ...(target.threadId != null ? { threadId: target.threadId } : {}),
+  };
+  return Object.keys(serialized).length > 0 ? serialized : undefined;
+}
+
+export function serializeDurableMessagePayloadOutcomes(
+  outcomes: DurableMessageBatchSendResult["payloadOutcomes"],
+  options?: {
+    /** Internal diagnostics may retain hook metadata; model-facing JSON results must omit it. */
+    includeHookEffect?: boolean;
+  },
+): SerializedDurableMessagePayloadOutcome[] | undefined {
+  if (!outcomes || outcomes.length === 0) {
+    return undefined;
+  }
+  return outcomes.map((outcome): SerializedDurableMessagePayloadOutcome => {
+    if (outcome.status === "sent") {
+      const target = serializeDurableMessagePayloadTarget(outcome.target);
+      return {
+        index: outcome.index,
+        status: "sent",
+        resultCount: outcome.results.length,
+        ...(target ? { target } : {}),
+      };
+    }
+    if (outcome.status === "suppressed") {
+      return {
+        index: outcome.index,
+        status: "suppressed",
+        reason: outcome.reason,
+        ...(options?.includeHookEffect === true && outcome.hookEffect
+          ? { hookEffect: outcome.hookEffect }
+          : {}),
+      };
+    }
+    const target = serializeDurableMessagePayloadTarget(outcome.target);
+    return {
+      index: outcome.index,
+      status: "failed",
+      error: formatErrorMessage(outcome.error),
+      sentBeforeError: outcome.sentBeforeError,
+      stage: outcome.stage,
+      ...(target ? { target } : {}),
+    };
+  });
+}
+
 const neverAbortedSignal = new AbortController().signal;
 
 function toDurableMessageIntent(

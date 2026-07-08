@@ -1,7 +1,6 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -56,6 +55,7 @@ import {
   readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -63,13 +63,19 @@ import {
   type StageSandboxMediaResult,
 } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
+import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import {
-  resolveSessionFilePath,
-  resolveSessionWorkStartError,
-  updateSessionStoreEntry,
-} from "../../config/sessions.js";
+  resolveSessionRoutingContract,
+  SESSION_ROUTING_CHANGED_ERROR_REASON,
+} from "../../config/sessions/main-session.js";
+import {
+  findTranscriptEvent,
+  loadTranscriptEvents,
+  patchSessionEntry,
+  type SessionTranscriptWriteScope,
+  type TranscriptEvent,
+} from "../../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunContext,
@@ -94,12 +100,7 @@ import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import {
-  deleteMediaBuffer,
-  MEDIA_MAX_BYTES,
-  type SavedMedia,
-  saveMediaBuffer,
-} from "../../media/store.js";
+import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
@@ -143,6 +144,7 @@ import {
   MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
@@ -155,9 +157,23 @@ import {
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import {
+  abortQueuedChatTurnById,
+  abortQueuedChatTurns,
+  completeQueuedChatTurn,
+  listQueuedChatTurnsForSession,
+  registerQueuedChatTurn,
+  retireQueuedChatTurnCancellation,
+  type QueuedChatTurnEntry,
+  type QueuedChatTurnMap,
+} from "../chat-queued-turns.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import {
+  isDashboardSessionTitleCandidate,
+  maybeGenerateDashboardSessionTitle,
+} from "../dashboard-session-title.js";
 import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
@@ -177,7 +193,6 @@ import {
 } from "../server-shared.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
   readRecentSessionMessagesWithStatsAsync,
@@ -212,7 +227,10 @@ import {
   loadOptionalServerMethodModelCatalog,
   startOptionalServerMethodModelCatalogLoad,
 } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import {
+  hasTrackedActiveSessionRun,
+  resolveVisibleActiveSessionRunState,
+} from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -256,6 +274,7 @@ type PreRegisteredAgentDedupePayload = {
   sessionKey?: unknown;
   sessionKeyAliases?: unknown;
   status?: unknown;
+  turnKind?: unknown;
 };
 
 type PreRegisteredAgentRun = {
@@ -1310,73 +1329,13 @@ async function persistChatSendImages(params: {
   ) {
     return [];
   }
-  const inlineSaved: SavedMedia[] = [];
-  for (const img of params.images) {
-    try {
-      inlineSaved.push(
-        await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"),
-      );
-    } catch (err) {
-      params.logGateway.warn(
-        `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
-      );
-    }
-  }
-  // imageOrder now only tracks image slots (see chat-attachments.ts), so split
-  // offloaded refs by mime: image offloads interleave with inline images via
-  // imageOrder, and non-image offloads append to the transcript tail. Without
-  // this split a non-image file would consume the next image slot whenever
-  // both kinds appear in the same request.
-  const imageOffloadedSaved: SavedMedia[] = [];
-  const nonImageOffloadedSaved: SavedMedia[] = [];
-  for (const ref of params.offloadedRefs) {
-    const entry: SavedMedia = {
-      id: ref.id,
-      path: ref.path,
-      size: 0,
-      contentType: ref.mimeType,
-    };
-    if (ref.mimeType.startsWith("image/")) {
-      imageOffloadedSaved.push(entry);
-    } else {
-      nonImageOffloadedSaved.push(entry);
-    }
-  }
-  if (params.imageOrder.length === 0) {
-    return [...inlineSaved, ...imageOffloadedSaved, ...nonImageOffloadedSaved];
-  }
-  const saved: SavedMedia[] = [];
-  let inlineIndex = 0;
-  let offloadedIndex = 0;
-  for (const entry of params.imageOrder) {
-    if (entry === "inline") {
-      const inline = inlineSaved[inlineIndex++];
-      if (inline) {
-        saved.push(inline);
-      }
-      continue;
-    }
-    const offloaded = imageOffloadedSaved[offloadedIndex++];
-    if (offloaded) {
-      saved.push(offloaded);
-    }
-  }
-  for (; inlineIndex < inlineSaved.length; inlineIndex++) {
-    const inline = inlineSaved[inlineIndex];
-    if (inline) {
-      saved.push(inline);
-    }
-  }
-  for (; offloadedIndex < imageOffloadedSaved.length; offloadedIndex++) {
-    const offloaded = imageOffloadedSaved[offloadedIndex];
-    if (offloaded) {
-      saved.push(offloaded);
-    }
-  }
-  for (const offloaded of nonImageOffloadedSaved) {
-    saved.push(offloaded);
-  }
-  return saved;
+  return await persistInboundImagesForTranscript({
+    images: params.images,
+    imageOrder: params.imageOrder,
+    offloadedRefs: params.offloadedRefs,
+    log: params.logGateway,
+    logContext: "chat.send",
+  });
 }
 
 function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
@@ -1636,7 +1595,7 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
   }));
 }
 
-export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
     typeof message === "object" &&
@@ -1763,82 +1722,82 @@ export function reportOmittedChatHistory(params: {
   return omittedCount;
 }
 
-function resolveTranscriptPath(params: {
+type AssistantTranscriptScopeParams = {
   sessionId: string;
   storePath: string | undefined;
-  sessionFile?: string;
+  sessionKey: string;
   agentId?: string;
-}): string | null {
-  const { sessionId, storePath, sessionFile, agentId } = params;
-  if (!storePath && !sessionFile) {
+};
+
+type SourceReplyTranscriptMirrorMetadata = NonNullable<
+  ReturnType<typeof getReplyPayloadMetadata>
+>["sourceReplyTranscriptMirror"];
+
+type SourceReplyContentState = {
+  broadcastContent: AssistantDisplayContentBlock[];
+  persistedContent: AssistantDisplayContentBlock[];
+  hasManagedOutgoingContent: boolean;
+  backedManagedOutgoingContent: boolean;
+};
+
+function assistantTranscriptScope(
+  params: AssistantTranscriptScopeParams,
+): SessionTranscriptWriteScope | null {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey || !params.sessionId.trim()) {
     return null;
   }
-  try {
-    const sessionsDir = storePath ? path.dirname(storePath) : undefined;
-    return resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : undefined,
-      sessionsDir || agentId ? { sessionsDir, agentId } : undefined,
-    );
-  } catch {
-    return null;
-  }
+  return {
+    sessionKey,
+    sessionId: params.sessionId,
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
 }
 
-function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
-  ok: boolean;
-  error?: string;
-} {
-  if (fs.existsSync(params.transcriptPath)) {
-    return { ok: true };
-  }
-  try {
-    fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
-    const header = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: params.sessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
+  return event && typeof event === "object" && !Array.isArray(event)
+    ? (event as Record<string, unknown>)
+    : undefined;
 }
 
-async function findAssistantTranscriptMessageByIdempotencyKey(
-  transcriptPath: string,
+function transcriptEventId(event: TranscriptEvent): string | undefined {
+  const id = transcriptEventRecord(event)?.id;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+}
+
+function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
+  const message = transcriptEventRecord(event)?.message;
+  return message && typeof message === "object" && !Array.isArray(message)
+    ? (message as Record<string, unknown>)
+    : undefined;
+}
+
+function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
+  events: readonly TranscriptEvent[],
   idempotencyKey: string,
-): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
+): { messageId: string; message: Record<string, unknown> } | null {
   const trimmedIdempotencyKey = idempotencyKey.trim();
   if (!trimmedIdempotencyKey) {
     return null;
   }
-  const index = await readSessionTranscriptIndex(transcriptPath, { view: "all" });
-  const target = index?.entries.toReversed().find((entry) => {
-    const message = entry.record.message as Record<string, unknown> | undefined;
+  const target = events.toReversed().find((event) => {
+    const message = transcriptEventMessage(event);
     return message?.role === "assistant" && message.idempotencyKey === trimmedIdempotencyKey;
   });
-  const message = target?.record.message as Record<string, unknown> | undefined;
-  if (!target || !message) {
+  const message = target ? transcriptEventMessage(target) : undefined;
+  const messageId = target ? transcriptEventId(target) : undefined;
+  if (!messageId || !message) {
     return null;
   }
-  return { messageId: target.id ?? trimmedIdempotencyKey, message };
+  return { messageId, message };
 }
 
-async function findSourceReplyTranscriptMirrorByIdempotencyKey(
-  transcriptPath: string,
+function findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
+  events: readonly TranscriptEvent[],
   idempotencyKey: string,
-): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
-  const found = await findAssistantTranscriptMessageByIdempotencyKey(
-    transcriptPath,
-    idempotencyKey,
-  );
+): { messageId: string; message: Record<string, unknown> } | null {
+  const found = findAssistantTranscriptMessageByIdempotencyKeyInEvents(events, idempotencyKey);
   if (found?.message.provider !== "openclaw" || found.message.model !== "delivery-mirror") {
     return null;
   }
@@ -1865,13 +1824,13 @@ function extractAssistantTranscriptText(message: Record<string, unknown>): strin
   return text || undefined;
 }
 
-async function findSourceReplyTranscriptMirrorByMetadata(params: {
-  transcriptPath: string;
+function findSourceReplyTranscriptMirrorByMetadataInEvents(params: {
+  events: readonly TranscriptEvent[];
   idempotencyKey: string;
-  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
-}): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
-  const byIdempotencyKey = await findSourceReplyTranscriptMirrorByIdempotencyKey(
-    params.transcriptPath,
+  metadata: SourceReplyTranscriptMirrorMetadata;
+}): { messageId: string; message: Record<string, unknown> } | null {
+  const byIdempotencyKey = findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
+    params.events,
     params.idempotencyKey,
   );
   if (byIdempotencyKey) {
@@ -1884,23 +1843,35 @@ async function findSourceReplyTranscriptMirrorByMetadata(params: {
   if (!expectedText) {
     return null;
   }
-  const index = await readSessionTranscriptIndex(params.transcriptPath, { view: "all" });
-  const target = index?.entries.toReversed().find((entry) => {
-    const message = entry.record.message as Record<string, unknown> | undefined;
+  const target = params.events.toReversed().find((event) => {
+    const message = transcriptEventMessage(event);
     return (
-      typeof entry.id === "string" &&
-      entry.id.trim().length > 0 &&
+      typeof transcriptEventId(event) === "string" &&
       message?.role === "assistant" &&
       message.provider === "openclaw" &&
       message.model === "delivery-mirror" &&
       extractAssistantTranscriptText(message) === expectedText
     );
   });
-  const message = target?.record.message as Record<string, unknown> | undefined;
-  if (!target?.id || !message) {
+  const message = target ? transcriptEventMessage(target) : undefined;
+  const messageId = target ? transcriptEventId(target) : undefined;
+  if (!messageId || !message) {
     return null;
   }
-  return { messageId: target.id, message };
+  return { messageId, message };
+}
+
+async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boolean> {
+  const sessionId = scope.sessionId;
+  if (!sessionId) {
+    return false;
+  }
+  // Existence probe: the newest-first matcher returns on the first record, so
+  // this reads one transcript line instead of materializing the whole file.
+  const found = await findTranscriptEvent({ ...scope, sessionId }, () => true).catch(
+    () => undefined,
+  );
+  return found !== undefined;
 }
 
 async function appendAssistantTranscriptMessage(params: {
@@ -1922,42 +1893,18 @@ async function appendAssistantTranscriptMessage(params: {
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
-  const transcriptPath = resolveTranscriptPath({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
-  });
-  if (!transcriptPath) {
-    return { ok: false, error: "transcript path not resolved" };
+  const scope = assistantTranscriptScope(params);
+  if (!scope) {
+    return { ok: false, error: "transcript identity not resolved" };
   }
-
-  if (!fs.existsSync(transcriptPath)) {
-    if (!params.createIfMissing) {
-      return { ok: false, error: "transcript file not found" };
-    }
-    const ensured = ensureTranscriptFile({
-      transcriptPath,
-      sessionId: params.sessionId,
-    });
-    if (!ensured.ok) {
-      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
-    }
-  }
-
-  if (params.idempotencyKey) {
-    const existing = await findAssistantTranscriptMessageByIdempotencyKey(
-      transcriptPath,
-      params.idempotencyKey,
-    );
-    if (existing) {
-      return { ok: true, messageId: existing.messageId, message: existing.message };
-    }
+  if (!params.createIfMissing && !(await transcriptExists(scope))) {
+    return { ok: false, error: "transcript not found" };
   }
 
   const appended = await appendInjectedAssistantMessageToTranscript({
-    transcriptPath,
     sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    storePath: params.storePath,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     message: params.message,
     label: params.label,
@@ -1967,32 +1914,158 @@ async function appendAssistantTranscriptMessage(params: {
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
   });
-  if (appended.ok) {
-    await advanceSessionTranscriptMarker({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
-  }
   return appended;
 }
 
-async function advanceSessionTranscriptMarker(params: {
-  storePath: string | undefined;
-  sessionKey: string;
-  sessionId: string;
-}): Promise<void> {
-  if (!params.storePath) {
+async function touchAssistantTranscriptSessionEntry(
+  scope: SessionTranscriptWriteScope,
+): Promise<void> {
+  if (!scope.storePath || !scope.sessionKey || !scope.sessionId) {
     return;
   }
-
   const transcriptMarkerUpdatedAt = Date.now();
-  await updateSessionStoreEntry({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    update: (current) =>
-      current.sessionId === params.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+  await patchSessionEntry(
+    {
+      storePath: scope.storePath,
+      sessionKey: scope.sessionKey,
+      ...(scope.agentId ? { agentId: scope.agentId } : {}),
+    },
+    (current) =>
+      current.sessionId === scope.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+    {
+      skipMaintenance: true,
+    },
+  );
+}
+
+async function rewriteSourceReplyTranscriptMirrors(params: {
+  candidates: readonly {
+    idempotencyKey: string;
+    metadata: SourceReplyTranscriptMirrorMetadata;
+  }[];
+  requests: readonly {
+    idempotencyKey: string;
+    metadata: SourceReplyTranscriptMirrorMetadata;
+    state: SourceReplyContentState;
+  }[];
+  scope: SessionTranscriptWriteScope;
+  config?: OpenClawConfig;
+}): Promise<
+  Array<{
+    messageId?: string;
+    request: {
+      idempotencyKey: string;
+      metadata: SourceReplyTranscriptMirrorMetadata;
+      state: SourceReplyContentState;
+    };
+  }>
+> {
+  const { sessionId, sessionKey } = params.scope;
+  if (!sessionId || !sessionKey || params.requests.length === 0 || params.candidates.length === 0) {
+    return [];
+  }
+
+  const events = await loadTranscriptEvents({ ...params.scope, sessionId });
+  const allowedSourceReplyMirrorIds = new Set<string>();
+  for (const candidate of params.candidates) {
+    const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
+      events,
+      idempotencyKey: candidate.idempotencyKey,
+      metadata: candidate.metadata,
+    });
+    if (target) {
+      allowedSourceReplyMirrorIds.add(target.messageId);
+    }
+  }
+
+  const rewriteTargets: Array<{
+    request: (typeof params.requests)[number];
+    messageId: string;
+    message: Record<string, unknown>;
+  }> = [];
+  for (const request of params.requests) {
+    const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
+      events,
+      idempotencyKey: request.idempotencyKey,
+      metadata: request.metadata,
+    });
+    if (target) {
+      rewriteTargets.push({ request, ...target });
+    }
+  }
+  if (rewriteTargets.length === 0) {
+    return [];
+  }
+
+  const rewriteTargetIds = new Set(rewriteTargets.map((target) => target.messageId));
+  // Guard over visible records (messages/compaction) only: hidden tree records
+  // such as leaf controls may trail the mirrors and must not veto the rewrite.
+  const visibleEvents = events.filter((event) => {
+    const record = transcriptEventRecord(event);
+    return Boolean(record?.message) || record?.type === "compaction";
   });
+  const firstRewriteEntryIndex = visibleEvents.findIndex((event) => {
+    const id = transcriptEventId(event);
+    return id ? rewriteTargetIds.has(id) : false;
+  });
+  const canRewriteSourceReplyMirrors =
+    firstRewriteEntryIndex >= 0 &&
+    visibleEvents.slice(firstRewriteEntryIndex).every((event) => {
+      const id = transcriptEventId(event);
+      return !id || allowedSourceReplyMirrorIds.has(id);
+    });
+  if (!canRewriteSourceReplyMirrors) {
+    return [];
+  }
+
+  const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+    scope: {
+      sessionId,
+      sessionKey,
+      ...(params.scope.agentId ? { agentId: params.scope.agentId } : {}),
+      ...(params.scope.storePath ? { storePath: params.scope.storePath } : {}),
+    },
+    request: {
+      allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
+      replacements: rewriteTargets.map((target) => ({
+        entryId: target.messageId,
+        message: {
+          ...(target.message as unknown as AgentMessage),
+          idempotencyKey: target.request.idempotencyKey,
+          content: target.request.state.persistedContent,
+        } as unknown as AgentMessage,
+      })),
+    },
+    ...(params.config ? { config: params.config } : {}),
+  });
+  if (!result.changed) {
+    return [];
+  }
+
+  // The file-backed rewrite appends replacement entries under fresh ids, so
+  // re-read the transcript to hand callers the persisted mirror ids.
+  const rewrittenEvents = await loadTranscriptEvents({ ...params.scope, sessionId });
+  return rewriteTargets.map((target) => {
+    const rewritten = findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
+      rewrittenEvents,
+      target.request.idempotencyKey,
+    );
+    return rewritten?.messageId
+      ? { messageId: rewritten.messageId, request: target.request }
+      : { request: target.request };
+  });
+}
+
+async function publishAssistantTranscriptRewrite(params: {
+  scope: SessionTranscriptWriteScope;
+  rewritten: readonly { messageId?: string }[];
+}): Promise<void> {
+  if (params.rewritten.length === 0) {
+    return;
+  }
+  // The file-backed rewrite emits its own transcript update; only the session
+  // marker touch remains so history readers observe the fresh updatedAt.
+  await touchAssistantTranscriptSessionEntry(params.scope);
 }
 
 function collectSessionAbortPartials(params: {
@@ -2191,7 +2264,11 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
       ? payload.sessionKeyAliases.map(normalizeUnknownText)
       : []),
   ]);
-  if (!payloadSessionKeys.has(params.sessionKey)) {
+  const hasPayloadSessionKey = [...payloadSessionKeys].some(Boolean);
+  if (
+    (hasPayloadSessionKey && !payloadSessionKeys.has(params.sessionKey)) ||
+    (!hasPayloadSessionKey && payloadRunId !== params.runId)
+  ) {
     return undefined;
   }
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
@@ -2283,7 +2360,7 @@ function resolveStoredGlobalRunAgentId(
 function writePreRegisteredAgentAbort(params: {
   context: GatewayRequestContext;
   runId: string;
-  sessionKey: string;
+  sessionKey?: string;
   payload: PreRegisteredAgentDedupePayload;
   stopReason: string;
   endedAt?: number;
@@ -2299,7 +2376,7 @@ function writePreRegisteredAgentAbort(params: {
         ok: true,
         payload: {
           runId: params.runId,
-          sessionKey: params.sessionKey,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
           ...(params.payload.controlUiVisible === false ? { controlUiVisible: false } : {}),
           status: "timeout" as const,
@@ -2348,6 +2425,7 @@ function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   keyPrefix: string;
+  preserveSideRuns?: boolean;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -2359,6 +2437,9 @@ function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({ key, entry, keyPrefix: params.keyPrefix });
     if (!run) {
+      continue;
+    }
+    if (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw") {
       continue;
     }
     const runSessionKeys = [
@@ -2402,6 +2483,7 @@ function resolveAuthorizedRunsForSessionKeys(params: {
   agentId?: string;
   defaultAgentId: string;
   requester: ChatAbortRequester;
+  preserveSideRuns?: boolean;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -2418,6 +2500,9 @@ function resolveAuthorizedRunsForSessionKeys(params: {
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
     if (active.controlUiVisible === false) {
+      continue;
+    }
+    if (params.preserveSideRuns && active.turnKind === "btw") {
       continue;
     }
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
@@ -2441,6 +2526,81 @@ function resolveAuthorizedRunsForSessionKeys(params: {
   };
 }
 
+function ensureChatQueuedTurns(context: GatewayRequestContext): QueuedChatTurnMap {
+  return context.chatQueuedTurns;
+}
+
+function canRequesterAbortQueuedChatTurn(
+  entry: QueuedChatTurnEntry,
+  requester: ChatAbortRequester,
+): boolean {
+  // Same ownership rules as active chat runs.
+  if (requester.isAdmin) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  if (!ownerDeviceId && !ownerConnId) {
+    return true;
+  }
+  if (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) {
+    return true;
+  }
+  if (ownerConnId && requester.connId && ownerConnId === requester.connId) {
+    return true;
+  }
+  return false;
+}
+
+function canRequesterAbortQueuedChatTurnWithoutSessionMatch(
+  entry: QueuedChatTurnEntry,
+  requester: ChatAbortRequester,
+): boolean {
+  if (requester.isAdmin) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  return Boolean(
+    (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
+    (ownerConnId && requester.connId && ownerConnId === requester.connId),
+  );
+}
+
+/**
+ * Cancel authorized queued turns for a session BEFORE active-run abort so
+ * drain cannot promote work into a half-aborted session.
+ */
+function abortAuthorizedQueuedTurnsForSession(params: {
+  context: GatewayRequestContext;
+  sessionKeys: string[];
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId: string;
+  requester: ChatAbortRequester;
+  stopReason?: string;
+}): { runIds: string[]; matched: number; unauthorizedOnly: boolean } {
+  const chatQueuedTurns = ensureChatQueuedTurns(params.context);
+  const matches = listQueuedChatTurnsForSession({
+    chatQueuedTurns,
+    sessionKeys: params.sessionKeys,
+    sessionIds: [params.sessionId],
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+  });
+  if (matches.length === 0) {
+    return { runIds: [], matched: 0, unauthorizedOnly: false };
+  }
+  const authorized = matches.filter((m) =>
+    canRequesterAbortQueuedChatTurn(m.entry, params.requester),
+  );
+  if (authorized.length === 0) {
+    return { runIds: [], matched: matches.length, unauthorizedOnly: true };
+  }
+  const runIds = abortQueuedChatTurns(chatQueuedTurns, authorized, params.stopReason);
+  return { runIds, matched: matches.length, unauthorizedOnly: false };
+}
+
 async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
@@ -2453,8 +2613,20 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
+  preserveSideRuns?: boolean;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
   const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
+  // Queued-turn cancel MUST run before active abort so followup drain cannot
+  // promote cancelled work into the gap between active stop and queue clear.
+  const queuedAbort = abortAuthorizedQueuedTurnsForSession({
+    context: params.context,
+    sessionKeys,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    requester: params.requester,
+    stopReason: params.stopReason,
+  });
   const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
     sessionKeys,
@@ -2462,6 +2634,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
+    preserveSideRuns: params.preserveSideRuns,
   });
   const {
     matchedSessionRuns: matchedPendingAgentRuns,
@@ -2473,6 +2646,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
     keyPrefix: "agent:",
+    preserveSideRuns: params.preserveSideRuns,
   });
   const { matchedSessionRuns: matchedPendingChatRuns, authorizedRuns: authorizedPendingChatRuns } =
     resolveAuthorizedPreRegisteredRunsForSessionKeys({
@@ -2482,17 +2656,22 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
       defaultAgentId: params.defaultAgentId,
       requester: params.requester,
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+      preserveSideRuns: params.preserveSideRuns,
     });
   if (
     authorizedRuns.length === 0 &&
     authorizedPendingAgentRuns.length === 0 &&
-    authorizedPendingChatRuns.length === 0
+    authorizedPendingChatRuns.length === 0 &&
+    queuedAbort.runIds.length === 0
   ) {
     return {
       aborted: false,
       runIds: [],
       unauthorized:
-        matchedSessionRuns > 0 || matchedPendingAgentRuns > 0 || matchedPendingChatRuns > 0,
+        matchedSessionRuns > 0 ||
+        matchedPendingAgentRuns > 0 ||
+        matchedPendingChatRuns > 0 ||
+        queuedAbort.unauthorizedOnly,
     };
   }
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
@@ -2502,7 +2681,8 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     runIds: authorizedRunIdSet,
     abortOrigin: params.abortOrigin,
   });
-  const runIds: string[] = [];
+  // Queued cancellations already applied above; keep them first in the response.
+  const runIds: string[] = [...queuedAbort.runIds];
   for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,
@@ -2537,7 +2717,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     runIds.push(runId);
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
-  if (res.aborted) {
+  if (res.aborted && snapshots.length > 0) {
     const abortedRunIds = new Set(runIds);
     await persistAbortedPartials({
       context: params.context,
@@ -3088,7 +3268,7 @@ async function handleChatHistoryRequest({
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-  sessionInfo.hasActiveRun = hasVisibleActiveSessionRun({
+  const activeRunState = resolveVisibleActiveSessionRunState({
     context,
     requestedKey: sessionKey,
     canonicalKey,
@@ -3096,6 +3276,8 @@ async function handleChatHistoryRequest({
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId,
   });
+  sessionInfo.hasActiveRun = activeRunState.active;
+  sessionInfo.activeRunIds = activeRunState.runIds;
   const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
   const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
   const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
@@ -3264,10 +3446,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey: rawSessionKey, runId } = params as {
+    const {
+      sessionKey: rawSessionKey,
+      runId,
+      preserveSideRuns,
+    } = params as {
       sessionKey: string;
       agentId?: string;
       runId?: string;
+      preserveSideRuns?: boolean;
     };
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
     const abortCfg = context.getRuntimeConfig();
@@ -3305,16 +3492,20 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
+      const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
+      const { entry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: canonicalAbortSessionKey,
         sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: abortAgentId,
+        sessionId: entry?.sessionId,
         defaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
         requester,
+        preserveSideRuns,
       });
       if (res.unauthorized) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
@@ -3339,7 +3530,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           includeHidden: true,
         });
         if (canonicalMatch) {
-          return { sessionKey: canonicalAbortSessionKey, payload: canonicalMatch };
+          return {
+            sessionKey: normalizeUnknownText(canonicalMatch.sessionKey)
+              ? canonicalAbortSessionKey
+              : undefined,
+            payload: canonicalMatch,
+          };
         }
         if (rawSessionKey === canonicalAbortSessionKey) {
           return undefined;
@@ -3352,7 +3548,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           defaultAgentId,
           includeHidden: true,
         });
-        return aliasMatch ? { sessionKey: rawSessionKey, payload: aliasMatch } : undefined;
+        return aliasMatch
+          ? {
+              sessionKey: normalizeUnknownText(aliasMatch.sessionKey) ? rawSessionKey : undefined,
+              payload: aliasMatch,
+            }
+          : undefined;
       };
       const pendingChatMatch = readPendingRunForAbort(
         context.dedupe.get(pendingChatSendDedupeKey(runId)),
@@ -3387,6 +3588,53 @@ export const chatHandlers: GatewayRequestHandlers = {
           stopReason: "rpc",
         });
         respond(true, { ok: true, aborted: true, runIds: [runId] });
+        return;
+      }
+      // Queued followup/collect turns keep a cancel identity after chat.send
+      // terminalizes; abort them here so Esc cannot report done while they run.
+      const chatQueuedTurns = ensureChatQueuedTurns(context);
+      const queued = chatQueuedTurns.get(runId);
+      if (queued) {
+        const abortSessionKeysForQueued = new Set([rawSessionKey, canonicalAbortSessionKey]);
+        if (
+          !abortSessionKeysForQueued.has(queued.sessionKey) &&
+          !canRequesterAbortQueuedChatTurnWithoutSessionMatch(queued, requester)
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
+          );
+          return;
+        }
+        if (
+          normalizedAgentIdOverride &&
+          queued.sessionKey === "global" &&
+          resolveStoredGlobalRunAgentId(queued.agentId, defaultAgentId) !==
+            normalizedAgentIdOverride
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match agentId"),
+          );
+          return;
+        }
+        if (!canRequesterAbortQueuedChatTurn(queued, requester)) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+          return;
+        }
+        const queuedRes = abortQueuedChatTurnById(chatQueuedTurns, {
+          runId,
+          sessionKey: queued.sessionKey,
+          stopReason: "rpc",
+          allowSessionMismatch: true,
+        });
+        respond(true, {
+          ok: true,
+          aborted: queuedRes.aborted,
+          runIds: queuedRes.aborted ? [runId] : [],
+        });
         return;
       }
       respond(true, { ok: true, aborted: false, runIds: [] });
@@ -3486,6 +3734,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
       suppressCommandInterpretation?: boolean;
+      expectedSessionRoutingContract?: string;
       idempotencyKey: string;
     };
     const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
@@ -3536,6 +3785,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
     const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
+    const turnKind =
+      !suppressCommandInterpretation && isBtwRequestText(inboundMessage) ? "btw" : "main";
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
     if (!rawMessage && normalizedAttachments.length === 0) {
@@ -3571,6 +3822,20 @@ export const chatHandlers: GatewayRequestHandlers = {
     );
     const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
     const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
+    const expectedSessionRoutingContract = normalizeOptionalText(p.expectedSessionRoutingContract);
+    const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
+      expectedSessionRoutingContract !== undefined &&
+      expectedSessionRoutingContract.toLowerCase() !==
+        resolveSessionRoutingContract(candidateConfig);
+    const respondSessionRoutingChanged = () => {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
+          details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
+        }),
+      );
+    };
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -3640,6 +3905,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
+      if (sessionRoutingChanged(cfg)) {
+        respondSessionRoutingChanged();
+        return;
+      }
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const stopAgentId =
         sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
@@ -3716,6 +3985,19 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    if (context.chatQueuedTurns?.has(clientRunId)) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+    // Cached/in-flight retries are already bound to their original target and
+    // must remain queryable after config changes. Gate only a new dispatch.
+    if (sessionRoutingChanged(cfg)) {
+      respondSessionRoutingChanged();
+      return;
+    }
     const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
     if (archivedSessionError) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
@@ -3760,6 +4042,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
         expiresAtMs: pendingExpiresAtMs,
+        turnKind,
       },
     });
     const clearPendingChatSendReservation = () => {
@@ -3831,7 +4114,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
             return;
           }
-          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+          const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+          if (sessionRoutingChanged(latestSession.cfg)) {
+            throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+          }
+          const latestEntry = latestSession.entry;
           if (entry && !latestEntry) {
             throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
           }
@@ -3863,6 +4150,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             authProviderId: resolvedSessionAuthProvider,
             isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
             kind: "chat-send",
+            turnKind,
             lifecycleGeneration,
           });
         },
@@ -3875,6 +4163,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     } catch (err) {
       clearPendingChatSendReservation();
+      if (err instanceof Error && err.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
+        respondSessionRoutingChanged();
+        return;
+      }
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
       return;
     }
@@ -4058,6 +4350,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Attachment preparation and admission can suspend. Recheck immediately
+    // before ACK/dispatch so hot config reload cannot cross the send boundary.
+    if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respondSessionRoutingChanged();
+      return;
+    }
+
     try {
       const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
         ? {
@@ -4100,6 +4401,39 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
+      const titleSource = stripInlineDirectiveTagsForDisplay(rawMessage).text;
+      if (isDashboardSessionTitleCandidate({ sessionKey, userMessage: titleSource })) {
+        void (async () => {
+          const titleEntry =
+            entry?.sessionId === admittedSessionId
+              ? entry
+              : loadSessionEntry(sessionKey, sessionLoadOptions).entry;
+          const titleSessionId = titleEntry?.sessionId;
+          if (!titleSessionId) {
+            return;
+          }
+          const updated = await maybeGenerateDashboardSessionTitle({
+            cfg,
+            agentId,
+            entry: titleEntry,
+            sessionId: titleSessionId,
+            sessionKey,
+            storePath,
+            userMessage: titleSource,
+          });
+          if (updated) {
+            emitSessionsChanged(context, {
+              sessionKey,
+              agentId,
+              reason: "chat.title",
+            });
+          }
+        })().catch((err: unknown) => {
+          context.logGateway.warn(
+            `dashboard session title generation failed: ${formatForLog(err)}`,
+          );
+        });
+      }
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
@@ -4145,6 +4479,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
+      const queuedFollowupOwnerDeviceId = normalizeOptionalText(client?.connect?.device?.id);
+      const queuedFollowupOwnerConnId = normalizeOptionalText(client?.connId);
+      const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
+        ? `device:${queuedFollowupOwnerDeviceId}`
+        : queuedFollowupOwnerConnId
+          ? `connection:${queuedFollowupOwnerConnId}`
+          : undefined;
       const {
         originatingChannel,
         originatingTo,
@@ -4192,7 +4533,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               body: commandBody,
             },
         MessageSid: clientRunId,
-        ApprovalReviewerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
         ...(!isOperatorUiClient(clientInfo)
           ? {
               SenderId: clientInfo?.id,
@@ -4234,6 +4575,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      let queuedFollowupEnqueued = false;
       let pendingDispatchLifecycleError:
         | {
             endedAt: number;
@@ -4312,15 +4654,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionLoadOptions,
         );
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const resolvedTranscriptPath = resolveTranscriptPath({
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-          agentId,
-        });
         const mediaLocalRoots = appendLocalMediaParentRoots(
           getAgentScopedMediaLocalRoots(cfg, agentId),
-          resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+          latestStorePath ? [latestStorePath] : undefined,
         );
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
@@ -4479,6 +4815,30 @@ export const chatHandlers: GatewayRequestHandlers = {
                   requestedSessionId,
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
                   abortSignal: activeRunAbort.controller.signal,
+                  // Keep a Gateway-owned cancel identity after this chat.send
+                  // terminalizes while the prompt waits in followup/collect queue.
+                  queuedFollowupLifecycle: {
+                    ownerKey: queuedFollowupOwnerKey,
+                    onEnqueued: () => {
+                      queuedFollowupEnqueued = registerQueuedChatTurn({
+                        chatQueuedTurns: ensureChatQueuedTurns(context),
+                        runId: clientRunId,
+                        controller: activeRunAbort.controller,
+                        sessionId: backingSessionId ?? clientRunId,
+                        sessionKey,
+                        agentId: selectedAgent.agentId,
+                        ownerConnId: normalizeOptionalText(client?.connId),
+                        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+                      });
+                      return queuedFollowupEnqueued;
+                    },
+                    onCancellationRetired: () => {
+                      retireQueuedChatTurnCancellation(ensureChatQueuedTurns(context), clientRunId);
+                    },
+                    onComplete: () => {
+                      completeQueuedChatTurn(ensureChatQueuedTurns(context), clientRunId);
+                    },
+                  },
                   images: replyOptionImages,
                   imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
                   thinkingLevelOverride: p.thinking,
@@ -4597,7 +4957,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
               // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
-              if (!agentRunStarted) {
+              if (!agentRunStarted && !queuedFollowupEnqueued) {
                 const btwReplies = deliveredReplies
                   .map((entryScoped) => entryScoped.payload)
                   .filter(isBtwReplyPayload);
@@ -4904,15 +5264,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                     sessionLoadOptions,
                   );
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const resolvedTranscriptPath = resolveTranscriptPath({
-                    sessionId,
-                    storePath: latestStorePath,
-                    sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-                    agentId,
-                  });
                   const mediaLocalRoots = appendLocalMediaParentRoots(
                     getAgentScopedMediaLocalRoots(cfg, agentId),
-                    resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+                    latestStorePath ? [latestStorePath] : undefined,
                   );
                   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                     sessionKey,
@@ -5105,15 +5459,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                     sessionLoadOptions,
                   );
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const resolvedTranscriptPath = resolveTranscriptPath({
-                    sessionId,
-                    storePath: latestStorePath,
-                    sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-                    agentId,
-                  });
                   const mediaLocalRoots = appendLocalMediaParentRoots(
                     getAgentScopedMediaLocalRoots(cfg, agentId),
-                    resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
+                    latestStorePath ? [latestStorePath] : undefined,
                   );
                   const buildReplyAssistantContent = async (
                     payloads: typeof finalPayloads,
@@ -5152,12 +5500,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                     agentRunReplyPayloads.length === 1
                       ? await buildReplyMediaMessage(finalPayloads)
                       : undefined;
-                  type SourceReplyContentState = {
-                    broadcastContent: AssistantDisplayContentBlock[];
-                    persistedContent: AssistantDisplayContentBlock[];
-                    hasManagedOutgoingContent: boolean;
-                    backedManagedOutgoingContent: boolean;
-                  };
                   const sourceReplyContentStates: SourceReplyContentState[] = [];
                   const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
                   for (const [replyIndex] of agentRunReplyPayloads.entries()) {
@@ -5203,9 +5545,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   if (sourceReplyBroadcastContent.length || displayReply) {
                     const sourceReplyPersistenceRequests: Array<{
                       idempotencyKey: string;
-                      metadata: NonNullable<
-                        ReturnType<typeof getReplyPayloadMetadata>
-                      >["sourceReplyTranscriptMirror"];
+                      metadata: SourceReplyTranscriptMirrorMetadata;
                       state: SourceReplyContentState;
                     }> = [];
                     for (const [
@@ -5234,6 +5574,32 @@ export const chatHandlers: GatewayRequestHandlers = {
                         state,
                       });
                     }
+                    const sourceReplyMirrorCandidates: Array<{
+                      idempotencyKey: string;
+                      metadata: SourceReplyTranscriptMirrorMetadata;
+                    }> = [];
+                    for (const [
+                      replyIndex,
+                      sourceReplyPayload,
+                    ] of agentRunReplyPayloads.entries()) {
+                      if (!sourceReplyContentStates[replyIndex]) {
+                        continue;
+                      }
+                      const mirrorMetadata =
+                        getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
+                      const mirrorIdempotencyKey = mirrorMetadata?.idempotencyKey;
+                      if (
+                        typeof mirrorIdempotencyKey !== "string" ||
+                        mirrorIdempotencyKey.trim().length === 0 ||
+                        !mirrorMetadata
+                      ) {
+                        continue;
+                      }
+                      sourceReplyMirrorCandidates.push({
+                        idempotencyKey: mirrorIdempotencyKey,
+                        metadata: mirrorMetadata,
+                      });
+                    }
 
                     const attachSourceReplyManagedImages = async (paramsLocal: {
                       messageId?: string;
@@ -5253,115 +5619,29 @@ export const chatHandlers: GatewayRequestHandlers = {
                       paramsLocal.request.state.backedManagedOutgoingContent = true;
                     };
 
-                    if (resolvedTranscriptPath && sourceReplyPersistenceRequests.length > 0) {
-                      const allowedSourceReplyMirrorIds = new Set<string>();
-                      for (const [
-                        replyIndex,
-                        sourceReplyPayload,
-                      ] of agentRunReplyPayloads.entries()) {
-                        if (!sourceReplyContentStates[replyIndex]) {
-                          continue;
-                        }
-                        const mirrorIdempotencyKey =
-                          getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror
-                            ?.idempotencyKey;
-                        const mirrorMetadata =
-                          getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
-                        if (
-                          typeof mirrorIdempotencyKey !== "string" ||
-                          mirrorIdempotencyKey.trim().length === 0 ||
-                          !mirrorMetadata
-                        ) {
-                          continue;
-                        }
-                        const target = await findSourceReplyTranscriptMirrorByMetadata({
-                          transcriptPath: resolvedTranscriptPath,
-                          idempotencyKey: mirrorIdempotencyKey,
-                          metadata: mirrorMetadata,
+                    const sourceReplyScope = assistantTranscriptScope({
+                      sessionId,
+                      sessionKey,
+                      storePath: latestStorePath,
+                      agentId,
+                    });
+                    if (sourceReplyScope && sourceReplyPersistenceRequests.length > 0) {
+                      const rewritten = await rewriteSourceReplyTranscriptMirrors({
+                        candidates: sourceReplyMirrorCandidates,
+                        requests: sourceReplyPersistenceRequests,
+                        scope: sourceReplyScope,
+                        config: cfg,
+                      });
+                      if (rewritten.length > 0) {
+                        await publishAssistantTranscriptRewrite({
+                          scope: sourceReplyScope,
+                          rewritten,
                         });
-                        if (target) {
-                          allowedSourceReplyMirrorIds.add(target.messageId);
-                        }
-                      }
-                      const rewriteTargets: Array<{
-                        request: (typeof sourceReplyPersistenceRequests)[number];
-                        messageId: string;
-                        message: Record<string, unknown>;
-                      }> = [];
-                      for (const request of sourceReplyPersistenceRequests) {
-                        const target = await findSourceReplyTranscriptMirrorByMetadata({
-                          transcriptPath: resolvedTranscriptPath,
-                          idempotencyKey: request.idempotencyKey,
-                          metadata: request.metadata,
-                        });
-                        if (target) {
-                          rewriteTargets.push({ request, ...target });
-                        }
-                      }
-
-                      if (rewriteTargets.length > 0) {
-                        const rewriteTargetIds = new Set(
-                          rewriteTargets.map((target) => target.messageId),
-                        );
-                        const rewriteIndex = await readSessionTranscriptIndex(
-                          resolvedTranscriptPath,
-                          { view: "all" },
-                        );
-                        const firstRewriteEntryIndex =
-                          rewriteIndex?.entries.findIndex(
-                            (entryValue) =>
-                              typeof entryValue.id === "string" &&
-                              rewriteTargetIds.has(entryValue.id),
-                          ) ?? -1;
-                        const canRewriteSourceReplyMirrors =
-                          firstRewriteEntryIndex >= 0 &&
-                          rewriteIndex?.entries
-                            .slice(firstRewriteEntryIndex)
-                            .every(
-                              (entryLocal) =>
-                                typeof entryLocal.id !== "string" ||
-                                allowedSourceReplyMirrorIds.has(entryLocal.id),
-                            ) === true;
-                        if (canRewriteSourceReplyMirrors) {
-                          const result = await rewriteTranscriptEntriesInRuntimeTranscript({
-                            scope: {
-                              sessionId,
-                              sessionKey,
-                              sessionFile: resolvedTranscriptPath,
-                              agentId,
-                              ...(latestStorePath ? { storePath: latestStorePath } : {}),
-                            },
-                            request: {
-                              allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
-                              replacements: rewriteTargets.map((target) => ({
-                                entryId: target.messageId,
-                                message: {
-                                  ...(target.message as unknown as AgentMessage),
-                                  idempotencyKey: target.request.idempotencyKey,
-                                  content: target.request.state.persistedContent,
-                                } as unknown as AgentMessage,
-                              })),
-                            },
-                            config: cfg,
+                        for (const target of rewritten) {
+                          await attachSourceReplyManagedImages({
+                            messageId: target.messageId,
+                            request: target.request,
                           });
-                          if (result.changed) {
-                            await advanceSessionTranscriptMarker({
-                              storePath: latestStorePath,
-                              sessionKey,
-                              sessionId,
-                            });
-                            for (const target of rewriteTargets) {
-                              const rewritten =
-                                await findSourceReplyTranscriptMirrorByIdempotencyKey(
-                                  resolvedTranscriptPath,
-                                  target.request.idempotencyKey,
-                                );
-                              await attachSourceReplyManagedImages({
-                                messageId: rewritten?.messageId,
-                                request: target.request,
-                              });
-                            }
-                          }
                         }
                       }
                     }
@@ -5462,9 +5742,42 @@ export const chatHandlers: GatewayRequestHandlers = {
             },
             dispatchStartedAtMs,
           );
+          if (queuedFollowupEnqueued && !context.chatAbortedRuns.has(clientRunId)) {
+            // Successful queue admission ends this client run. The later
+            // aggregate/followup owns its own run id.
+            broadcastChatFinal({
+              context,
+              runId: clientRunId,
+              sessionKey,
+              agentId,
+            });
+          }
         })
         .catch(async (err: unknown) => {
           const errorMessage = String(err);
+          if (queuedFollowupEnqueued) {
+            context.logGateway.warn(
+              `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
+            );
+            if (!context.chatAbortedRuns.has(clientRunId)) {
+              setGatewayDedupeEntry({
+                dedupe: context.dedupe,
+                key: `chat:${clientRunId}`,
+                entry: {
+                  ts: Date.now(),
+                  ok: true,
+                  payload: { runId: clientRunId, status: "ok" as const },
+                },
+              });
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey,
+                agentId,
+              });
+            }
+            return;
+          }
           const emitAfterError =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()

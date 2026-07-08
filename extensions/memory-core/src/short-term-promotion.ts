@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
@@ -88,7 +89,7 @@ const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
-const inProcessShortTermLocks = new Map<string, Promise<void>>();
+const inProcessShortTermLocks = new KeyedAsyncQueue();
 
 type PromotionWeights = {
   frequency: number;
@@ -129,7 +130,7 @@ export type ShortTermRecallEntry = {
   promotedAt?: string;
 };
 
-export type ShortTermRecallStore = {
+type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
@@ -144,7 +145,7 @@ type ShortTermPhaseSignalEntry = {
   lastRemConsideredAt?: string;
 };
 
-export type ShortTermPhaseSignalStore = {
+type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;
@@ -849,23 +850,7 @@ function isProcessLikelyAlive(pid: number): boolean {
 }
 
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
-  const previous = inProcessShortTermLocks.get(lockPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => current);
-  inProcessShortTermLocks.set(lockPath, queued);
-
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    releaseCurrent();
-    if (inProcessShortTermLocks.get(lockPath) === queued) {
-      inProcessShortTermLocks.delete(lockPath);
-    }
-  }
+  return await inProcessShortTermLocks.enqueue(lockPath, task);
 }
 
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
@@ -2864,55 +2849,43 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
+async function writeRawShortTermStoreForTest(
+  workspaceDir: string,
+  raw: unknown,
+  namespace: string,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asRecord(raw);
+  const entries = asRecord(record?.entries);
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace,
+      workspaceDir,
+      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: metaKey,
+      value: {
+        updatedAt:
+          typeof record?.updatedAt === "string" && record.updatedAt.trim()
+            ? record.updatedAt
+            : new Date().toISOString(),
+      },
+    }),
+  ]);
+}
+
 export const testing = {
   parseLockOwnerPid,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,
-  writeRawRecallStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "recall",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
-  writeRawPhaseSignalStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "phase",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
+  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
+  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
   writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
     await openMemoryCoreStateStore<ShortTermLockEntry>({
       namespace: SHORT_TERM_LOCK_NAMESPACE,
@@ -2928,6 +2901,7 @@ export const testing = {
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
+  compareShortTermRecallRetention,
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,

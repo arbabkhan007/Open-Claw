@@ -14,7 +14,7 @@ type GatewayRequestContextClient = GatewayClient & {
 
 export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState">;
+  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
@@ -41,6 +41,7 @@ export type GatewayRequestContextParams = {
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
+  chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
   chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
   chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
@@ -60,6 +61,7 @@ export type GatewayRequestContextParams = {
   registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
   dedupe: GatewayRequestContext["dedupe"];
   wizardSessions: GatewayRequestContext["wizardSessions"];
+  crestodianSessions: GatewayRequestContext["crestodianSessions"];
   findRunningWizard: GatewayRequestContext["findRunningWizard"];
   purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
   getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
@@ -185,6 +187,7 @@ export function createGatewayRequestContext(
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
+    chatQueuedTurns: params.chatQueuedTurns,
     chatAbortedRuns: params.chatAbortedRuns,
     chatRunBuffers: params.chatRunBuffers,
     chatDeltaSentAt: params.chatDeltaSentAt,
@@ -204,10 +207,12 @@ export function createGatewayRequestContext(
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,
     wizardSessions: params.wizardSessions,
+    crestodianSessions: params.crestodianSessions,
     findRunningWizard: params.findRunningWizard,
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
     getEventLoopHealth: params.getEventLoopHealth,
+    getConfigReloaderHotReloadStatus: () => params.runtimeState.configReloader.hotReloadStatus?.(),
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     markChannelLoggedOut: params.markChannelLoggedOut,
