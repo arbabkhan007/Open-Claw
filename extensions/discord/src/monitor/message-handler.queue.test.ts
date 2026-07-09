@@ -1,6 +1,7 @@
 // Discord tests cover message handler.queue plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installIsolatedPluginStateDirForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import {
   createDiscordMessageHandler,
@@ -11,6 +12,19 @@ import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+
+// Inbound replay dedupe is now persistent (SQLite). These tests reuse fixed
+// message ids across cases, so give each test a fresh state dir; otherwise a
+// committed id from one test would dedupe (drop) the same id in the next.
+let dedupeStateDir: ReturnType<typeof installIsolatedPluginStateDirForTests>;
+
+beforeEach(() => {
+  dedupeStateDir = installIsolatedPluginStateDirForTests();
+});
+
+afterEach(() => {
+  dedupeStateDir.restore();
+});
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
