@@ -187,6 +187,24 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ]);
+  // Gateway deny rules are applied after the normal policy pipeline on current
+  // main; the preserved runtime token filter must also see them or a denied
+  // selector (e.g. gateway.tools.deny: ["bundle-mcp"]) can survive in the
+  // inherited child allowlist. (#85030)
+  const gatewayDenyPolicy =
+    defaultGatewayDeny.length > 0 ||
+    ownerOnlyGatewayDeny.length > 0 ||
+    Array.isArray(gatewayToolsCfg?.deny) ||
+    excludedToolNames.length > 0
+      ? {
+          deny: [
+            ...defaultGatewayDeny,
+            ...ownerOnlyGatewayDeny,
+            ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+            ...excludedToolNames,
+          ],
+        }
+      : undefined;
   // Deferred runtime selectors (bundle-mcp/MCP/lsp/group:plugins) are absent from
   // the concrete gateway tool array; preserve their tokens through the same policy
   // layers so spawned children rebuild those runtimes without escalating. (#85030)
@@ -202,6 +220,7 @@ export function resolveGatewayScopedTools(params: {
       groupPolicy,
       subagentPolicy,
       inheritedToolPolicy,
+      gatewayDenyPolicy,
     ],
   });
 
