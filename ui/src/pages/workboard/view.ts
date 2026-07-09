@@ -9,6 +9,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs } from "../../lib/format.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -1217,11 +1218,11 @@ function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
   const writable = canMutate(props);
-  const live =
-    activeTask ||
-    cardHasUnresolvedStartedRun(card) ||
-    session?.hasActiveRun === true ||
-    (session?.hasActiveRun !== false && session?.status === "running");
+  // Route the session-derived branch through `isSessionRunActive` so paused
+  // (sessions_yield) rows with hasActiveRun:false keep the Live badge while
+  // their queued continuation is pending, instead of rendering as idle.
+  const sessionRunActive = session ? isSessionRunActive(session) : false;
+  const live = activeTask || cardHasUnresolvedStartedRun(card) || sessionRunActive;
   return {
     state,
     task,

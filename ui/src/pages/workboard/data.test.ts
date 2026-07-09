@@ -4804,6 +4804,28 @@ describe("workboard controller", () => {
       state: "running",
       targetStatus: "running",
     });
+    // Paused (sessions_yield) sessions report hasActiveRun:false while a
+    // queued continuation is pending; the card must stay in the running
+    // lifecycle instead of resolving to idle mid-yield.
+    expect(
+      getWorkboardLifecycle(linked, [{ ...sampleSession, hasActiveRun: false, status: "paused" }]),
+    ).toMatchObject({
+      state: "running",
+      targetStatus: "running",
+    });
+    expect(
+      getWorkboardLifecycle(linked, [
+        {
+          ...sampleSession,
+          hasActiveRun: false,
+          status: "paused",
+          updatedAt: Date.now() - 31 * 60 * 1000,
+        },
+      ]),
+    ).toMatchObject({
+      state: "running",
+      targetStatus: "running",
+    });
     expect(
       getWorkboardLifecycle(linked, [{ ...sampleSession, hasActiveRun: false, status: "done" }]),
     ).toMatchObject({
