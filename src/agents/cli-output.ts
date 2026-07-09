@@ -812,18 +812,39 @@ export function createCliJsonlStreamingParser(params: {
     // "message":{...}} events that carry the accumulated text so far. When
     // the CLI does not also emit raw stream_event/content_block_delta lines
     // (or when they are suppressed), these partial messages are the only
-    // source of streaming text. Compute the delta against assistantText.
+    // source of streaming text. When commentary classification is active,
+    // buffer like stream_event text so pre-tool narration lands on the
+    // commentary lane instead of final assistant chat.
+    const partialTextSoFar = classifyClaudeCommentary
+      ? `${assistantText}${pendingClaudeText}`
+      : assistantText;
     const partialDelta = parseClaudeCliPartialAssistantDelta({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
-      textSoFar: assistantText,
+      textSoFar: partialTextSoFar,
       sessionId,
       usage,
     });
     if (partialDelta) {
-      assistantText = partialDelta.text;
-      params.onAssistantDelta(partialDelta);
+      if (classifyClaudeCommentary) {
+        pendingClaudeText = `${pendingClaudeText}${partialDelta.delta}`;
+      } else {
+        assistantText = partialDelta.text;
+        params.onAssistantDelta(partialDelta);
+      }
+    }
+
+    // Assistant partials may add tool_use without growing text (same text
+    // block, new tool block). Flush pending narration to commentary then.
+    if (classifyClaudeCommentary && parsed.type === "assistant" && isRecord(parsed.message)) {
+      const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+      const hasToolUse = content.some(
+        (block) => isRecord(block) && isClaudeToolUseBlockType(block.type),
+      );
+      if (hasToolUse) {
+        flushPendingClaudeCommentaryText();
+      }
     }
   };
 
