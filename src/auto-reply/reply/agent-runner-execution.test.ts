@@ -1423,6 +1423,35 @@ describe("runAgentTurnWithFallback", () => {
     expect(embeddedCall.deferAssistantStreamDelivery).toBe(false);
   });
 
+  it("streams queued WebChat assistant deltas live when the channel is only on session context", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+    state.isInternalMessageChannelMock.mockImplementation((value: unknown) => value === "webchat");
+    const followupRun = createFollowupRun();
+    delete (followupRun.run as { messageProvider?: string }).messageProvider;
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "webchat",
+          Surface: "webchat",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    const embeddedCall = requireRecord(
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
+    ) as EmbeddedAgentParams;
+    expect(embeddedCall.deferTerminalLifecycle).toBe(true);
+    expect(embeddedCall.deferAssistantStreamDelivery).toBe(false);
+  });
+
   it("keeps embedded assistant stream deferral default when no live preview exists", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
