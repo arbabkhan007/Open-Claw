@@ -27,6 +27,7 @@ type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
@@ -70,6 +71,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   provider: string | undefined;
   runtimeProvider?: string;
   contextProvider?: string;
+  nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
 } {
@@ -99,6 +101,7 @@ export function resolveEmbeddedCompactionTarget(params: {
     return {
       runtimeProvider: routedRuntimeProvider,
       contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
+      ...(useCodexHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
     };
   };
   if (!override) {
@@ -241,6 +244,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  clientCaps?: string[];
   chatType?: ChatType | null;
   agentAccountId?: string | null;
   currentChannelId?: string | null;
@@ -284,6 +288,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
+    clientCaps: params.clientCaps,
     chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     currentChannelId: params.currentChannelId ?? undefined,

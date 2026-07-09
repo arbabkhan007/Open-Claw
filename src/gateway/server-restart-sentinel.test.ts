@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main"],
         legacyKey: undefined,
       }),
     ),
@@ -402,6 +403,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReset();
@@ -627,6 +629,7 @@ describe("scheduleRestartSentinelWake", () => {
         CommandBody: "",
         CommandAuthorized: true,
         GatewayClientScopes: ["operator.admin"],
+        GatewayClientCaps: [],
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "whatsapp",
@@ -678,6 +681,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -718,6 +722,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     const replacementEntry: LoadedSessionEntry = {
@@ -731,6 +736,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     mocks.readRestartSentinel.mockResolvedValue({
@@ -806,6 +812,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -853,6 +860,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:group",
+      storeKeys: ["agent:main:group"],
       legacyKey: undefined,
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
@@ -897,6 +905,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+      storeKeys: ["agent:main:telegram:group:-1003826723328:topic:13757"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReturnValue({
@@ -923,6 +932,7 @@ describe("scheduleRestartSentinelWake", () => {
         Body: "continue in topic",
         CommandAuthorized: true,
         GatewayClientScopes: ["operator.admin"],
+        GatewayClientCaps: [],
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "telegram",
@@ -1512,6 +1522,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event"],
         legacyKey: undefined,
       })
       .mockReturnValueOnce({
@@ -1525,6 +1536,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org"],
         legacyKey: undefined,
       });
     mocks.deliveryContextFromSession
