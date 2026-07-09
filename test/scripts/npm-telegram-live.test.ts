@@ -130,6 +130,22 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("installs prepared root and companion tarballs through an exact local registry", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
+    expect(script).toContain('package_source_kind="prepared-package-set"');
+    expect(script).toContain('package_install_source="openclaw@$(read_package_version');
+    expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+    );
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
+    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+    expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
+  });
+
   it("keeps live Docker artifacts isolated by default", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
@@ -139,10 +155,53 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
     );
-    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).toContain(
+      'OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
+  });
+
+  it("uses unique direct-run output dirs by default", () => {
+    const repoRoot = mkTempRoot();
+    const firstDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
+    const secondDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
+
+    expect(path.dirname(firstDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(firstDir)).toMatch(/^npm-telegram-live-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondDir).not.toBe(firstDir);
+    expect(
+      testing.resolvePackageTelegramOutputDir(
+        { OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: ".artifacts/custom" },
+        repoRoot,
+      ),
+    ).toBe(".artifacts/custom");
+  });
+
+  it("mounts configured output paths before entering the container", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const dockerEnvStart = script.indexOf("docker_env=(");
+    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
+    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
+
+    expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
+    expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
+    expect(dockerEnv).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).toContain('-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"');
+  });
+
+  it("uses the container temp root for OpenClaw runtime scratch files", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const dockerEnvStart = script.indexOf("docker_env=(");
+    const dockerEnvEnd = script.indexOf(")\n\nforward_env_if_set", dockerEnvStart);
+    const dockerEnv = script.slice(dockerEnvStart, dockerEnvEnd);
+
+    expect(dockerEnvStart).toBeGreaterThanOrEqual(0);
+    expect(dockerEnvEnd).toBeGreaterThan(dockerEnvStart);
+    expect(dockerEnv).toContain("-e TMPDIR=/tmp");
   });
 
   it("forwards repeated RTT controls to the package Telegram live lane", () => {

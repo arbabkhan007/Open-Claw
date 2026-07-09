@@ -9,6 +9,7 @@ import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -21,7 +22,6 @@ import {
   createQueuedTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import {
@@ -52,6 +52,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
   config?: OpenClawConfig;
   disposeContextEngineAfterMaintenance?: boolean;
@@ -229,11 +230,15 @@ function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
   });
 }
 
-function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
-  const runId = `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(
-    0,
-    8,
-  )}`;
+function buildTurnMaintenanceTaskDescriptor(params: {
+  sessionKey: string;
+  runId?: string;
+  notifyPolicy?: "silent" | "done_only" | "state_changes";
+  deliveryStatus?: "not_applicable" | "pending";
+}) {
+  const runId =
+    params.runId ??
+    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
   return createQueuedTaskRun({
     runtime: "acp",
     taskKind: TURN_MAINTENANCE_TASK_KIND,
@@ -244,8 +249,10 @@ function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
     runId,
     label: TURN_MAINTENANCE_TASK_LABEL,
     task: TURN_MAINTENANCE_TASK_TASK,
-    notifyPolicy: "silent",
-    deliveryStatus: "pending",
+    notifyPolicy: params.notifyPolicy ?? "silent",
+    // Fast maintenance stays silent and must not create a one-task flow.
+    // Long-running and failed workers promote it to pending before notifying.
+    deliveryStatus: params.deliveryStatus ?? "not_applicable",
     preferMetadata: true,
   });
 }
@@ -255,45 +262,12 @@ function promoteTurnMaintenanceTaskVisibility(params: {
   runId: string;
   notifyPolicy: "done_only" | "state_changes";
 }) {
-  const task = findTaskByRunIdForOwner({
-    runId: params.runId,
-    callerOwnerKey: params.sessionKey,
-  });
-  if (!task) {
-    return createQueuedTaskRun({
-      runtime: "acp",
-      taskKind: TURN_MAINTENANCE_TASK_KIND,
-      sourceId: TURN_MAINTENANCE_TASK_KIND,
-      requesterSessionKey: params.sessionKey,
-      ownerKey: params.sessionKey,
-      scopeKind: "session",
-      runId: params.runId,
-      label: TURN_MAINTENANCE_TASK_LABEL,
-      task: TURN_MAINTENANCE_TASK_TASK,
-      notifyPolicy: params.notifyPolicy,
-      deliveryStatus: "pending",
-      preferMetadata: true,
-    });
-  }
-  setDetachedTaskDeliveryStatusByRunId({
-    runId: params.runId,
-    runtime: "acp",
+  return buildTurnMaintenanceTaskDescriptor({
     sessionKey: params.sessionKey,
+    runId: params.runId,
+    notifyPolicy: params.notifyPolicy,
     deliveryStatus: "pending",
   });
-  if (task.notifyPolicy !== params.notifyPolicy) {
-    updateTaskNotifyPolicyForOwner({
-      taskId: task.taskId,
-      callerOwnerKey: params.sessionKey,
-      notifyPolicy: params.notifyPolicy,
-    });
-  }
-  return (
-    findTaskByRunIdForOwner({
-      runId: params.runId,
-      callerOwnerKey: params.sessionKey,
-    }) ?? task
-  );
 }
 
 /**
@@ -361,6 +335,7 @@ async function executeContextEngineMaintenance(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   withSessionManagerRewriteLock?: SessionManagerRewriteLock;
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
   executionMode: "foreground" | "background";
   config?: OpenClawConfig;
@@ -372,6 +347,7 @@ async function executeContextEngineMaintenance(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.sessionFile,
+    runtimeSettings: params.runtimeSettings,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -404,6 +380,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
   runId: string;
   config?: OpenClawConfig;
@@ -459,6 +436,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
+      runtimeSettings: params.runtimeSettings,
       agentId: params.agentId,
       config: params.config,
       executionMode: "background",
@@ -604,6 +582,7 @@ function scheduleDeferredTurnMaintenance(
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
+        runtimeSettings: params.runtimeSettings,
         agentId: params.agentId,
         config: params.config,
         runId: task.runId!,
@@ -672,6 +651,7 @@ export async function runContextEngineMaintenance(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   withSessionManagerRewriteLock?: SessionManagerRewriteLock;
   runtimeContext?: ContextEngineRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
@@ -698,6 +678,7 @@ export async function runContextEngineMaintenance(params: {
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
+        runtimeSettings: params.runtimeSettings,
         agentId: params.agentId,
         config: params.config,
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
@@ -722,6 +703,7 @@ export async function runContextEngineMaintenance(params: {
       sessionManager: params.sessionManager,
       withSessionManagerRewriteLock: params.withSessionManagerRewriteLock,
       runtimeContext: params.runtimeContext,
+      runtimeSettings: params.runtimeSettings,
       agentId: params.agentId,
       executionMode,
       config: params.config,

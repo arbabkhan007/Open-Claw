@@ -5,6 +5,7 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -69,6 +70,9 @@ type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  taskTimeoutAbortSignal?: AbortSignal;
+  taskTimeoutAbortGraceMs?: number;
+  taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -98,6 +102,16 @@ type ActiveTaskWaiter = {
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+}
+
+function isQuietProbeLane(lane: string): boolean {
+  // setup-inference.ts retains its temp session key, so its derived session lane
+  // needs the same expected-failure treatment as the explicit probe lane.
+  return (
+    lane.startsWith("auth-probe:") ||
+    lane.startsWith("session:probe-") ||
+    lane.startsWith("session:temp:setup-inference:probe-setup-inference-")
+  );
 }
 
 /**
@@ -241,7 +255,7 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(value));
+  return clampPositiveTimerTimeoutMs(value);
 }
 
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
@@ -277,6 +291,8 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await taskPromise;
   }
 
+  const taskTimeoutAbortGraceMs =
+    normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -290,20 +306,64 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       : startedAtMs;
   };
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  let removeReleaseListener: (() => void) | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    const armTimeout = () => {
+    const rejectForTimeout = () => {
+      timedOut = true;
+      reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+    };
+    const armTimer = (delayMs: number, onTimeout: () => void) => {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (delayMs <= 0) {
+        onTimeout();
+        return;
+      }
+      timeoutHandle = setTimeout(onTimeout, delayMs);
+      timeoutHandle.unref?.();
+    };
+    const armProgressTimeout = () => {
       const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
       const remainingMs = taskTimeoutMs - elapsedMs;
       if (remainingMs <= 0) {
-        timedOut = true;
-        reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+        rejectForTimeout();
         return;
       }
-      timeoutHandle = setTimeout(armTimeout, remainingMs);
-      timeoutHandle.unref?.();
+      armTimer(remainingMs, armProgressTimeout);
     };
-    armTimeout();
+    const armAbortTimeout = () => {
+      armTimer(taskTimeoutAbortGraceMs, rejectForTimeout);
+    };
+    const abortSignal = entry.taskTimeoutAbortSignal;
+    const releaseSignal = entry.taskTimeoutReleaseSignal;
+    const onRelease = () => {
+      removeReleaseListener?.();
+      rejectForTimeout();
+    };
+    if (releaseSignal?.aborted) {
+      onRelease();
+      return;
+    }
+    if (abortSignal?.aborted) {
+      armAbortTimeout();
+      return;
+    }
+    armProgressTimeout();
+    if (abortSignal) {
+      const onAbort = () => {
+        removeAbortListener?.();
+        armAbortTimeout();
+      };
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+    }
+    if (releaseSignal) {
+      releaseSignal.addEventListener("abort", onRelease, { once: true });
+      removeReleaseListener = () => releaseSignal.removeEventListener("abort", onRelease);
+    }
   });
 
   try {
@@ -318,9 +378,11 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     }
     throw err;
   } finally {
-    if (!timedOut && timeoutHandle) {
+    if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    removeAbortListener?.();
+    removeReleaseListener?.();
   }
 }
 
@@ -371,7 +433,7 @@ function drainLane(lane: string) {
             entry.resolve(result);
           } catch (err) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+            const isProbeLane = isQuietProbeLane(lane);
             if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
@@ -412,7 +474,7 @@ export function isGatewayDraining(): boolean {
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);
-  const isProbeLane = cleaned.startsWith("auth-probe:") || cleaned.startsWith("session:probe-");
+  const isProbeLane = isQuietProbeLane(cleaned);
   const minConcurrent = isProbeLane ? 1 : 0;
   state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
   if (state.maxConcurrent > 0) {
@@ -445,18 +507,14 @@ export function enqueueCommandInLane<T>(
       activeAheadAtEnqueue: 0,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
+      taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
+      taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
+      taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);
   });
-}
-
-export function enqueueCommand<T>(
-  task: () => Promise<T>,
-  opts?: CommandQueueEnqueueOptions,
-): Promise<T> {
-  return enqueueCommandInLane(CommandLane.Main, task, opts);
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {

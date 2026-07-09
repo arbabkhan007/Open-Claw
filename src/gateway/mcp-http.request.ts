@@ -2,7 +2,10 @@
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +13,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
+import { resolveAttachGrant } from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -52,6 +56,7 @@ type McpRequestContext = {
   sessionKey: string;
   sessionId: string | undefined;
   messageProvider: string | undefined;
+  clientCaps: string[] | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
@@ -59,6 +64,7 @@ type McpRequestContext = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  taskSuggestionDeliveryMode: TaskSuggestionDeliveryMode | undefined;
   requireExplicitMessageTarget: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
@@ -78,6 +84,12 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpTaskSuggestionDeliveryMode(
+  value: string | undefined,
+): TaskSuggestionDeliveryMode | undefined {
+  return normalizeOptionalString(value) === "gateway" ? "gateway" : undefined;
 }
 
 function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
@@ -108,13 +120,32 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+function resolveMcpSender(params: {
+  req: IncomingMessage;
+  ownerToken: string;
+  nonOwnerToken: string;
+}): { senderIsOwner: boolean; boundSessionKey?: string } | undefined {
+  const authHeader = getHeader(params.req, "authorization") ?? "";
+  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  if (ownerTokenMatched || nonOwnerTokenMatched) {
+    return { senderIsOwner: ownerTokenMatched };
+  }
+  const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
+  if (grant) {
+    return { senderIsOwner: false, boundSessionKey: grant.sessionKey };
+  }
+  return undefined;
+}
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
-}): { senderIsOwner: boolean } | null {
+}): { senderIsOwner: boolean; boundSessionKey?: string } | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -142,7 +173,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (params.req.method === "GET") {
+  if (params.req.method === "GET" || params.req.method === "DELETE") {
     // Origin validation first (matches the POST path): a browser loopback request is
     // rejected before bearer auth, so the local-loopback Origin boundary holds even for
     // unauthenticated browser requests.
@@ -151,49 +182,33 @@ export function validateMcpLoopbackRequest(params: {
       params.res.end(JSON.stringify({ error: "forbidden" }));
       return null;
     }
-    const authHeader = getHeader(params.req, "authorization") ?? "";
-    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+    const sender = resolveMcpSender(params);
+    if (!sender) {
       params.res.writeHead(401, { "Content-Type": "application/json" });
       params.res.end(JSON.stringify({ error: "unauthorized" }));
       return null;
     }
-    logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
-    params.res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    params.res.flushHeaders();
-    params.res.write(":\n\n");
-    params.onSseResponse?.(params.res);
-    params.req.on("close", () => {
-      if (!params.res.writableEnded) {
-        params.res.end();
-      }
-    });
-    return null;
-  }
+    if (params.req.method === "GET") {
+      logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
+      params.res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      params.res.flushHeaders();
+      params.res.write(":\n\n");
+      params.onSseResponse?.(params.res);
+      params.req.on("close", () => {
+        if (!params.res.writableEnded) {
+          params.res.end();
+        }
+      });
+      return null;
+    }
 
-  if (params.req.method === "DELETE") {
     // Streamable HTTP session teardown. The loopback server is stateless — it owns no
     // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
     // send DELETE when closing the transport get a clean 200 rather than a 405.
-    // Origin validation first (matches the POST/GET paths), before bearer auth.
-    if (rejectsBrowserLoopbackRequest(params.req)) {
-      params.res.writeHead(403, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "forbidden" }));
-      return null;
-    }
-    const authHeader = getHeader(params.req, "authorization") ?? "";
-    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
-      params.res.writeHead(401, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "unauthorized" }));
-      return null;
-    }
     logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
     params.res.writeHead(200, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ ok: true }));
@@ -222,15 +237,12 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  const authHeader = getHeader(params.req, "authorization") ?? "";
-  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
+  const sender = resolveMcpSender(params);
+  if (!sender) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
-      hasAuthorization: authHeader.length > 0,
+      hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
     });
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
@@ -249,7 +261,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return { senderIsOwner: sender.senderIsOwner, boundSessionKey: sender.boundSessionKey };
 }
 
 export async function readMcpHttpBody(
@@ -359,16 +371,46 @@ export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefine
   return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
 }
 
+function normalizeMcpClientCapsHeader(value: string | undefined): string[] | undefined {
+  const clientCaps = [...new Set((value ?? "").split(",").map((cap) => cap.trim()))].filter(
+    Boolean,
+  );
+  return clientCaps.length > 0 ? clientCaps : undefined;
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean },
+  auth: { senderIsOwner: boolean; boundSessionKey?: string },
 ): McpRequestContext {
+  // Grant-authenticated callers get only their server-bound session; spoofable
+  // delivery/action headers stay reserved for the gateway-launched loopback client.
+  if (auth.boundSessionKey) {
+    return {
+      sessionKey: auth.boundSessionKey,
+      sessionId: undefined,
+      messageProvider: undefined,
+      clientCaps: undefined,
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      taskSuggestionDeliveryMode: undefined,
+      requireExplicitMessageTarget: undefined,
+      senderIsOwner: auth.senderIsOwner,
+    };
+  }
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    // The token-authenticated loopback client is gateway-spawned on 127.0.0.1. Caps only
+    // widen tool availability; sender ownership remains derived from the bearer token.
+    clientCaps: normalizeMcpClientCapsHeader(getHeader(req, "x-openclaw-client-caps")),
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
@@ -379,6 +421,9 @@ export function resolveMcpRequestContext(
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    taskSuggestionDeliveryMode: normalizeMcpTaskSuggestionDeliveryMode(
+      getHeader(req, "x-openclaw-task-suggestion-delivery-mode"),
     ),
     requireExplicitMessageTarget: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-require-explicit-message-target"),

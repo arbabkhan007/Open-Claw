@@ -4,17 +4,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  isUpdatePlanToolEnabledForOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
-} from "./openclaw-tools.registration.js";
+import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
-type UpdatePlanGatingParams = Parameters<typeof isUpdatePlanToolEnabledForOpenClawTools>[0];
+type UpdatePlanGatingParams = Parameters<typeof shouldIncludeUpdatePlanToolForOpenClawTools>[0];
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
 
 function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boolean): void {
-  expect(isUpdatePlanToolEnabledForOpenClawTools(params)).toBe(expected);
+  expect(shouldIncludeUpdatePlanToolForOpenClawTools(params)).toBe(expected);
 }
 
 function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
@@ -127,6 +124,31 @@ describe("openclaw-tools update_plan gating", () => {
 
     expect(defaultTools).not.toContain("transcripts");
     expect(enabledTools).toContain("transcripts");
+  });
+
+  it("registers task suggestions only for sessions with an actionable gateway sink", () => {
+    const withoutSession = createFastToolNames({
+      config: {} as OpenClawConfig,
+      cwd: "/repo",
+      taskSuggestionDeliveryMode: "gateway",
+    });
+    const withoutSink = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+    });
+    const withSink = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      cwd: "/repo",
+      taskSuggestionDeliveryMode: "gateway",
+    });
+
+    expect(withoutSession).not.toContain("spawn_task");
+    expect(withoutSession).not.toContain("dismiss_task");
+    expect(withoutSink).not.toContain("spawn_task");
+    expect(withoutSink).not.toContain("dismiss_task");
+    expect(withSink).toEqual(expect.arrayContaining(["spawn_task", "dismiss_task"]));
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {

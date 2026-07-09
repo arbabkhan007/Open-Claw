@@ -17,10 +17,12 @@ type ModelRef = {
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-8",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
-  "google/gemini-3-flash-preview",
+  "google/gemini-3.5-flash",
+  "cohere/command-a-plus-05-2026",
   "moonshot/kimi-k2.7-code",
   "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
@@ -31,7 +33,8 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-4.3",
+  "xai/grok-4.5",
+  "xai/grok-4.20-0309-reasoning",
   "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m3",
@@ -127,7 +130,7 @@ function isPreGemini3ModelId(id: string): boolean {
 
 function isMutableLatestAliasLiveModelRef(id: string): boolean {
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
-  return modelName.endsWith("-latest");
+  return /(?:^|-)latest(?:-|$)/.test(modelName);
 }
 
 function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
@@ -233,11 +236,6 @@ export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
 /** Return whether a ref belongs to the curated small-model live lane. */
 export function isSmallLiveModelRef(ref: ModelRef): boolean {
   return hasPrioritizedLiveModelRef(SMALL_LIVE_MODEL_PRIORITY_INDEX, ref);
-}
-
-/** Return whether a ref is explicitly prioritized for the small-model live lane. */
-export function isPrioritizedSmallLiveModelRef(ref: ModelRef): boolean {
-  return isSmallLiveModelRef(ref);
 }
 
 /** List high-signal priority refs in priority order. */

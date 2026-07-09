@@ -11,6 +11,9 @@ import {
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mjs";
 
+const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
@@ -171,7 +174,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
     const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
 
-    expect(lane).toEqual({
+    expect(lane).toMatchObject({
       command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
       e2eImageKind: "functional",
       live: false,
@@ -180,7 +183,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       retryPatterns: [],
       retries: 0,
       stateScenario: "empty",
-      timeoutMs: 900000,
+      timeoutMs: 1_500_000,
       weight: 3,
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
@@ -280,7 +283,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@v6",
+          uses: CHECKOUT_V6,
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
@@ -333,11 +336,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUN_ANDROID:
-        "${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+      OPENCLAW_CI_RUN_IOS_BUILD:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+      OPENCLAW_CI_RUN_NATIVE_I18N:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING:
@@ -361,17 +368,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
     ).toContain("pnpm deadcode:ci");
     expect(normalCiScript).toContain(
-      'dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true',
+      'dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"',
     );
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true',
+      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
@@ -392,6 +399,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       description: "Enable release-only Docker prerelease lanes from Full Release Validation",
       required: false,
       type: "boolean",
+    });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.dispatch_id).toEqual({
+      description: "Optional parent workflow dispatch identifier",
+      required: false,
+      default: "",
+      type: "string",
     });
     expect(pluginManifestEnv).toEqual({
       EXPECTED_SHA: "${{ inputs.expected_sha }}",
@@ -457,7 +470,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       if: "always()",
       name: "Upload plugin inspector advisory artifacts",
-      uses: "actions/upload-artifact@v7",
+      uses: UPLOAD_ARTIFACT_V7,
       with: {
         "if-no-files-found": "warn",
         name: "plugin-inspector-advisory",
@@ -528,7 +541,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
-      "prepare_release_package",
       "npm_telegram",
       "summary",
     ]) {

@@ -35,9 +35,7 @@ import {
   type SkillIndexEntry,
 } from "./skill-index.js";
 
-export type SkillStatusConfigCheck = RequirementConfigCheck;
-
-export type SkillInstallOption = {
+type SkillInstallOption = {
   id: string;
   kind: SkillInstallSpec["kind"];
   label: string;
@@ -72,7 +70,7 @@ export type SkillStatusEntry = {
   commandVisible: boolean;
   requirements: Requirements;
   missing: Requirements;
-  configChecks: SkillStatusConfigCheck[];
+  configChecks: RequirementConfigCheck[];
   install: SkillInstallOption[];
   clawhub?: ClawHubSkillStatusLink;
   skillCard?: LocalSkillCardStatus;
@@ -356,6 +354,7 @@ export function buildWorkspaceSkillStatus(
       config: opts?.config,
       managedSkillsDir,
       bundledSkillsDir: bundledContext.dir,
+      includeArchived: true,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);

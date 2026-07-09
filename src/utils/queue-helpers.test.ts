@@ -3,9 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   applyQueueDropPolicy,
   applyQueueRuntimeSettings,
-  buildQueueSummaryPrompt,
   clearQueueSummaryState,
-  drainCollectItemIfNeeded,
+  drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
@@ -85,26 +84,6 @@ describe("queue summary helpers", () => {
     });
   });
 
-  it("buildQueueSummaryPrompt clears state after rendering", () => {
-    const state = {
-      dropPolicy: "summarize" as const,
-      droppedCount: 1,
-      summaryLines: ["line"],
-    };
-
-    const prompt = buildQueueSummaryPrompt({
-      state,
-      noun: "announce",
-    });
-
-    expect(prompt).toContain("[Queue overflow] Dropped 1 announce due to cap.");
-    expect(state).toEqual({
-      dropPolicy: "summarize",
-      droppedCount: 0,
-      summaryLines: [],
-    });
-  });
-
   it("clearQueueSummaryState resets summary counters", () => {
     const state = {
       dropPolicy: "summarize" as const,
@@ -115,15 +94,30 @@ describe("queue summary helpers", () => {
     expect(state.droppedCount).toBe(0);
     expect(state.summaryLines).toStrictEqual([]);
   });
+
+  it("keeps dropped-item previews free of lone surrogates", () => {
+    const queue = {
+      items: [{ text: `${"a".repeat(158)}😀tail` }],
+      cap: 1,
+      dropPolicy: "summarize" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+
+    applyQueueDropPolicy({ queue, summarize: (item) => item.text });
+
+    expect(queue.summaryLines).toEqual([`${"a".repeat(158)}…`]);
+  });
 });
 
-describe("drainCollectItemIfNeeded", () => {
+describe("drainCollectQueueStep", () => {
   it("skips when neither force mode nor cross-channel routing is active", async () => {
     const seen: number[] = [];
     const items = [1];
+    const collectState = { forceIndividualCollect: false };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: false,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: false,
       items,
       run: async (item) => {
@@ -139,9 +133,10 @@ describe("drainCollectItemIfNeeded", () => {
   it("drains one item in force mode", async () => {
     const seen: number[] = [];
     const items = [1, 2];
+    const collectState = { forceIndividualCollect: true };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: true,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: false,
       items,
       run: async (item) => {
@@ -155,20 +150,17 @@ describe("drainCollectItemIfNeeded", () => {
   });
 
   it("switches to force mode and returns empty when cross-channel with no queued item", async () => {
-    let forced = false;
+    const collectState = { forceIndividualCollect: false };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: false,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: true,
-      setForceIndividualCollect: (next) => {
-        forced = next;
-      },
       items: [],
       run: async () => {},
     });
 
     expect(result).toBe("empty");
-    expect(forced).toBe(true);
+    expect(collectState.forceIndividualCollect).toBe(true);
   });
 });
 

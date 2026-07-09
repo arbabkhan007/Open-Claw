@@ -2,13 +2,15 @@
 // prechecks, and context-engine loop hooks for oversized tool outputs.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
+} from "./context-truncation-notice.js";
+import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
   markTranscriptPromptText,
@@ -323,6 +325,26 @@ describe("installToolResultContextGuard", () => {
     )) as AgentMessage[];
 
     expectOpenClawTruncation(getToolResultText(transformed[0]));
+  });
+
+  it("truncates UTF-16 tool results without splitting surrogate pairs", async () => {
+    // With contextWindowTokens=1000, maxSingleToolResultChars=1024 and the
+    // text budget becomes 512. The legacy cut point falls inside the emoji
+    // at index 439, which used to emit a lone high surrogate.
+    const agent = makeGuardableAgent();
+    const text = "a".repeat(439) + "😀" + "b".repeat(1_000);
+    const contextForNextCall = [makeToolResult("call_utf16", text)];
+
+    const transformed = (await applyGuardToContext(
+      agent,
+      contextForNextCall,
+      1_000,
+    )) as AgentMessage[];
+
+    expect(getToolResultText(transformed[0])).toBe(
+      "a".repeat(439) + formatContextLimitTruncationNotice(1_002),
+    );
+    expect(getToolResultText(contextForNextCall[0])).toBe(text);
   });
 
   it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
@@ -672,6 +694,29 @@ describe("installContextEngineLoopHook", () => {
         lastCacheTouchAt: 123,
       },
     });
+  });
+
+  it("passes runtimeSettings through loop-hook afterTurn and assemble calls", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const runtimeSettings = { schemaVersion: 1 } as ContextEngineRuntimeSettings;
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+      runtimeSettings,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.afterTurn).runtimeSettings).toBe(runtimeSettings);
+    expect(recordMockArg(engine.assemble).runtimeSettings).toBe(runtimeSettings);
   });
 
   it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {

@@ -68,6 +68,16 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("keeps Codex Supervisor CLI metadata in bundled build and pack entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(entries["extensions/codex-supervisor/cli-metadata"]).toBe(
+      "extensions/codex-supervisor/cli-metadata.ts",
+    );
+    expect(artifacts).toContain("dist/extensions/codex-supervisor/cli-metadata.js");
+  });
+
   it("filters bundled plugin build entries for bounded script lanes", () => {
     const entries = listBundledPluginBuildEntries({
       env: {
@@ -189,6 +199,14 @@ describe("bundled plugin build entries", () => {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
+  });
+
+  it("keeps Cohere bundled through the externalization transition", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).toContain("dist/extensions/cohere/index.js");
+    expect(artifacts).toContain("dist/extensions/cohere/openclaw.plugin.json");
+    expect(artifacts).toContain("dist/extensions/cohere/package.json");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

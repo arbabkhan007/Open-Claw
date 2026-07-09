@@ -14,6 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { responseWithRelease } from "../response-with-release.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -212,11 +213,17 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  // RFC 2045 makes the media type case-insensitive, but parameter values may
+  // remain case-sensitive, so normalize only the type before the first `;`.
+  const parameterIndex = trimmed.indexOf(";");
+  if (parameterIndex === -1) {
+    return trimmed.toLowerCase();
+  }
+  return `${trimmed.slice(0, parameterIndex).trim().toLowerCase()}${trimmed.slice(parameterIndex)}`;
 }
 
 export function inferPlaceholder(params: {
@@ -576,52 +583,6 @@ export async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
-
-function responseWithRelease(response: Response, release: () => Promise<void>): Response {
-  let released = false;
-  const releaseOnce = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release();
-  };
-
-  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void releaseOnce();
-    return response;
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) {
-          controller.close();
-          await releaseOnce();
-          return;
-        }
-        controller.enqueue(next.value);
-      } catch (err) {
-        await releaseOnce();
-        throw err;
-      }
-    },
-    async cancel(reason) {
-      void reader.cancel(reason).catch(() => {});
-      await releaseOnce();
-    },
-  });
-
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
  * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).

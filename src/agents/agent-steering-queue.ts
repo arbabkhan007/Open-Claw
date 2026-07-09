@@ -1,4 +1,5 @@
 /** Leases and formats completed subagent results for injection into requester turns. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import type {
   PendingFinalDeliveryPayload,
@@ -15,14 +16,14 @@ const MAX_RESULT_CHARS_PER_ITEM = 6_000;
 const MAX_METADATA_CHARS = 500;
 
 /** Pending subagent completion selected for requester-session steering. */
-export type AgentSteeringQueueItem = {
+type AgentSteeringQueueItem = {
   runId: string;
   entry: SubagentRunRecord;
   payload: PendingFinalDeliveryPayload;
 };
 
 /** A batch of leased subagent completions plus the prompt to inject upstream. */
-export type LeasedAgentSteeringBatch = {
+type LeasedAgentSteeringBatch = {
   runIds: string[];
   prompt: string;
 };
@@ -58,7 +59,9 @@ function describeOutcome(payload: PendingFinalDeliveryPayload): string {
 
 function promptLiteral(value: string): string {
   const literal = sanitizeForPromptLiteral(value).trim();
-  return literal.length > MAX_METADATA_CHARS ? literal.slice(0, MAX_METADATA_CHARS) : literal;
+  return literal.length > MAX_METADATA_CHARS
+    ? truncateUtf16Safe(literal, MAX_METADATA_CHARS)
+    : literal;
 }
 
 function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQueueItem): number {
@@ -170,9 +173,6 @@ function selectPromptBoundedItems(
   return selected;
 }
 
-/**
- * Lease pending steering items and mark them in-progress before prompt injection.
- */
 /** Leases pending steering items and returns the prompt to prepend to the requester turn. */
 export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -210,7 +210,6 @@ export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   };
 }
 
-/** Acknowledge successfully injected leased steering items. */
 /** Marks leased steering items delivered after successful requester injection. */
 export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -240,7 +239,6 @@ export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
   return updated;
 }
 
-/** Release leased steering items after a failed requester turn or injection path. */
 /** Releases leased steering items when requester injection fails or is abandoned. */
 export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;

@@ -10,6 +10,7 @@
     "providers": {
       "xai": {
         "aliases": {
+          "grok-build-latest": "grok-4.5",
           "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
           "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
           "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
@@ -31,6 +32,45 @@
       }
     }
   },
+  "modelCatalog": {
+    "suppressions": [
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-0304",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      }
+    ]
+  },
   "syntheticAuthRefs": ["xai"],
   "setup": {
     "providers": [
@@ -45,10 +85,11 @@
       "provider": "xai",
       "method": "api-key",
       "choiceId": "xai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or browser OAuth",
+      "groupHint": "API key or OAuth",
       "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
@@ -60,10 +101,10 @@
       "method": "oauth",
       "choiceId": "xai-oauth",
       "choiceLabel": "xAI OAuth",
-      "choiceHint": "Browser sign-in for eligible xAI accounts",
+      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or browser OAuth",
+      "groupHint": "API key or OAuth",
       "onboardingFeatured": true
     },
     {
@@ -71,11 +112,11 @@
       "method": "device-code",
       "choiceId": "xai-device-code",
       "choiceLabel": "xAI device code",
-      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
+      "choiceHint": "Compatibility alias for xAI OAuth device-code sign-in",
+      "assistantVisibility": "manual-only",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or browser OAuth",
-      "onboardingFeatured": true
+      "groupHint": "API key or OAuth"
     }
   ],
   "uiHints": {

@@ -17,12 +17,14 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
+import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
   openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
+  "meta-model-api": ["MODEL_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
   "qwen-dashscope": ["DASHSCOPE_API_KEY"],
 } as const;
@@ -94,27 +96,6 @@ function shouldUsePluginProviderAuthEvidence(
   // Auth evidence can point at local credential files, so workspace plugins must be explicitly
   // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
-}
-
-function appendUniqueEnvVarCandidates(
-  target: Record<string, string[]>,
-  providerId: string,
-  keys: readonly string[],
-) {
-  const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || keys.length === 0) {
-    return;
-  }
-  const bucket = (target[normalizedProviderId] ??= []);
-  const seen = new Set(bucket);
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || seen.has(normalizedKey)) {
-      continue;
-    }
-    seen.add(normalizedKey);
-    bucket.push(normalizedKey);
-  }
 }
 
 function appendUniqueAuthEvidence(
@@ -202,6 +183,17 @@ function resolveManifestProviderAuthEnvVarCandidates(
     metadataSnapshot: snapshot,
   });
   return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
+}
+
+function resolveManifestProviderUsageAuthEnvVarNames(
+  params?: ProviderEnvVarLookupParams,
+): string[] {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  return uniqueStrings(
+    snapshot.plugins
+      .filter((plugin) => shouldUsePluginProviderEnvVars(plugin, params))
+      .flatMap((plugin) => Object.values(plugin.providerUsageAuthEnvVars ?? {}).flat()),
+  );
 }
 
 function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
@@ -354,7 +346,7 @@ export function resolveProviderAuthLookupMaps(
 }
 
 /** Resolves env vars used by setup, default SecretRefs, and broad secret scrubbing. */
-export function resolveProviderEnvVars(
+function resolveProviderEnvVars(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
   return {
@@ -457,12 +449,16 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
   return uniqueStrings([
     ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
     ...Object.values(resolveProviderEnvVars(params)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
   ]);
 }
 
 /** Lists env vars that may contain provider secrets for broad scrubbing. */
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
+  return uniqueStrings([
+    ...Object.values(resolveProviderEnvVars(params)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
+  ]);
 }
 
 /** Returns a copy of an env object with denied keys removed case-insensitively. */

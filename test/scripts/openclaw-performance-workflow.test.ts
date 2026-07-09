@@ -7,6 +7,7 @@ const WORKFLOW = ".github/workflows/openclaw-performance.yml";
 
 type WorkflowStep = {
   name?: string;
+  id?: string;
   if?: string;
   run?: string;
   env?: Record<string, string>;
@@ -33,6 +34,40 @@ function findStep(name: string): WorkflowStep {
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("uses an optional dispatch identifier to name parent-owned runs", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+
+    expect(workflow).toContain(
+      "run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}",
+    );
+    expect(workflow).toContain("dispatch_id:");
+    expect(workflow).toContain("Optional parent workflow dispatch identifier");
+  });
+
+  it("pins the Kova evaluator that reads agent payloads", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const kovaRef = "4f146016583018bad9e24f8e64a6af5f963bb7ee";
+
+    expect(workflow).toContain(`default: ${kovaRef}`);
+    expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+  });
+
+  it("resolves dispatch target refs before checkout", () => {
+    const resolveTarget = findStep("Resolve OpenClaw target ref");
+    const checkout = findStep("Checkout OpenClaw");
+
+    expect(resolveTarget.id).toBe("target");
+    expect(resolveTarget.if).toBe("steps.lane.outputs.run == 'true'");
+    expect(resolveTarget.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(resolveTarget.env?.TARGET_REF_INPUT).toBe("${{ inputs.target_ref }}");
+    expect(resolveTarget.run).toContain("encodeURIComponent");
+    expect(resolveTarget.run).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}"',
+    );
+    expect(resolveTarget.run).toContain("checkout_ref=${resolved_sha}");
+    expect(checkout.with?.ref).toBe("${{ steps.target.outputs.checkout_ref }}");
+  });
+
   it("uses the clawgrit reports token for every report repo push path", () => {
     const prepare = findStep("Prepare clawgrit reports checkout");
     const publish = findStep("Publish to clawgrit reports");
@@ -67,6 +102,24 @@ describe("OpenClaw performance workflow", () => {
       'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+    expect(runKova.run).toContain(
+      "profiling-affected resource thresholds with no baseline regression",
+    );
+  });
+
+  it("installs local workspace packages beside the OCM root tarball", () => {
+    const configure = findStep("Configure OCM local workspace dependencies");
+
+    expect(configure.run).toContain(
+      'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
+    );
+    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_wrapper");
+    expect(configure.run).toContain(
+      'if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then',
+    );
+    expect(configure.run).toContain(
+      "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs",
+    );
   });
 
   it("fails selected live Kova lanes when live auth is missing", () => {

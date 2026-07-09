@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -143,8 +144,17 @@ describe("getSubagentDepthFromSessionStore", () => {
 
 describe("resolveAgentTimeoutMs", () => {
   it("defaults to 48 hours when config does not override the timeout", () => {
-    expect(resolveAgentTimeoutSeconds()).toBe(48 * 60 * 60);
     expect(resolveAgentTimeoutMs({})).toBe(48 * 60 * 60 * 1000);
+  });
+
+  it.each([
+    ["unlimited", 0, MAX_TIMER_TIMEOUT_MS],
+    ["finite", 30, 30_000],
+    ["negative", -1, 1_000],
+    ["NaN", Number.NaN, 48 * 60 * 60 * 1000],
+  ])("resolves config timeoutSeconds %s", (_label, timeoutSeconds, expected) => {
+    const cfg = { agents: { defaults: { timeoutSeconds } } } as OpenClawConfig;
+    expect(resolveAgentTimeoutMs({ cfg })).toBe(expected);
   });
 
   it("uses a timer-safe sentinel for no-timeout overrides", () => {

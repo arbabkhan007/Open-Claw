@@ -9,8 +9,15 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import { toErrorObject } from "../infra/errors.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  forceKillChildProcessTree,
+  signalChildProcessTree,
+  shouldDetachChildForProcessTree,
+} from "../process/child-process-tree.js";
+import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
@@ -216,13 +223,20 @@ async function probeHealth(
   signal?: AbortSignal | null,
 ): Promise<boolean> {
   throwIfAborted(signal);
+  // Local-service orchestration retains sentinel headers across retries. Only
+  // the actual health request may materialize credentials.
+  const egressHeaders = unwrapHeadersInitSentinelsForProviderEgress(
+    headers,
+    "to probe local model provider health",
+  );
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_PROBE_TIMEOUT_MS);
   timeout.unref?.();
   const onAbort = () => controller.abort(toAbortError(signal));
   signal?.addEventListener("abort", onAbort, { once: true });
+  let response: Response | undefined;
   try {
-    const response = await fetch(url, { headers, signal: controller.signal });
+    response = await fetch(url, { headers: egressHeaders, signal: controller.signal });
     return response.ok;
   } catch {
     if (signal?.aborted) {
@@ -232,6 +246,7 @@ async function probeHealth(
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
 }
 
@@ -257,6 +272,7 @@ async function startAndWaitForLocalService(params: {
     cwd: service.cwd,
     env: service.env ? { ...process.env, ...service.env } : process.env,
     stdio: "ignore",
+    detached: shouldDetachChildForProcessTree(),
   });
   const child = managed.process;
   managed.lastExit = undefined;
@@ -343,7 +359,7 @@ function stopManagedService(key: string, managed: ManagedLocalService, reason: s
   services.delete(key);
   if (child && !hasLocalServiceProcessExited(child)) {
     log.info(`stopping local model service: reason=${reason}`);
-    child.kill("SIGTERM");
+    signalChildProcessTree(child, "SIGTERM");
   }
 }
 
@@ -357,10 +373,10 @@ async function stopManagedProcessForRestart(
   if (!child || hasLocalServiceProcessExited(child)) {
     return;
   }
-  child.kill("SIGTERM");
+  signalChildProcessTree(child, "SIGTERM");
   await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
   if (!hasLocalServiceProcessExited(child)) {
-    child.kill("SIGKILL");
+    forceKillChildProcessTree(child);
     await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
   }
 }
@@ -422,7 +438,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
       },
       (error: unknown) => {
         cleanup();
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -514,18 +530,4 @@ export function hasLocalServiceProcessExited(
   child: Pick<ChildProcess, "exitCode" | "signalCode">,
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

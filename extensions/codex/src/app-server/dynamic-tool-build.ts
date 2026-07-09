@@ -76,6 +76,7 @@ export type DynamicToolBuildParams = {
   pluginConfig: CodexPluginConfig;
   profilerEnabled?: boolean;
   forceHeartbeatTool?: boolean;
+  ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
   onYieldDetected: () => void;
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
@@ -203,6 +204,9 @@ export function formatCodexDynamicToolBuildStageSummary(
 /** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
+  const messagePolicyParams = input.ignoreDisableMessageTool
+    ? { ...params, disableMessageTool: false }
+    : params;
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
     return [];
@@ -227,6 +231,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
+    ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
@@ -237,6 +242,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     sandbox: input.sandbox,
     messageProvider: resolveCodexMessageToolProvider(params),
     toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
+    // Capability-gated tools (requiredClientCaps) need the originating client's
+    // declared caps in this sibling harness too, not only the embedded runner.
+    clientCaps: params.clientCaps,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
@@ -248,11 +256,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
+    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     agentDir,
     cwd: input.effectiveCwd ?? input.effectiveWorkspace,
     workspaceDir: input.effectiveWorkspace,
@@ -295,8 +305,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    disableMessageTool: params.disableMessageTool,
-    forceMessageTool: shouldForceMessageTool(params),
+    disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
+    forceMessageTool: shouldForceMessageTool(messagePolicyParams),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     onYield: (message) => {
@@ -375,7 +385,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         transientWebSearchRestriction &&
         webSearchPolicy.persistentAllowed),
   );
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
@@ -581,12 +591,59 @@ export function resolveCodexSandboxEnvironmentSelection(
 /** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {
   effectiveCwd: string;
+  localWorkspaceRoot: string;
   environment?: CodexSandboxExecEnvironment;
   nativeToolSurfaceEnabled: boolean;
+  remoteWorkspaceRoot?: string;
 }): string {
-  return params.environment && params.nativeToolSurfaceEnabled
-    ? params.environment.cwd
-    : params.effectiveCwd;
+  const cwd =
+    params.environment && params.nativeToolSurfaceEnabled
+      ? params.environment.cwd
+      : params.effectiveCwd;
+  return mapCodexAppServerRemoteWorkspacePath({
+    value: cwd,
+    localWorkspaceRoot: params.localWorkspaceRoot,
+    remoteWorkspaceRoot: params.remoteWorkspaceRoot,
+  });
+}
+
+/** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
+export function mapCodexAppServerRemoteWorkspacePath(params: {
+  value: string;
+  localWorkspaceRoot: string;
+  remoteWorkspaceRoot?: string;
+}): string {
+  if (!params.remoteWorkspaceRoot) {
+    return params.value;
+  }
+  const localRoot = normalizeRemoteWorkspaceMatchPath(params.localWorkspaceRoot);
+  const remoteRoot = normalizeRemoteWorkspaceMatchPath(params.remoteWorkspaceRoot);
+  const normalizedValue = normalizeRemoteWorkspaceMatchPath(params.value);
+  if (!localRoot || !remoteRoot) {
+    throw new Error("Codex remoteWorkspaceRoot requires non-empty workspace roots.");
+  }
+  if (normalizedValue === localRoot) {
+    return remoteRoot;
+  }
+  const prefix = `${localRoot}/`;
+  if (!normalizedValue.startsWith(prefix)) {
+    throw new Error(
+      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
+    );
+  }
+  return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));
+}
+
+function normalizeRemoteWorkspaceMatchPath(value: string): string {
+  return trimTrailingPathSeparator(value.replace(/\\/gu, "/"));
+}
+
+function trimTrailingPathSeparator(value: string): string {
+  return value.length > 1 ? value.replace(/[\\/]+$/u, "") : value;
+}
+
+function joinRemoteWorkspacePath(remoteRoot: string, suffix: string): string {
+  return remoteRoot === "/" ? `/${suffix}` : `${remoteRoot}/${suffix}`;
 }
 
 /** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */
@@ -609,7 +666,7 @@ function codexNetworkAccessForOpenClawSandbox(
   return Boolean(network && network !== "none");
 }
 
-/** Returns a Codex config copy with app-server Codex plugin loading disabled for thread tools. */
+/** Returns a Codex config copy with all app exposure disabled for restricted thread tools. */
 export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
   const config = readCodexPluginConfig(pluginConfig);
   return {
