@@ -130,6 +130,7 @@ export async function executeNodeHostCommand(
     nodeAsk,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    requiresOpenClawLifecycleApproval,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
@@ -154,10 +155,16 @@ export async function executeNodeHostCommand(
       durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
-    requiresSecurityAuditSuppressionApproval;
+    requiresSecurityAuditSuppressionApproval ||
+    requiresOpenClawLifecycleApproval;
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
+    );
+  }
+  if (requiresOpenClawLifecycleApproval) {
+    params.warnings.push(
+      "Warning: OpenClaw lifecycle commands require explicit approval unless exec is running in yolo mode.",
     );
   }
   const registerNodeApproval = async (
@@ -208,13 +215,15 @@ export async function executeNodeHostCommand(
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresSecurityAuditSuppressionApproval;
+      requiresSecurityAuditSuppressionApproval ||
+      requiresOpenClawLifecycleApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
-      !requiresSecurityAuditSuppressionApproval
+      !requiresSecurityAuditSuppressionApproval &&
+      !requiresOpenClawLifecycleApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({
