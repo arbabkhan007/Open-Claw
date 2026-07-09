@@ -44,6 +44,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "agents.list[].tts.providers.*.apiKey",
   "agents.list[].tts.personas.*.providers.*.apiKey",
   "messages.tts.providers.*.apiKey",
+  "messages.tts.personas.*.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
   "tools.web.fetch.firecrawl.apiKey",

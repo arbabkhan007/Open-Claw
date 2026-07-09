@@ -1156,6 +1156,8 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.list[].tts.providers.*.apiKey")).toBe(true);
     expect(ids.has("agents.list[].tts.personas.*.providers.*.apiKey")).toBe(true);
+    expect(ids.has("messages.tts.providers.*.apiKey")).toBe(true);
+    expect(ids.has("messages.tts.personas.*.providers.*.apiKey")).toBe(true);
   });
 
   it("keeps account-scoped allowedPaths as an empty set when scoped target paths are absent", () => {
