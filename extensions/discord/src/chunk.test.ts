@@ -204,4 +204,39 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });
+
+  it("does not prepend italics reopen before a fenced code chunk", () => {
+    const body = [
+      ...Array.from({ length: 9 }, (_, i) => `${i + 1}. line`),
+      "```python",
+      "print(1)",
+      "```",
+    ].join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const second = chunks[1].trimStart();
+    expect(second.startsWith("```")).toBe(true);
+    expect(second.startsWith("_```")).toBe(false);
+    expect(second).toContain("```python");
+  });
+
+  it("does not prepend italics reopen before an inline code chunk", () => {
+    const body = [
+      ...Array.from({ length: 9 }, (_, i) => `${i + 1}. line`),
+      "`inline_code_token`",
+      "10. after",
+    ].join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const second = chunks[1].trimStart();
+    expect(second.startsWith("`")).toBe(true);
+    expect(second.startsWith("_`")).toBe(false);
+    expect(second).toContain("`inline_code_token`");
+  });
 });

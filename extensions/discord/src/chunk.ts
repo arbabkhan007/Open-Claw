@@ -318,11 +318,13 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     }
 
     // Re-open italics on the next chunk if needed.
+    // Skip backtick-starting bodies: prepending `_` would break fenced and
+    // inline code (`_``` / `_`code`). One backtick check covers both.
     const next = adjusted[i + 1];
     const leadingWhitespaceLen = next.length - next.trimStart().length;
     const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
     const nextBody = next.slice(leadingWhitespaceLen);
-    if (!nextBody.startsWith("_")) {
+    if (!nextBody.startsWith("_") && !nextBody.startsWith("`")) {
       adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
     }
   }
