@@ -17,6 +17,8 @@ export type BlockReplyPipeline = {
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
+  didObserveBlockReply: () => boolean;
+  didStreamSubstantiveReply: () => boolean;
   /** True only after a final-answer lane payload is sent. */
   didStreamTerminalReply?: () => boolean;
   isAborted: () => boolean;
@@ -127,6 +129,8 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
+  let didObserveBlockReply = false;
+  let didStreamSubstantiveReply = false;
   let didStreamTerminalReply = false;
   let didLogTimeout = false;
 
@@ -181,6 +185,7 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         const isStatusNotice = isReplyPayloadStatusNotice(payload);
+        didObserveBlockReply = true;
         if (!isStatusNotice) {
           sentContentKeys.add(contentKey);
         }
@@ -196,6 +201,7 @@ export function createBlockReplyPipeline(params: {
         }
         if (!isStatusNotice) {
           didStream = true;
+          didStreamSubstantiveReply = true;
           if (
             payload.isReasoning !== true &&
             payload.isCommentary !== true &&
@@ -334,6 +340,8 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
+    didObserveBlockReply: () => didObserveBlockReply,
+    didStreamSubstantiveReply: () => didStreamSubstantiveReply,
     didStreamTerminalReply: () => didStreamTerminalReply,
     isAborted: () => aborted,
     hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),

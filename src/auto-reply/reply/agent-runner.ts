@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -10,6 +11,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -64,13 +66,14 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmptyInteractiveReplyPayload,
@@ -242,6 +245,150 @@ function resolveReplyRunDeliveryContext(params: {
       entry: params.sessionEntry,
     }),
     threadId,
+  });
+}
+
+const DISCORD_MESSAGE_TOOL_ONLY_DELIVERY_GUARD_TEXT =
+  "⚠️ Discord delivery guard: I couldn't confirm a visible Discord reply for this turn after work was performed. " +
+  "Please retry or ask for the result again if the expected answer is missing.";
+
+function isDirectlyAddressedMessageToolOnlyTurn(sessionCtx: TemplateContext): boolean {
+  const chatType = normalizeOptionalString(sessionCtx.ChatType)?.toLowerCase();
+  return chatType === "direct" || chatType === "dm" || sessionCtx.WasMentioned === true;
+}
+
+function hasMessageToolOnlySubstantiveFinalPayload(payloads: ReplyPayload[]): boolean {
+  return payloads.some((payload) => {
+    if (!isMessageToolOnlyGuardDeliverablePayload(payload)) {
+      return false;
+    }
+    const text = normalizeOptionalString(payload.text);
+    return !text || !isSilentReplyText(text, SILENT_REPLY_TOKEN);
+  });
+}
+
+function isDiscordMessageToolOnlyReplyGuardCandidate(params: {
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  isHeartbeat: boolean;
+  hasVisibleReplyEvidence: boolean;
+  hasPotentialResponseActivity: boolean;
+  hasSubstantiveFinalPayload: boolean;
+}): boolean {
+  if (
+    params.isHeartbeat ||
+    params.hasVisibleReplyEvidence ||
+    params.followupRun.currentInboundEventKind === "room_event" ||
+    params.followupRun.run.silentExpected === true
+  ) {
+    return false;
+  }
+  const channelHints = [
+    params.sessionCtx.OriginatingChannel,
+    params.sessionCtx.Surface,
+    params.sessionCtx.Provider,
+    params.followupRun.originatingChannel,
+    params.followupRun.run.messageProvider,
+  ];
+  if (!channelHints.some((hint) => normalizeOptionalString(hint)?.toLowerCase() === "discord")) {
+    return false;
+  }
+  if (params.followupRun.run.sourceReplyDeliveryMode !== "message_tool_only") {
+    return params.hasPotentialResponseActivity && !params.hasSubstantiveFinalPayload;
+  }
+  if (params.followupRun.run.allowEmptyAssistantReplyAsSilent !== true) {
+    return true;
+  }
+  if (isDirectlyAddressedMessageToolOnlyTurn(params.sessionCtx)) {
+    return true;
+  }
+  return params.hasPotentialResponseActivity || params.hasSubstantiveFinalPayload;
+}
+
+function buildDiscordMessageToolOnlyDeliveryGuardPayload(): ReplyPayload {
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: DISCORD_MESSAGE_TOOL_ONLY_DELIVERY_GUARD_TEXT,
+    isError: true,
+  });
+}
+
+function isMessageToolOnlyGuardDeliverablePayload(payload: ReplyPayload): boolean {
+  if (!hasOutboundReplyContent(payload, { trimText: true })) {
+    return false;
+  }
+  if (
+    payload.isError ||
+    payload.isCompactionNotice ||
+    payload.isFallbackNotice ||
+    payload.isReasoning
+  ) {
+    return false;
+  }
+  const metadata = getReplyPayloadMetadata(payload);
+  return metadata?.beforeAgentRunBlocked !== true;
+}
+
+function ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery(
+  payloads: ReplyPayload[],
+): ReplyPayload[] {
+  const sourceDeliveryPayloads = payloads.filter(
+    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+  );
+  if (sourceDeliveryPayloads.length > 0) {
+    return sourceDeliveryPayloads;
+  }
+  return [buildDiscordMessageToolOnlyDeliveryGuardPayload()];
+}
+
+function hasNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function hasCommittedMessagingTargetVisibleReplyEvidenceForCurrentSource(params: {
+  messageProvider?: string;
+  originatingTo?: string;
+  originatingThreadId?: string;
+  accountId?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+}): boolean {
+  const provider = normalizeOptionalString(params.messageProvider)?.toLowerCase();
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const originatingThreadId = normalizeOptionalString(params.originatingThreadId);
+  const originAccount = normalizeOptionalString(params.accountId)?.toLowerCase();
+  if (!provider || !originatingTo || !Array.isArray(params.messagingToolSentTargets)) {
+    return false;
+  }
+  return params.messagingToolSentTargets.some((target) => {
+    const targetProviderRaw = normalizeOptionalString(target?.provider)?.toLowerCase();
+    const targetProvider =
+      !targetProviderRaw || targetProviderRaw === "message" ? provider : targetProviderRaw;
+    const targetTo = normalizeOptionalString(target?.to);
+    if (targetProvider !== provider || targetTo !== originatingTo) {
+      return false;
+    }
+    const targetAccount = normalizeOptionalString(target.accountId)?.toLowerCase();
+    if (originAccount && targetAccount && originAccount !== targetAccount) {
+      return false;
+    }
+    const targetThreadId = normalizeOptionalString(target.threadId);
+    if (originatingThreadId) {
+      if (target.threadSuppressed === true) {
+        return false;
+      }
+      if (targetThreadId) {
+        if (targetThreadId !== originatingThreadId) {
+          return false;
+        }
+      } else if (target.threadImplicit !== true) {
+        return false;
+      }
+    } else if (targetThreadId || target.threadImplicit === true) {
+      return false;
+    }
+    return (
+      (typeof target.text === "string" && target.text.trim().length > 0) ||
+      hasNonEmptyStringArray(target.mediaUrls)
+    );
   });
 }
 
@@ -1982,6 +2129,63 @@ export async function runReplyAgent(params: {
       committedMessagingToolSourceReplyDelivery ||
       hasVisibleOutboundDeliveryEvidence(runResult) ||
       runResult.didSendDeterministicApprovalPrompt === true;
+    const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
+    const hasVisibleBlockProgress = Boolean(
+      blockReplyPipeline?.didObserveBlockReply() && !blockReplyPipeline.isAborted(),
+    );
+    const hasSubstantiveBlockReply = Boolean(
+      blockReplyPipeline?.didStreamSubstantiveReply() && !blockReplyPipeline.isAborted(),
+    );
+    const hasDirectBlockProgress = (directlySentBlockKeys?.size ?? 0) > 0;
+    const hasSubstantiveDirectBlockReply = Boolean(
+      directlySentBlockPayloads?.some(
+        (payload) =>
+          !isReplyPayloadStatusNotice(payload) &&
+          payload.isReasoning !== true &&
+          payload.isCommentary !== true &&
+          normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
+      ),
+    );
+    const hasRunToolActivity = (runResult.meta?.toolSummary?.calls ?? 0) > 0;
+    const hasMessageToolOnlyResponseActivity =
+      successfulSideEffectDelivery ||
+      hasRunToolActivity ||
+      hasVisibleBlockProgress ||
+      hasDirectBlockProgress;
+    const originMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Surface ?? sessionCtx.Provider ?? followupRun.run.messageProvider,
+    });
+    const originMessageTo = resolveOriginMessageTo({
+      originatingTo: sessionCtx.OriginatingTo,
+      to: sessionCtx.To,
+    });
+    const originMessageThreadId = normalizeOptionalString(
+      resolveRoutedDeliveryThreadId({ ctx: sessionCtx, sessionKey }),
+    );
+    const hasMessageToolOnlyCurrentSourceVisibleReplyEvidence =
+      committedMessagingToolSourceReplyDelivery ||
+      hasCommittedMessagingTargetVisibleReplyEvidenceForCurrentSource({
+        messageProvider: originMessageProvider,
+        originatingTo: originMessageTo,
+        originatingThreadId: originMessageThreadId,
+        accountId: sessionCtx.AccountId,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+      }) ||
+      runResult.didSendDeterministicApprovalPrompt === true;
+    const shouldApplyDiscordMessageToolOnlyDeliveryGuard =
+      !isHookBlockedRun &&
+      isDiscordMessageToolOnlyReplyGuardCandidate({
+        followupRun,
+        sessionCtx,
+        isHeartbeat,
+        hasVisibleReplyEvidence:
+          hasMessageToolOnlyCurrentSourceVisibleReplyEvidence ||
+          hasSubstantiveBlockReply ||
+          hasSubstantiveDirectBlockReply,
+        hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
+        hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
+      });
     // Compaction notices are progress, not a terminal reply. Dispatcher-backed
     // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(
@@ -2097,6 +2301,25 @@ export async function runReplyAgent(params: {
       );
       return returnPreparedFallbackPayload(silentFallbackFailurePayload);
     };
+    const returnDiscordMessageToolOnlyDeliveryGuardIfNeeded = async (): Promise<
+      ReplyPayload | undefined
+    > => {
+      if (!shouldApplyDiscordMessageToolOnlyDeliveryGuard) {
+        return undefined;
+      }
+      const guardPayload = buildDiscordMessageToolOnlyDeliveryGuardPayload();
+      logVerbose(
+        "discord message_tool_only delivery guard: synthesized visible guard payload after no committed visible reply evidence",
+      );
+      replyOperation.fail(
+        "run_failed",
+        new Error(
+          "Discord message_tool_only turn completed without successful visible message.send or deliverable final payload",
+        ),
+      );
+      await signalTypingIfNeeded([guardPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(guardPayload);
+    };
     const fallbackNoticePayloads: ReplyPayload[] = [];
     if (
       !fallbackExhausted &&
@@ -2178,6 +2401,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const deliveryGuardPayload = await returnDiscordMessageToolOnlyDeliveryGuardIfNeeded();
+      if (deliveryGuardPayload) {
+        return deliveryGuardPayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2221,6 +2448,13 @@ export async function runReplyAgent(params: {
         );
       }
     }
+    if (shouldApplyDiscordMessageToolOnlyDeliveryGuard) {
+      const guardPayloadResult = await buildFinalPayloads(
+        ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery(replyPayloads),
+      );
+      replyPayloads = guardPayloadResult.replyPayloads;
+      didLogHeartbeatStrip = guardPayloadResult.didLogHeartbeatStrip;
+    }
 
     const hasVisibleReplyPayload = replyPayloads.some(
       (payload) =>
@@ -2241,6 +2475,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const deliveryGuardPayload = await returnDiscordMessageToolOnlyDeliveryGuardIfNeeded();
+      if (deliveryGuardPayload) {
+        return deliveryGuardPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2415,7 +2653,6 @@ export async function runReplyAgent(params: {
       }
     }
     const prefixPayloads = [...prefixNotices];
-    const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const rawUserText = isHookBlockedRun
       ? runResult.meta?.finalPromptText
       : (runResult.meta?.finalPromptText ??
