@@ -427,7 +427,10 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     messages: AgentMessage[];
+    /** Budget available for the assembled messages. The runtime has already subtracted its compaction reserve (when it holds one) and the rendered system/user prompt pressure from the context window. */
     tokenBudget?: number;
+    /** Best-effort token estimate of `messages` alone, from the runtime's transcript estimator. Remaining headroom for any `systemPromptAddition` is `tokenBudget - currentTokenCount`. Omitted on runtimes that predate the field. */
+    currentTokenCount?: number;
     /** Tool names available for this run so engines can align prompt guidance with runtime tool access. */
     availableTools?: Set<string>;
     /** Active memory citation mode when engines want to mirror memory prompt guidance. */

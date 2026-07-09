@@ -432,7 +432,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     >[0];
     expect(assembleParams.sessionId).toBe("session-1");
     expect(assembleParams.sessionKey).toBe("agent:main:session-1");
-    expect(assembleParams.tokenBudget).toBe(321);
+    // The harness passes the message budget: contextTokenBudget (321) minus the
+    // rendered developer-instructions/prompt pressure, with no reserve on the
+    // codex path (native compaction).
+    expect(typeof assembleParams.tokenBudget).toBe("number");
+    expect(assembleParams.tokenBudget as number).toBeGreaterThan(0);
+    expect(assembleParams.tokenBudget as number).toBeLessThan(321);
     expect(assembleParams.citationsMode).toBe("on");
     expect(assembleParams.model).toBe("gpt-5.4-codex");
     expect(assembleParams.runtimeSettings).toMatchObject({
@@ -449,6 +454,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.prompt).toBe("hello");
     expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
     expect(assembleParams.availableTools).toEqual(new Set());
+    // Codex harness must thread a pre-assembly token estimate so engines can
+    // bound systemPromptAddition against tokenBudget on this path too.
+    expect(typeof assembleParams.currentTokenCount).toBe("number");
+    expect(assembleParams.currentTokenCount).toBeGreaterThan(0);
 
     const threadStartParams = requireRequestParams(harness, "thread/start");
     expect(optionalString(threadStartParams.developerInstructions)).toContain(
