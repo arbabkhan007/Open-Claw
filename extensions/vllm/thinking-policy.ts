@@ -52,7 +52,7 @@ function isVllmNemotronThinkingModel(modelId: string): boolean {
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderThinkingProfile | null {
-  if (normalizeProviderId(ctx.provider) !== "vllm" && normalizeProviderId(ctx.provider) !== "bailian") {
+  if (normalizeProviderId(ctx.provider) !== "vllm") {
     return null;
   }
   if (ctx.reasoning === false) {
