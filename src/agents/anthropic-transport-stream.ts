@@ -63,6 +63,7 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
+import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
@@ -340,7 +341,7 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(content: readonly unknown[]) {
+async function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages = content.some(isImageWithMediaPayload);
@@ -368,12 +369,22 @@ function convertContentBlocks(content: readonly unknown[]) {
     if (!isImageWithMediaPayload(record)) {
       continue;
     }
+    const [normalizedImage] = await normalizeAnthropicInlineContentBlocks([
+      {
+        type: "image" as const,
+        data: typeof record.data === "string" ? record.data : "",
+        mimeType: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+      },
+    ]);
+    if (normalizedImage?.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64",
-        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        data: record.data,
+        media_type: normalizedImage.mimeType,
+        data: normalizedImage.data,
       },
     });
   }
@@ -387,7 +398,7 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertAnthropicMessages(
+async function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
@@ -396,7 +407,7 @@ function convertAnthropicMessages(
     cacheBreakpointOptOutMessageIndexes: Set<number>;
     replayThinkingEnabled?: boolean;
   },
-): Array<Record<string, unknown>> {
+): Promise<Array<Record<string, unknown>>> {
   const params: Array<Record<string, unknown>> = [];
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -424,13 +435,16 @@ function convertAnthropicMessages(
         }
         continue;
       }
+      const normalizedContent = model.input.includes("image")
+        ? await normalizeAnthropicInlineContentBlocks(msg.content)
+        : msg.content;
       const blocks: Array<
         | { type: "text"; text: string }
         | {
             type: "image";
             source: { type: "base64"; media_type: string; data: string };
           }
-      > = msg.content.map((item) =>
+      > = normalizedContent.map((item) =>
         item.type === "text"
           ? {
               type: "text",
@@ -558,7 +572,7 @@ function convertAnthropicMessages(
         {
           type: "tool_result",
           tool_use_id: toolResult.toolCallId,
-          content: convertContentBlocks(toolResult.content),
+          content: await convertContentBlocks(toolResult.content),
           is_error: toolResult.isError,
         },
       ];
@@ -571,7 +585,7 @@ function convertAnthropicMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: await convertContentBlocks(nextMsg.content),
           is_error: nextMsg.isError,
         });
         j += 1;
@@ -988,15 +1002,15 @@ function createAnthropicTransportClient(params: {
   };
 }
 
-function buildAnthropicParams(
+async function buildAnthropicParams(
   model: AnthropicTransportModel,
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
-): {
+): Promise<{
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
-} {
+}> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
@@ -1018,7 +1032,7 @@ function buildAnthropicParams(
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const messages = convertAnthropicMessages(context.messages, model, isOAuthToken, {
+  const messages = await convertAnthropicMessages(context.messages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     cacheBreakpointOptOutMessageIndexes,
     replayThinkingEnabled,
@@ -1236,7 +1250,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           apiKey,
           options: transportOptions,
         });
-        const builtParams = buildAnthropicParams(
+        const builtParams = await buildAnthropicParams(
           model,
           requestContext,
           isOAuthToken,
