@@ -1583,7 +1583,7 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionKey: `agent:${agentId}:session-${index}`,
         sessionFile: path.join(tempDir, `${agentId}.jsonl`),
         workspaceDir: tempDir,
-        trigger: "auto",
+        trigger: "budget",
         config: {
           agents: {
             list: [
