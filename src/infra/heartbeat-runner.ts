@@ -1589,6 +1589,7 @@ export async function runHeartbeatOnce(opts: {
   if (
     opts.intent === "scheduled" &&
     dueHeartbeatTasks.length === 0 &&
+    preflight.dueCommitments.length === 0 &&
     preflight.pendingEventEntries.length === 0 &&
     !preflight.hasTaggedCronEvents &&
     recentSessionEntry
