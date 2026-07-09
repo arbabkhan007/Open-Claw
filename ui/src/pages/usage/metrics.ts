@@ -850,7 +850,6 @@ export {
   formatDayLabel,
   formatFullDate,
   buildUsageMosaicStats,
-  formatHourLabel,
   formatIsoDate,
   formatTokens,
   getHourAndWeekdayForUtcQuarterBucket,
