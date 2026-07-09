@@ -62,6 +62,7 @@ import {
   isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileSuccess,
+  markInlineProviderApiKeyFailure,
   resolveAuthProfileEligibility,
 } from "../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../auth-profiles/external-cli-auth-selection.js";
@@ -111,6 +112,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  isConfigBackedInlineProviderApiKey,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
@@ -1738,7 +1740,7 @@ async function runEmbeddedAgentInternal(
         modelId?: string;
       }) => {
         const { profileId, reason } = failure;
-        if (!profileId || !reason) {
+        if (!reason) {
           return;
         }
         if (pluginHarnessOwnsTransport && reason === "timeout") {
@@ -1746,9 +1748,32 @@ async function runEmbeddedAgentInternal(
           // credential evidence. Do not poison OpenClaw auth cooldowns.
           return;
         }
-        await markAuthProfileFailure({
-          store: profileFailureStore,
-          profileId,
+        if (profileId) {
+          await markAuthProfileFailure({
+            store: profileFailureStore,
+            profileId,
+            reason,
+            cfg: params.config,
+            agentDir,
+            runId: params.runId,
+            modelId: failure.modelId,
+          });
+          return;
+        }
+        if (
+          apiKeyInfo?.mode !== "api-key" ||
+          !isConfigBackedInlineProviderApiKey({
+            cfg: params.config,
+            provider,
+            source: apiKeyInfo.source,
+            store: authStore,
+          })
+        ) {
+          return;
+        }
+        await markInlineProviderApiKeyFailure({
+          store: authStore,
+          provider,
           reason,
           cfg: params.config,
           agentDir,
@@ -3287,7 +3312,7 @@ async function runEmbeddedAgentInternal(
               promptFailoverDecision.action === "rotate_profile" &&
               (await advanceAttemptAuthProfile())
             ) {
-              if (failedPromptProfileId && promptProfileFailureReason) {
+              if (promptProfileFailureReason) {
                 void maybeMarkAuthProfileFailure({
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
@@ -3325,7 +3350,7 @@ async function runEmbeddedAgentInternal(
                 profileRotated: true,
               });
             }
-            if (failedPromptProfileId && promptProfileFailureReason) {
+            if (promptProfileFailureReason) {
               try {
                 await maybeMarkAuthProfileFailure({
                   profileId: failedPromptProfileId,
