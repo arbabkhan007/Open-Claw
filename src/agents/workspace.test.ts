@@ -677,6 +677,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
 
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
     await expect(
@@ -693,6 +696,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
     // Add concrete user-content evidence to prove onboarding completed
     await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
@@ -714,6 +720,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
 
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
@@ -772,6 +781,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
     // Add concrete user-content evidence to prove onboarding completed
     await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(tempDir, "memory", "2026-04-15.md"), "# Daily log\n");
@@ -984,6 +996,9 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    // Add concrete user-content evidence to prove onboarding completed
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
