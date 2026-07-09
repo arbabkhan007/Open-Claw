@@ -502,6 +502,8 @@ export function runAgentAttempt(params: {
   runTimeoutOverrideMs?: number;
   runId: string;
   lifecycleGeneration: string;
+  /** Run this attempt LLM-only (no built-in tools), e.g. an announce relay turn. */
+  disableTools?: boolean;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
@@ -741,6 +743,7 @@ export function runAgentAttempt(params: {
         oneShotCliRun: params.opts.oneShotCliRun,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+        disableTools: params.disableTools === true,
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
@@ -861,7 +864,7 @@ export function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools: params.opts.modelRun === true || params.disableTools === true,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
