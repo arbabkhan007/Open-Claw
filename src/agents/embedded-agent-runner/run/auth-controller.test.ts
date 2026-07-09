@@ -9,7 +9,7 @@ import {
 } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { FailoverError } from "../../failover-error.js";
-import type { RuntimeAuthState } from "./helpers.js";
+import { RUNTIME_AUTH_REFRESH_RETRY_MS, type RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
@@ -596,6 +596,72 @@ describe("createEmbeddedRunAuthController", () => {
       // The wedged handle is no longer the active in-flight handle.
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).not.toBe(inflight);
 
+      controller.stopRuntimeAuthRefreshTimer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a deadline-abandoned refresh completion after a successful retry", async () => {
+    // Regression for the stale write-back class: the hard deadline abandons a
+    // hung refresh without cancelling it. Once the retry installs fresh
+    // credentials, the abandoned continuation's eventual completion must fail
+    // the generation stale-check and no-op instead of overwriting them.
+    vi.useFakeTimers();
+    try {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+      const staleRefresh = createDeferred<{ apiKey: string; expiresAt: number }>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: "source-api-key",
+        mode: "api-key",
+        profileId: "default",
+        source: "env",
+      });
+
+      let call = 0;
+      mocks.prepareProviderRuntimeAuth.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) {
+          return { apiKey: "runtime-api-key", expiresAt: Date.now() + 60_000 };
+        }
+        if (call === 2) {
+          // First scheduled refresh hangs past the hard deadline.
+          return staleRefresh.promise;
+        }
+        return { apiKey: "retry-runtime-api-key", expiresAt: Date.now() + 60_000 };
+      });
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: ["default"],
+      });
+
+      await controller.initializeAuthProfile();
+
+      // Scheduled refresh (min delay 5s) hangs; the deadline abandons it.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const inflight = getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight;
+      const rejection = expect(inflight).rejects.toThrow(/exceeded hard deadline/);
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS);
+      await rejection;
+
+      // The scheduled-retry lane recovers with fresh credentials.
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_RETRY_MS);
+      expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "retry-runtime-api-key");
+
+      // The abandoned refresh finally settles with stale credentials; the
+      // bumped generation must make its write-back a no-op.
+      staleRefresh.resolve({ apiKey: "stale-runtime-api-key", expiresAt: Date.now() + 5_000 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "retry-runtime-api-key");
+      const staleWrites = setRuntimeApiKey.mock.calls.filter(
+        ([, apiKey]) => apiKey === "stale-runtime-api-key",
+      );
+      expect(staleWrites).toHaveLength(0);
       controller.stopRuntimeAuthRefreshTimer();
     } finally {
       vi.useRealTimers();
