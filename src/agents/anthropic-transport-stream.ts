@@ -339,7 +339,7 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(content: readonly unknown[]) {
+function convertContentBlocks(content: readonly unknown[], model: { input: readonly string[] }) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
@@ -347,7 +347,8 @@ function convertContentBlocks(content: readonly unknown[]) {
     content.some(
       (item) =>
         item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
-    );
+    ) &&
+    model.input.includes("image");
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
@@ -559,7 +560,7 @@ function convertAnthropicMessages(
         {
           type: "tool_result",
           tool_use_id: toolResult.toolCallId,
-          content: convertContentBlocks(toolResult.content),
+          content: convertContentBlocks(toolResult.content, model),
           is_error: toolResult.isError,
         },
       ];
@@ -572,7 +573,7 @@ function convertAnthropicMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: convertContentBlocks(nextMsg.content, model),
           is_error: nextMsg.isError,
         });
         j += 1;
