@@ -661,6 +661,7 @@ export async function runPreparedReply(
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
+    inboundEventKind === "system_event" ||
     (isDirectChat &&
       silentReplyConversationType === "direct" &&
       silentReplySettings.policy === "allow") ||

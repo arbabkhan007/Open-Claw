@@ -9,6 +9,7 @@ import type {
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
@@ -741,7 +742,7 @@ export type SessionSystemPromptReport = {
     hash?: string;
   };
   currentTurn?: {
-    kind?: "user_request" | "room_event";
+    kind?: InboundEventKind;
     promptChars: number;
     runtimeContextChars: number;
     // Hook prepend/append context sent to the model but absent from the
