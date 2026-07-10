@@ -6,6 +6,17 @@ import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
+function containsAuthoredInclude(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsAuthoredInclude);
+  }
+  const record = value as Record<string, unknown>;
+  return Object.hasOwn(record, "$include") || Object.values(record).some(containsAuthoredInclude);
+}
+
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
   snapshot: DoctorConfigPreflightResult["snapshot"];
@@ -27,7 +38,12 @@ export function applyLegacyCompatibilityStep(params: {
   }
 
   const issueLines = formatConfigIssueLines(params.snapshot.legacyIssues, "-");
-  const { config: migrated, changes, partiallyValid } = migrateLegacyConfig(params.snapshot.parsed);
+  const {
+    config: migrated,
+    sourceConfig: migratedSource,
+    changes,
+    partiallyValid,
+  } = migrateLegacyConfig(params.snapshot.sourceConfig);
   if (!migrated) {
     return {
       state: {
@@ -45,6 +61,9 @@ export function applyLegacyCompatibilityStep(params: {
     };
   }
 
+  const migrationCandidate =
+    containsAuthoredInclude(params.snapshot.parsed) && migratedSource ? migratedSource : migrated;
+
   return {
     state: {
       // Doctor should keep using the best-effort migrated shape in memory even
@@ -52,8 +71,8 @@ export function applyLegacyCompatibilityStep(params: {
       // When partiallyValid, the migration succeeded but unrelated validation issues
       // remain — still commit the migration so doctor --fix always applies safe migrations
       // even when other problems prevent full validation from passing.
-      cfg: migrated,
-      candidate: migrated,
+      cfg: migrationCandidate,
+      candidate: migrationCandidate,
       // The read path can normalize legacy config into the snapshot before
       // migrateLegacyConfig emits concrete mutations. Legacy issues still mean
       // the on-disk config needs a doctor --fix path.
