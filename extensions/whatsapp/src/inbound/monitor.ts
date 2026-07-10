@@ -79,6 +79,7 @@ import {
   extractExternalAdReplyContext,
   extractLocationData,
   extractContactContext,
+  extractInteractiveListContext,
   extractMediaPlaceholder,
   extractMentionedJids,
   extractText,
@@ -1278,6 +1279,7 @@ export async function attachWebInboxToSocket(
     location?: ReturnType<typeof extractLocationData>;
     contactContext?: ReturnType<typeof extractContactContext>;
     externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
+    interactiveListContext?: ReturnType<typeof extractInteractiveListContext>;
     replyContext?: ReturnType<typeof describeReplyContext>;
     mediaPath?: string;
     mediaType?: string;
@@ -1289,6 +1291,7 @@ export async function attachWebInboxToSocket(
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
     const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
+    const interactiveListContext = extractInteractiveListContext(msg.message ?? undefined);
     const mediaPlaceholder = extractMediaPlaceholder(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
@@ -1350,6 +1353,7 @@ export async function attachWebInboxToSocket(
       location: location ?? undefined,
       contactContext,
       externalAdReplyContext,
+      interactiveListContext,
       replyContext,
       mediaPath,
       mediaType,
@@ -1404,12 +1408,15 @@ export async function attachWebInboxToSocket(
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
     const senderName = msg.pushName ?? undefined;
+    const logBody = enriched.interactiveListContext
+      ? `WhatsApp ${enriched.interactiveListContext.kind} (${enriched.interactiveListContext.rows.length} options)`
+      : enriched.body;
 
     inboundLogger.info(
       {
         from: inbound.from,
         to: self.e164 ?? "me",
-        body: enriched.body,
+        body: logBody,
         mediaPath: enriched.mediaPath,
         mediaType: enriched.mediaType,
         mediaFileName: enriched.mediaFileName,
@@ -1452,6 +1459,16 @@ export async function attachWebInboxToSocket(
               source: "whatsapp",
               type: "external_ad_reply",
               payload: enriched.externalAdReplyContext,
+            },
+          ]
+        : []),
+      ...(enriched.interactiveListContext
+        ? [
+            {
+              label: "WhatsApp list",
+              source: "whatsapp",
+              type: enriched.interactiveListContext.kind,
+              payload: enriched.interactiveListContext,
             },
           ]
         : []),

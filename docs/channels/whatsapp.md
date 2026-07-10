@@ -514,8 +514,8 @@ Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct mes
 
 ## Tools, actions, and config writes
 
-- Agent tool support includes the WhatsApp reaction action (`react`).
-- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above).
+- Agent tool support includes the WhatsApp reaction action (`react`) and native list selection replies (`list-reply`, using the captured `selectedRowId` and visible row `title`).
+- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above), `channels.whatsapp.actions.sendMessage` (also gates `list-reply`).
 - Channel-initiated config writes are enabled by default; disable via `channels.whatsapp.configWrites: false`.
 
 ## Troubleshooting
