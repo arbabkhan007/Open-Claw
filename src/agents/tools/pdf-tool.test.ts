@@ -484,6 +484,7 @@ describe("createPdfTool", () => {
       expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
       expectFields(loadOptions, {
         readIdleTimeoutMs: 120_000,
+        timeoutMs: 15 * 60_000,
         ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       });
     });
@@ -508,6 +509,7 @@ describe("createPdfTool", () => {
       expect(loadRef).toBe("https://example.com/stalled.pdf");
       expectFields(loadOptions, {
         readIdleTimeoutMs: 120_000,
+        timeoutMs: 15 * 60_000,
       });
     });
   });
