@@ -121,6 +121,13 @@ export type SlackSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
+export type SlackAppHomeConfig = {
+  /** Path to a Block Kit JSON view loaded every time Slack opens the Home tab. */
+  viewPath?: string;
+  /** Inline Block Kit Home view object. Use type: "home" or omit type. */
+  view?: Record<string, unknown>;
+};
+
 export type SlackThreadConfig = {
   /** Scope for thread history context (thread|channel). Default: thread. */
   historyScope?: "thread" | "channel";
@@ -243,6 +250,8 @@ export type SlackAccountConfig = {
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
+  /** Slack App Home tab view overrides. */
+  appHome?: SlackAppHomeConfig;
   /**
    * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.
    * Legacy key: channels.slack.dm.policy.
