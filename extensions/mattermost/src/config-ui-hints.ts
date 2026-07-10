@@ -10,6 +10,10 @@ export const mattermostChannelConfigUiHints = {
     label: "Mattermost DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.mattermost.allowFrom=["*"].',
   },
+  "voice.enabled": {
+    label: "Mattermost Voice Calls",
+    help: "Automatically join direct-message calls and answer through configured speech-to-text and text-to-speech providers (default: false).",
+  },
   streaming: {
     label: "Mattermost Streaming Mode",
     help: 'Unified Mattermost stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery.',

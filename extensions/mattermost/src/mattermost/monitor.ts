@@ -125,6 +125,8 @@ import {
   hasMattermostThreadParticipationWithPersistence,
   recordMattermostThreadParticipation,
 } from "./thread-participation.js";
+import { processMattermostVoiceTurn } from "./voice-turn.js";
+import { createMattermostVoiceWorker } from "./voice-worker.js";
 
 export {
   evaluateMattermostMentionGate,
@@ -171,6 +173,7 @@ type MattermostReaction = {
 };
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
+const MATTERMOST_VOICE_MAX_TURN_SAMPLES = 48_000 * 2 * 30;
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return normalizeTrimmedStringList(values);
@@ -2245,6 +2248,95 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   });
 
   const wsUrl = buildMattermostWsUrl(baseUrl);
+  const resolveMattermostVoiceAccess = async (params: { channelId: string; userId: string }) => {
+    const [channelInfo, senderInfo] = await Promise.all([
+      resolveChannelInfo(params.channelId),
+      resolveUserInfo(params.userId),
+    ]);
+    if (channelInfo?.type?.toUpperCase() !== "D") {
+      return { allowed: false, channelInfo, reasonCode: "not_direct" };
+    }
+    const senderName = normalizeOptionalString(senderInfo?.username) ?? params.userId;
+    const access = await resolveMattermostMonitorInboundAccess({
+      account,
+      cfg,
+      senderId: params.userId,
+      senderName,
+      channelId: params.channelId,
+      kind: "direct",
+      groupPolicy,
+      readStoreAllowFrom: pairing.readAllowFromStore,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      eventKind: "message",
+      mayPair: false,
+    });
+    return {
+      allowed: access.ingress.decision === "allow",
+      channelInfo,
+      reasonCode: access.senderAccess.reasonCode,
+    };
+  };
+  const voiceWorker = account.config.voice?.enabled
+    ? createMattermostVoiceWorker({
+        authorizeJoin: async ({ channelId, userId }) => {
+          const access = await resolveMattermostVoiceAccess({ channelId, userId });
+          if (!access.allowed) {
+            logVerboseMessage(
+              `mattermost voice: drop join speaker=${userId} channel=${channelId} reason=${access.reasonCode}`,
+            );
+          }
+          return access.allowed;
+        },
+        botUserId,
+        maxSpeechSamples: MATTERMOST_VOICE_MAX_TURN_SAMPLES,
+        preRollFrames: 150,
+        resolveChannelType: async (channelId) =>
+          (await resolveChannelInfo(channelId))?.type ?? undefined,
+        connect: async ({ channelId, callbacks }) => {
+          // Keep the native WebRTC dependency outside the normal Mattermost
+          // startup path when voice calls are disabled.
+          const { connectMattermostCall } = await import("./calls-client.js");
+          return await connectMattermostCall({
+            wsUrl,
+            botToken,
+            channelId,
+            callbacks,
+            abortSignal: opts.abortSignal,
+            onError: (message) => runtime.error?.(message),
+            onDebug: (message) => runtime.log?.(message),
+          });
+        },
+        processTurn: async ({ channelId, userId, samples }) => {
+          const access = await resolveMattermostVoiceAccess({ channelId, userId });
+          if (!access.allowed || !access.channelInfo) {
+            logVerboseMessage(
+              `mattermost voice: drop speaker=${userId} channel=${channelId} reason=${access.reasonCode}`,
+            );
+            return undefined;
+          }
+          const route = core.channel.routing.resolveAgentRoute({
+            cfg,
+            channel: "mattermost",
+            accountId: account.accountId,
+            teamId: access.channelInfo.team_id ?? undefined,
+            peer: { kind: "direct", id: userId },
+          });
+          return await processMattermostVoiceTurn({
+            accountId: account.accountId,
+            agentId: route.agentId,
+            cfg,
+            channelId,
+            runtime,
+            samples,
+            sessionKey: route.sessionKey,
+            userId,
+          });
+        },
+        onDebug: (message) => runtime.log?.(message),
+        onError: (message) => runtime.error?.(message),
+      })
+    : undefined;
   let seq = 1;
   const connectOnce = createMattermostConnectOnce({
     wsUrl,
@@ -2261,6 +2353,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     onPosted: async (post, payload) => {
       await debouncer.enqueue({ post, payload });
     },
+    onEvent: voiceWorker ? async (payload) => await voiceWorker.handleEvent(payload) : undefined,
     onReaction: async (payload) => {
       await handleReactionEvent(payload);
     },
@@ -2311,6 +2404,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
   } finally {
     unregisterInteractions?.();
+    await voiceWorker?.close();
   }
 
   const slashShutdownCleanupPromise = slashShutdownCleanup;
