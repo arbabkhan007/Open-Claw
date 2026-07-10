@@ -27,7 +27,8 @@ function readOwnAccountConfig(
   if (!qqbot?.accounts || !Object.hasOwn(qqbot.accounts, accountId)) {
     return undefined;
   }
-  return qqbot.accounts[accountId];
+  const account = qqbot.accounts[accountId];
+  return account && typeof account === "object" ? { ...account } : {};
 }
 
 function assertNotLegacySecretRefMarker(value: unknown, path: string): void {

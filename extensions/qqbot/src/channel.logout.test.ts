@@ -5,7 +5,7 @@ import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setQQBotRuntime, resetQQBotRuntimeForTest } from "./bridge/runtime.js";
 import { qqbotPlugin } from "./channel.js";
-import type { ResolvedQQBotAccount } from "./types.js";
+import type { QQBotAccountConfig, ResolvedQQBotAccount } from "./types.js";
 
 type QQBotRuntimeMocks = {
   replaceConfigFile: ReturnType<typeof vi.fn>;
@@ -82,6 +82,36 @@ describe("qqbotPlugin gateway.logoutAccount", () => {
       clientSecret: "secret",
       clientSecretFile: "/tmp/secret",
     });
+  });
+
+  it("ignores inherited credentials on an own named account during logout", async () => {
+    const ownAccount = Object.assign(
+      Object.create({
+        clientSecret: "secret",
+        clientSecretFile: "/tmp/secret",
+      }) as QQBotAccountConfig,
+      { appId: "app-id" },
+    );
+    const cfg = {
+      channels: {
+        qqbot: {
+          accounts: { bot2: ownAccount },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, account, mocks } = await runLogoutScenario({ cfg, accountId: "bot2" });
+
+    expect(account.secretSource).toBe("none");
+    expect(result).toStrictEqual({
+      ok: true,
+      cleared: false,
+      envToken: false,
+      loggedOut: true,
+    });
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(Object.hasOwn(ownAccount, "clientSecret")).toBe(false);
+    expect(Object.hasOwn(ownAccount, "clientSecretFile")).toBe(false);
   });
 
   it("clears own named account credentials through the gateway logout entry point", async () => {
