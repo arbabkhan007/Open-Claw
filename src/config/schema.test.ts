@@ -1213,5 +1213,17 @@ describe("config schema", () => {
   it("returns null for missing config schema paths", () => {
     expect(lookupConfigSchema(baseSchema, "gateway.notReal.path")).toBeNull();
   });
+
+  it.each(["0h", "0d", "0ms"])(
+    "rejects zero-value cron.sessionRetention: %s",
+    (sessionRetention) => {
+      const result = OpenClawSchema.safeParse({
+        agents: { list: [{ id: "main" }] },
+        cron: { sessionRetention },
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toContain("sessionRetention");
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
