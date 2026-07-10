@@ -5,6 +5,8 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
+
 // MCP loopback schema projection adapts gateway tool definitions into MCP
 // tools/list entries. It flattens provider-hostile union schemas into object
 // schemas because some MCP clients cannot render anyOf/oneOf controls.
@@ -82,7 +84,7 @@ function flattenUnionSchema(
       for (const [key, schema] of Object.entries(props)) {
         if (!isPropertySchema(schema)) {
           warnSchemaOnce(
-            `mcp loopback: malformed schema definition for "${toolName}.${key}", ignoring that variant`,
+            `${MCP_LOOPBACK_LOG_PREFIX}: malformed schema definition for "${toolName}.${key}", ignoring that variant`,
           );
           continue;
         }
@@ -103,10 +105,13 @@ function flattenUnionSchema(
         if (incoming === false) {
           continue;
         }
+        if (areSchemaValuesEquivalent(existing, incoming)) {
+          continue;
+        }
         if (!isRecord(existing) || !isRecord(incoming)) {
           if (existing !== incoming) {
             warnSchemaOnce(
-              `mcp loopback: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
+              `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
             );
           }
           continue;
@@ -128,7 +133,7 @@ function flattenUnionSchema(
           continue;
         }
         warnSchemaOnce(
-          `mcp loopback: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
+          `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
         );
       }
     }
@@ -148,6 +153,57 @@ function flattenUnionSchema(
 
 function isPropertySchema(value: unknown): value is boolean | Record<string, unknown> {
   return typeof value === "boolean" || isRecord(value);
+}
+
+function rememberSchemaPair(
+  left: object,
+  right: object,
+  seen: WeakMap<object, WeakSet<object>>,
+): boolean {
+  const existing = seen.get(left);
+  if (existing?.has(right)) {
+    return true;
+  }
+  const next = existing ?? new WeakSet<object>();
+  next.add(right);
+  if (!existing) {
+    seen.set(left, next);
+  }
+  return false;
+}
+
+function areSchemaValuesEquivalent(
+  left: unknown,
+  right: unknown,
+  seen = new WeakMap<object, WeakSet<object>>(),
+): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    if (rememberSchemaPair(left, right, seen)) {
+      return true;
+    }
+    return left.every((value, index) => areSchemaValuesEquivalent(value, right[index], seen));
+  }
+  if (!isRecord(left) || !isRecord(right)) {
+    return false;
+  }
+  if (rememberSchemaPair(left, right, seen)) {
+    return true;
+  }
+  const leftKeys = Object.keys(left).toSorted();
+  const rightKeys = Object.keys(right).toSorted();
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  return leftKeys.every(
+    (key, index) =>
+      key === rightKeys[index] && areSchemaValuesEquivalent(left[key], right[key], seen),
+  );
 }
 
 // Loopback schemas are rebuilt on every cache miss (per session/owner context and
