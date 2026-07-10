@@ -167,20 +167,24 @@ openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
 # List and inspect
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop review <proposal-id>
 
 # Revise before approval
 openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 
 # Close out
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Duplicate"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop apply <proposal-id> --proposal-version <version>
+openclaw skills workshop reject <proposal-id> --proposal-version <version> --reason "Duplicate"
+openclaw skills workshop quarantine <proposal-id> --proposal-version <version> --reason "Needs security review"
 ```
 
 Every subcommand takes `--agent <id>` (target workspace; defaults to
 cwd-inferred, then the default agent) and `--json` (structured output).
 `propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
 `--evidence <text>` to record proposal context alongside `--proposal`.
+`review` prints the proposal version. Pass it as `--proposal-version` to
+`apply`, `reject`, or `quarantine` to reject a decision if the proposal changes
+after review. Omitting the flag keeps the existing ID-only lifecycle behavior.
 
 ## Proposal content
 
@@ -252,8 +256,8 @@ commands, or direct filesystem operations.
 `skill_workshop` to the active `tools.allow` list, or use
 `tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
 explicit `tools.allow`. Sandboxed runs do not construct the host-side
-Skill Workshop tool. Run `review` from a normal host-side agent session; the
-CLI can inspect the raw proposal but does not provide the applied-form diff.
+Skill Workshop tool. Run `review` from a normal host-side agent session or use
+`openclaw skills workshop review <proposal-id>` from the CLI.
 </Note>
 
 ## Suggested skills
