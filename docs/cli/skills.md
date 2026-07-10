@@ -154,6 +154,8 @@ openclaw skills workshop quarantine <proposal-id> --proposal-version <version> -
 `propose-create`, `propose-update`, and `revise` also accept `--goal <text>`
 and `--evidence <text>` to record the proposal's motivation and supporting
 notes alongside the `--proposal`/`--proposal-dir` content.
+To select another agent workspace, place the parent option before the
+subcommand: `openclaw skills workshop --agent <id> review <proposal-id>`.
 `review` prints the proposal version. Pass it to `apply`, `reject`, or
 `quarantine` with `--proposal-version <version>` to fail closed if the proposal
 is revised before the decision. The flag is optional for existing ID-only

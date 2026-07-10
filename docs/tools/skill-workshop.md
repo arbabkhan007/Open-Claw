@@ -178,8 +178,9 @@ openclaw skills workshop reject <proposal-id> --proposal-version <version> --rea
 openclaw skills workshop quarantine <proposal-id> --proposal-version <version> --reason "Needs security review"
 ```
 
-Every subcommand takes `--agent <id>` (target workspace; defaults to
-cwd-inferred, then the default agent) and `--json` (structured output).
+Place `--agent <id>` between `workshop` and the subcommand to select a target
+workspace (defaults to cwd-inferred, then the default agent). Every subcommand
+takes `--json` for structured output.
 `propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
 `--evidence <text>` to record proposal context alongside `--proposal`.
 `review` prints the proposal version. Pass it as `--proposal-version` to
