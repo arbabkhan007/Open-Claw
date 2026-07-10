@@ -287,10 +287,96 @@ export function chunkDiscordTextWithMode(
   return chunks;
 }
 
+// End index of a leading markdown code span (fenced or inline), or -1.
+// Used so reasoning-italics reopen can sit *after* the code opener instead of
+// gluing `_` onto backticks (`_``` / `_`code`), which Discord fails to parse.
+function leadingCodeSpanEnd(body: string): number {
+  if (!body.startsWith("`")) {
+    return -1;
+  }
+
+  const fenceOpen = /^(?<ticks>`{3,})(?<info>[^\n`]*)(?:\n|$)/.exec(body);
+  if (fenceOpen?.groups?.ticks) {
+    const ticks = fenceOpen.groups.ticks;
+    let searchFrom = fenceOpen[0].length;
+    while (searchFrom <= body.length) {
+      const closeAt = body.indexOf(ticks, searchFrom);
+      if (closeAt === -1) {
+        return body.length;
+      }
+      const atLineStart = closeAt === 0 || body[closeAt - 1] === "\n";
+      if (atLineStart) {
+        const after = closeAt + ticks.length;
+        // Closing fence may be followed by newline, end, or non-tick text
+        // (e.g. the original wrap's trailing `_` attached as ```_).
+        if (after >= body.length || body[after] !== "`") {
+          return after;
+        }
+      }
+      searchFrom = closeAt + 1;
+    }
+    return body.length;
+  }
+
+  const inlineOpen = /^(?<ticks>`+)/.exec(body);
+  if (!inlineOpen?.groups?.ticks) {
+    return -1;
+  }
+  const ticks = inlineOpen.groups.ticks;
+  const closeAt = body.indexOf(ticks, ticks.length);
+  if (closeAt === -1) {
+    return body.length;
+  }
+  return closeAt + ticks.length;
+}
+
+function hasReasoningItalicsOpen(chunk: string): boolean {
+  const trimmed = chunk.trimStart();
+  if (trimmed.startsWith("_")) {
+    return true;
+  }
+  if (/^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith("`")) {
+    const codeEnd = leadingCodeSpanEnd(trimmed);
+    if (codeEnd > 0) {
+      return trimmed.slice(codeEnd).trimStart().startsWith("_");
+    }
+  }
+  return false;
+}
+
+// When a continuation starts with code, protect the opener and either:
+// - reopen italics after the code span when later reasoning text continues, or
+// - drop a lone trailing `_` left from the original wrap on a pure-code chunk.
+function reopenReasoningItalicsAfterLeadingCode(body: string): string {
+  const codeEnd = leadingCodeSpanEnd(body);
+  if (codeEnd <= 0) {
+    return `_${body}`;
+  }
+  const code = body.slice(0, codeEnd);
+  const rest = body.slice(codeEnd);
+  if (!rest.trim()) {
+    return code + rest;
+  }
+  // Original `_…_` closer attached after pure code — no open on this chunk.
+  if (/^\s*_\s*$/.test(rest)) {
+    return code;
+  }
+  const restWsLen = rest.length - rest.trimStart().length;
+  const restWs = rest.slice(0, restWsLen);
+  const restBody = rest.slice(restWsLen);
+  if (restBody.startsWith("_")) {
+    return code + rest;
+  }
+  return `${code}${restWs}_${restBody}`;
+}
+
 // Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
 // When Discord chunking splits the message, we close italics at the end of
 // each chunk and reopen at the start of the next so every chunk renders
-// consistently.
+// consistently. Code-leading continuations reopen *after* the code span.
 function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   if (chunks.length <= 1) {
     return chunks;
@@ -307,8 +393,10 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     const isLast = i === adjusted.length - 1;
     const current = adjusted[i];
 
-    // Ensure current chunk closes italics so Discord renders it italicized.
-    const needsClosing = !current.trimEnd().endsWith("_");
+    // Close only when this chunk actually opened reasoning italics. Pure code
+    // continuations stay unmarked so we never emit an unmatched trailing `_`
+    // after a fence (```_).
+    const needsClosing = !current.trimEnd().endsWith("_") && hasReasoningItalicsOpen(current);
     if (needsClosing) {
       adjusted[i] = `${current}_`;
     }
@@ -317,16 +405,18 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
       break;
     }
 
-    // Re-open italics on the next chunk if needed.
-    // Skip backtick-starting bodies: prepending `_` would break fenced and
-    // inline code (`_``` / `_`code`). One backtick check covers both.
     const next = adjusted[i + 1];
     const leadingWhitespaceLen = next.length - next.trimStart().length;
     const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
     const nextBody = next.slice(leadingWhitespaceLen);
-    if (!nextBody.startsWith("_") && !nextBody.startsWith("`")) {
-      adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
+    if (nextBody.startsWith("_")) {
+      continue;
     }
+    if (nextBody.startsWith("`")) {
+      adjusted[i + 1] = `${leadingWhitespace}${reopenReasoningItalicsAfterLeadingCode(nextBody)}`;
+      continue;
+    }
+    adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
   }
 
   return adjusted;

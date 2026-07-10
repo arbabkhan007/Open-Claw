@@ -221,6 +221,12 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("```")).toBe(true);
     expect(second.startsWith("_```")).toBe(false);
     expect(second).toContain("```python");
+    // Pure-code continuation: no leading/trailing unpaired reasoning `_`.
+    expect(second).toBe("```python\nprint(1)\n```");
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
   });
 
   it("does not prepend italics reopen before an inline code chunk", () => {
@@ -238,5 +244,34 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("`")).toBe(true);
     expect(second.startsWith("_`")).toBe(false);
     expect(second).toContain("`inline_code_token`");
+    // Reopen after the inline span so trailing reasoning text stays italicized.
+    expect(second).toBe("`inline_code_token`\n_10. after_");
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
+  });
+
+  it("reopens italics after a leading fenced block when reasoning text continues", () => {
+    const body = [
+      ...Array.from({ length: 9 }, (_, i) => `${i + 1}. line`),
+      "```python",
+      "print(1)",
+      "```",
+      "more reasoning",
+    ].join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const second = chunks[1].trimStart();
+    expect(second.startsWith("```")).toBe(true);
+    expect(second.startsWith("_```")).toBe(false);
+    expect(second).toBe("```python\nprint(1)\n```\n_more reasoning_");
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
   });
 });
