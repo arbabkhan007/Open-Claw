@@ -11,6 +11,8 @@ type QQBotRuntimeMocks = {
   replaceConfigFile: ReturnType<typeof vi.fn>;
 };
 
+type QQBotLogoutAccount = NonNullable<NonNullable<typeof qqbotPlugin.gateway>["logoutAccount"]>;
+
 function createRuntime(): { runtime: PluginRuntime; mocks: QQBotRuntimeMocks } {
   const replaceConfigFile = vi.fn(async () => {});
   const runtime = {
@@ -21,14 +23,18 @@ function createRuntime(): { runtime: PluginRuntime; mocks: QQBotRuntimeMocks } {
 }
 
 async function runLogoutScenario(params: { cfg: OpenClawConfig; accountId: string }): Promise<{
-  result: Awaited<ReturnType<NonNullable<typeof qqbotPlugin.gateway.logoutAccount>>>;
+  result: Awaited<ReturnType<QQBotLogoutAccount>>;
   account: ResolvedQQBotAccount;
   mocks: QQBotRuntimeMocks;
 }> {
   const { runtime, mocks } = createRuntime();
   setQQBotRuntime(runtime);
+  const logoutAccount = qqbotPlugin.gateway?.logoutAccount;
+  if (!logoutAccount) {
+    throw new Error("QQBot gateway logoutAccount missing");
+  }
   const account = qqbotPlugin.config.resolveAccount(params.cfg, params.accountId);
-  const result = await qqbotPlugin.gateway.logoutAccount!({
+  const result = await logoutAccount({
     cfg: params.cfg,
     accountId: params.accountId,
     account,
