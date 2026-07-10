@@ -7002,6 +7002,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Native approval delivery
   - H3: Narrower approval runtime subpaths
   - H3: Setup subpaths
+  - H3: Status contracts
   - H3: Other narrow channel subpaths
   - H2: Inbound mention policy
   - H2: Walkthrough
@@ -7036,6 +7037,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Why
   - H2: Compatibility policy
   - H2: How to migrate
+  - H2: Channel status type migration
   - H2: Import path reference
   - H2: Active deprecations
   - H2: Talk and realtime voice migration

@@ -88,6 +88,9 @@ If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
+For channel status, use `ChannelAccountStatus` for output and
+`ChannelAccountSnapshotInput` for input; its old alias is deprecated.
+
 Audit the current migration queue with `pnpm plugins:boundary-report`:
 
 | Flag                                                    | Effect                                                                         |
