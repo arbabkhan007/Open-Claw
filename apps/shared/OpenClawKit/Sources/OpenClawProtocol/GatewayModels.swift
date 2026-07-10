@@ -11843,7 +11843,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         ask: AnyCodable? = nil,
         warningtext: AnyCodable? = nil,
         unavailabledecisions: [String]? = nil,
-        commandspans: [[String: AnyCodable]]? = nil
+        commandspans: [[String: AnyCodable]]? = nil,
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable? = nil,
         sessionkey: AnyCodable? = nil,

@@ -1584,7 +1584,7 @@ export function createExecTool(
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
       );
       const approvalToolCallId = normalizeOptionalString(toolCallId);
-      const approvalTitle = resolveExecDetail(params);
+      const resolveApprovalTitle = () => resolveExecDetail(params);
       const resolveExecEnvPrepared = isResolveExecEnvPrepared(args as ExecToolArgs);
       const deferredResolveExecEnvState = getDeferredResolveExecEnvPreparedState(params);
       const preparedWorkdirState = getResolvedExecWorkdirPreparedState(params);
@@ -1879,7 +1879,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
-            title: approvalTitle,
+            title: resolveApprovalTitle(),
             toolCallId: approvalToolCallId,
             workdir,
             env,
@@ -1922,7 +1922,7 @@ export function createExecTool(
         if (host === "gateway" && !bypassApprovals) {
           const gatewayResult = await processGatewayAllowlist({
             command: params.command,
-            title: approvalTitle,
+            title: resolveApprovalTitle(),
             toolCallId: approvalToolCallId,
             workdir,
             env,

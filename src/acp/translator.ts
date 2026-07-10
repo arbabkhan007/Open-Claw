@@ -978,7 +978,9 @@ export class AcpGatewayAgent implements Agent {
 
     const pending = params.runId
       ? this.findPendingBySessionKey(params.sessionKey, params.runId)
-      : this.findUniquePendingBySessionKey(params.sessionKey);
+      : ((approvalEvent.toolCallId
+          ? this.findUniquePendingByToolCallId(params.sessionKey, approvalEvent.toolCallId)
+          : undefined) ?? this.findUniquePendingBySessionKey(params.sessionKey));
     if (!pending) {
       return;
     }
@@ -1254,6 +1256,23 @@ export class AcpGatewayAgent implements Agent {
       }
     }
     return undefined;
+  }
+
+  private findUniquePendingByToolCallId(
+    sessionKey: string,
+    toolCallId: string,
+  ): PendingPrompt | undefined {
+    let match: PendingPrompt | undefined;
+    for (const pending of this.pendingPrompts.values()) {
+      if (pending.sessionKey !== sessionKey || !pending.toolCalls?.has(toolCallId)) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = pending;
+    }
+    return match;
   }
 
   private findUniquePendingBySessionKey(sessionKey: string): PendingPrompt | undefined {

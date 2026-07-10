@@ -350,7 +350,7 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
-  it("does not bind session-only approval events when multiple prompts share the session key", async () => {
+  it("binds structured approvals by tool call id when prompts share a session key", async () => {
     const runIds: string[] = [];
     const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
       if (method === "chat.send") {
@@ -397,11 +397,23 @@ describe("ACP translator permission relay", () => {
     expect(requestPermission).not.toHaveBeenCalled();
     expect(approvalResolveCalls(request)).toHaveLength(0);
 
-    await agent.handleGatewayEvent(
-      createApprovalEvent({
+    await agent.handleGatewayEvent({
+      type: "event",
+      event: "agent",
+      payload: {
         runId: expectDefined(runIds[1], "runIds[1] test invariant"),
-        approvalId,
-      }),
+        sessionKey: SESSION_KEY,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-second",
+          args: { command: "echo second" },
+        },
+      },
+    } as EventFrame);
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId, toolCallId: "tool-second" }),
     );
 
     await vi.waitFor(() => {
