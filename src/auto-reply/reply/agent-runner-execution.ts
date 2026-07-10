@@ -1353,6 +1353,16 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
   return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
+function isReplyOperationStalled(replyOperation?: ReplyOperation): boolean {
+  return replyOperation?.result?.kind === "failed" && replyOperation.result.code === "run_stalled";
+}
+
+function buildStalledRunReplyPayload(): ReplyPayload {
+  return markAgentRunFailureReplyPayload({
+    text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+  });
+}
+
 function emitModelFallbackStepLifecycle(params: {
   runId: string;
   sessionKey?: string;
@@ -2902,6 +2912,16 @@ async function runAgentTurnWithFallbackInternal(
           },
         };
       }
+      if (isReplyOperationStalled(params.replyOperation)) {
+        settledLifecycleTerminal?.emit(
+          "error",
+          new Error("Reply operation expired after making no progress"),
+        );
+        return {
+          kind: "final",
+          payload: buildStalledRunReplyPayload(),
+        };
+      }
       commitTerminalOutcome();
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
@@ -3128,6 +3148,14 @@ async function runAgentTurnWithFallbackInternal(
           payload: {
             text: SILENT_REPLY_TOKEN,
           },
+        };
+      }
+
+      if (isReplyOperationStalled(params.replyOperation)) {
+        takePendingLifecycleTerminal()?.emit("error", err);
+        return {
+          kind: "final",
+          payload: buildStalledRunReplyPayload(),
         };
       }
 

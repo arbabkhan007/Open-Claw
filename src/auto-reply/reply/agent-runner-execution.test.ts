@@ -1571,6 +1571,29 @@ describe("runAgentTurnWithFallback", () => {
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces a stalled reply operation after the embedded run returns no payload", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      replyOperation.result = { kind: "failed", code: "run_stalled" };
+      return { payloads: [], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    await expect(
+      runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      }),
+    ).resolves.toEqual({
+      kind: "final",
+      payload: {
+        text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+        isError: true,
+      },
+    });
+  });
+
   it("suppresses a settled fallback result after an upstream abort", async () => {
     const upstreamAbort = new AbortController();
     const replyOperation = createReplyOperation({
