@@ -80,6 +80,18 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(result?.requireApproval?.timeoutReason).toContain(
       `left Proposal ${proposal.record.id} unchanged and pending`,
     );
+    for (const action of ["reject", "quarantine"] as const) {
+      const lifecycleResult = await resolveSkillWorkshopToolApproval({
+        toolName: "skill_workshop",
+        toolParams: { action, proposal_id: proposal.record.id },
+        workspaceDir,
+      });
+      expect(lifecycleResult?.params).toEqual({
+        action,
+        proposal_id: proposal.record.id,
+        proposal_version: proposal.record.proposedVersion,
+      });
+    }
     const resolvedByName = await resolveSkillWorkshopToolApproval({
       toolName: "skill_workshop",
       toolParams: { action: "reject", name: "weather-helper" },

@@ -199,11 +199,8 @@ export type SkillProposalActionInput = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
-  reason?: string;
-};
-
-export type SkillProposalApplyInput = SkillProposalActionInput & {
   expectedVersion?: string;
+  reason?: string;
 };
 
 export type SkillProposalReadResult = {
@@ -216,7 +213,8 @@ export type SkillProposalReviewUnavailableReason =
   | "proposal-changed"
   | "target-changed"
   | "target-missing"
-  | "diff-limit";
+  | "diff-limit"
+  | "output-limit";
 
 export type SkillProposalReviewResult = { record: SkillProposalRecord } & (
   | {

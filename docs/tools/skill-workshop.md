@@ -130,14 +130,15 @@ same proposal revalidates it and may fail or mark it stale under the existing
 lifecycle rules.
 Long reviews are paginated; pass the first page's `proposal_version` when
 requesting each later `page` so revisions cannot mix pages. Pass the same value
-when applying so Skill Workshop rejects an approval if the proposal was revised
-in between. Oversized or computationally expensive diffs, including a single
-line too long to paginate without losing its diff marker, return a bounded
-`diff-limit` result instead of partial output.
+with any lifecycle action so Skill Workshop rejects the decision if the proposal
+was revised in between. Reviews are capped at 16 pages; larger projections
+return `output-limit`. Oversized or computationally expensive diffs, including
+a single line too long to paginate without losing its diff marker, return a
+bounded `diff-limit` result instead of partial output.
 
-Existing ID-only apply calls remain valid. With pending approval, Skill
+Existing ID-only lifecycle calls remain valid. With pending approval, Skill
 Workshop snapshots the current version into the approval request; passing the
-version from `review` is what binds apply to that earlier review.
+version from `review` binds apply, reject, or quarantine to that earlier review.
 
 Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
 approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
@@ -237,7 +238,7 @@ Other parameters apply depending on the action:
 | `goal`, `evidence`         | `create`, `update`, `revise`                                   | Free-text context                                                    |
 | `proposal_id`              | `inspect`, `review`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
 | `page`                     | `review`                                                       | One-based output page; defaults to 1                                 |
-| `proposal_version`         | `review`, `apply`                                              | Required after page 1; binds apply to the reviewed version           |
+| `proposal_version`         | `review`, `apply`, `reject`, `quarantine`                      | Required after page 1; binds lifecycle decisions to the review       |
 | `reason`                   | `apply`, `reject`, `quarantine`                                | Optional                                                             |
 | `query`, `status`, `limit` | `list`                                                         | Filter/paginate; `limit` max 50, default 20                          |
 
@@ -404,6 +405,7 @@ Default state directory: `~/.openclaw`.
 | Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
 | Support files                   | 64 per proposal                                                      |
 | Support file size               | 256 KiB each, 2 MiB total                                            |
+| Review output                   | 7,000 characters per page, 16 pages                                  |
 | Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
 
 ## Troubleshooting
@@ -414,6 +416,7 @@ Default state directory: `~/.openclaw`.
 | `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
 | `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
 | `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
+| Review returns `output-limit`                  | Reduce the proposal/support bundle before requesting an inline review.                                                                                                                                      |
 | `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |

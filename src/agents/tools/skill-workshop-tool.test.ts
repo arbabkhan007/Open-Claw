@@ -43,7 +43,7 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("returns candidates");
     expect(schema).toContain("One-based output page");
     expect(schema).toContain("later review pages");
-    expect(schema).toContain("bind approval to the reviewed proposal");
+    expect(schema).toContain("bind the decision to the reviewed proposal");
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
   });
@@ -690,6 +690,66 @@ describe("skill_workshop tool", () => {
     ).rejects.toThrow("proposal_version required");
   });
 
+  it("surfaces target drift instead of a stale review page error", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const created = await tool.execute("call-create-drift", {
+      action: "create",
+      name: "Review Page Drift",
+      description: "Detect drift between review pages",
+      proposal_content: `# Review Page Drift\n\n${"Review line.\n".repeat(700)}`,
+    });
+    const proposalId = (created.details as { id: string }).id;
+    const first = await tool.execute("call-review-before-drift", {
+      action: "review",
+      proposal_id: proposalId,
+    });
+    expect(first.details).toMatchObject({ page: 1, pageCount: 2 });
+
+    const skillDir = path.join(workspaceDir, "skills", "review-page-drift");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Created elsewhere\n", "utf8");
+    const drifted = await tool.execute("call-review-after-drift", {
+      action: "review",
+      proposal_id: proposalId,
+      page: 2,
+      proposal_version: "v1",
+    });
+
+    expect(drifted.details).toMatchObject({
+      reviewMode: "unavailable",
+      unavailableReason: "target-changed",
+      page: 1,
+      pageCount: 1,
+    });
+    expect((drifted.content[0] as { text: string }).text).toContain(
+      "Review unavailable: The live target changed",
+    );
+  });
+
+  it("bounds the complete review workflow", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const created = await tool.execute("call-create-output-limit", {
+      action: "create",
+      name: "Review Output Limit",
+      description: "Bound the complete review workflow",
+      proposal_content: "# Review Output Limit\n",
+      support_files: [{ path: "references/large.md", content: "support\n".repeat(15_000) }],
+    });
+    const reviewed = await tool.execute("call-review-output-limit", {
+      action: "review",
+      proposal_id: (created.details as { id: string }).id,
+    });
+
+    expect(reviewed.details).toMatchObject({
+      reviewMode: "unavailable",
+      unavailableReason: "output-limit",
+      page: 1,
+      pageCount: 1,
+    });
+  });
+
   it("returns diff-limit when one diff line cannot fit a tool page", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const skillDir = path.join(workspaceDir, "skills", "long-diff-line");
@@ -869,9 +929,22 @@ describe("skill_workshop tool", () => {
       proposal_content: "# Rejected Skill\n\nDo not apply this.\n",
     });
     const rejectedId = (rejected.details as { id: string }).id;
+    await tool.execute("call-revise-rejected", {
+      action: "revise",
+      proposal_id: rejectedId,
+      proposal_content: "# Rejected Skill\n\nStill do not apply this.\n",
+    });
+    await expect(
+      tool.execute("call-reject-stale-version", {
+        action: "reject",
+        proposal_id: rejectedId,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("changed after review");
     const rejectResult = await tool.execute("call-4", {
       action: "reject",
       proposal_id: rejectedId,
+      proposal_version: "v2",
       reason: "not needed",
     });
 
@@ -895,9 +968,22 @@ describe("skill_workshop tool", () => {
       proposal_content: "# Quarantined Skill\n\nDo not apply this.\n",
     });
     const quarantinedId = (quarantined.details as { id: string }).id;
+    await tool.execute("call-revise-quarantined", {
+      action: "revise",
+      proposal_id: quarantinedId,
+      proposal_content: "# Quarantined Skill\n\nStill do not apply this.\n",
+    });
+    await expect(
+      tool.execute("call-quarantine-stale-version", {
+        action: "quarantine",
+        proposal_id: quarantinedId,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("changed after review");
     const quarantineResult = await tool.execute("call-6", {
       action: "quarantine",
       proposal_id: quarantinedId,
+      proposal_version: "v2",
       reason: "unsafe for now",
     });
 

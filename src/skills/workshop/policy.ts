@@ -186,9 +186,7 @@ export async function resolveSkillWorkshopToolApproval(params: {
   });
   const toolParams = asNullableRecord(params.toolParams);
   const bindCurrentVersion =
-    action === "apply" &&
-    approvalDescription.proposalVersion &&
-    !readOptionalString(toolParams, "proposal_version");
+    approvalDescription.proposalVersion && !readOptionalString(toolParams, "proposal_version");
   return {
     ...(bindCurrentVersion
       ? {
