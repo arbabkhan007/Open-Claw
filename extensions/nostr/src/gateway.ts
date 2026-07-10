@@ -194,12 +194,19 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
               if (!outboundText.trim()) {
                 return;
               }
+              // The gateway inbound reply path bypasses the outbound adapter, so
+              // strip internal tool-trace scaffolding here too — matching the
+              // sanitizeText hook on nostrOutboundAdapter.
+              const sanitized = sanitizeAssistantVisibleText(outboundText);
+              if (!sanitized.trim()) {
+                return;
+              }
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
                 cfg: ctx.cfg,
                 channel: "nostr",
                 accountId: account.accountId,
               });
-              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+              await reply(runtime.channel.text.convertMarkdownTables(sanitized, tableMode));
             },
             onRecordError: (err) => {
               ctx.log?.error?.(
