@@ -2137,6 +2137,9 @@ async function runAgentTurnWithFallbackInternal(
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                     cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
+                    // Same heartbeat invariant as the embedded path: do not infer
+                    // message targets from ambient From/To (see #103519).
+                    ...(params.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
@@ -2279,6 +2282,14 @@ async function runAgentTurnWithFallbackInternal(
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     forceMessageTool:
                       params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+                    // Heartbeat turns inject ambient From/To (real delivery target or the
+                    // non-deliverable "heartbeat" sentinel). Implicit message-tool target
+                    // inference would treat that ambient route as a recipient and leak
+                    // HEARTBEAT_OK into the source DM or resolve @heartbeat. Require an
+                    // explicit target so only intentional heartbeat notifications send.
+                    // Only set when true so subagent runs keep their default
+                    // (isSubagentSessionKey) when this flag is omitted.
+                    ...(params.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     onUserMessagePersisted: notifyUserMessagePersisted,
