@@ -180,6 +180,7 @@ export async function readSkillProposal(
     .read(path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE), {
       hardlinks: "reject",
       maxBytes: MAX_PROPOSAL_BYTES,
+      nonBlockingRead: true,
       symlinks: "reject",
     })
     .catch((error: unknown) => {
@@ -400,6 +401,7 @@ export async function readProposalSupportFiles(
       .read(path.join(proposalRelativeDir(record.id), filePath), {
         hardlinks: "reject",
         maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+        nonBlockingRead: true,
         symlinks: "reject",
       })
       .catch((error: unknown) => {

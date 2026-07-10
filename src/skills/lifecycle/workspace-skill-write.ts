@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, pathExists, root } from "../../infra/fs-safe.js";
-import { isPathInside } from "../../infra/path-safety.js";
+import { isPathInside, isSymlinkOpenError } from "../../infra/path-safety.js";
 import { findContainingAllowedSkillSymlinkTarget } from "../loading/symlink-targets.js";
 
 const ALLOWED_SUPPORT_FILE_ROOTS = new Set(
@@ -330,6 +330,9 @@ async function resolveRealPathThroughExistingAncestors(
     try {
       stats = await fs.stat(lexicalCursor);
     } catch (error) {
+      if (isSymlinkOpenError(error)) {
+        throw invalidSkillWriteTargetSymlink(lexicalCursor, error);
+      }
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOTDIR") {
         throw invalidSkillWriteTargetAncestor(lexicalCursor, error);
@@ -372,6 +375,9 @@ async function resolveRealPathThroughExistingAncestors(
     try {
       realCursor = await fs.realpath(lexicalCursor);
     } catch (error) {
+      if (isSymlinkOpenError(error)) {
+        throw invalidSkillWriteTargetSymlink(lexicalCursor, error);
+      }
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "ENOTDIR") {
         throw new FsSafeError(
@@ -388,6 +394,12 @@ async function resolveRealPathThroughExistingAncestors(
 
 function invalidSkillWriteTargetAncestor(filePath: string, cause?: unknown): FsSafeError {
   return new FsSafeError("not-file", `Skill file path has a non-directory ancestor: ${filePath}.`, {
+    cause,
+  });
+}
+
+function invalidSkillWriteTargetSymlink(filePath: string, cause: unknown): FsSafeError {
+  return new FsSafeError("symlink", `Skill file path contains an invalid symlink: ${filePath}.`, {
     cause,
   });
 }

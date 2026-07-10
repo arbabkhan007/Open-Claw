@@ -240,40 +240,49 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
   });
 
-  it.runIf(process.platform !== "win32")("opens live review targets with O_NONBLOCK", async () => {
-    const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "nonblocking-review");
-    await writeSkill({
-      dir: skillDir,
-      name: "nonblocking-review",
-      description: "Avoid blocking special-file swaps",
-      body: "# Nonblocking Review\n\nOld body.\n",
-    });
-    const supportPath = path.join(skillDir, "references", "guide.md");
-    await fs.mkdir(path.dirname(supportPath), { recursive: true });
-    await fs.writeFile(supportPath, "Old guide.\n", "utf8");
-    const proposal = await proposeUpdateSkill({
-      workspaceDir,
-      skillName: "nonblocking-review",
-      content: "# Nonblocking Review\n\nNew body.\n",
-      supportFiles: [{ path: "references/guide.md", content: "New guide.\n" }],
-    });
-    const targetPaths = new Set([path.join(skillDir, "SKILL.md"), supportPath]);
-    const targetOpenFlags: number[] = [];
-    __setFsSafeTestHooksForTest({
-      beforeOpen: (target, flags) => {
-        if (targetPaths.has(path.resolve(target))) {
-          targetOpenFlags.push(flags);
-        }
-      },
-    });
+  it.runIf(process.platform !== "win32")(
+    "opens stored and live review files with O_NONBLOCK",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const skillDir = path.join(workspaceDir, "skills", "nonblocking-review");
+      await writeSkill({
+        dir: skillDir,
+        name: "nonblocking-review",
+        description: "Avoid blocking special-file swaps",
+        body: "# Nonblocking Review\n\nOld body.\n",
+      });
+      const supportPath = path.join(skillDir, "references", "guide.md");
+      await fs.mkdir(path.dirname(supportPath), { recursive: true });
+      await fs.writeFile(supportPath, "Old guide.\n", "utf8");
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        skillName: "nonblocking-review",
+        content: "# Nonblocking Review\n\nNew body.\n",
+        supportFiles: [{ path: "references/guide.md", content: "New guide.\n" }],
+      });
+      const proposalDir = path.join(stateDir, "skill-workshop", "proposals", proposal.record.id);
+      const targetPaths = new Set([
+        path.join(proposalDir, "PROPOSAL.md"),
+        path.join(proposalDir, "references", "guide.md"),
+        path.join(skillDir, "SKILL.md"),
+        supportPath,
+      ]);
+      const targetOpenFlags: number[] = [];
+      __setFsSafeTestHooksForTest({
+        beforeOpen: (target, flags) => {
+          if (targetPaths.has(path.resolve(target))) {
+            targetOpenFlags.push(flags);
+          }
+        },
+      });
 
-    await expect(
-      reviewSkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).resolves.toMatchObject({ mode: "diff" });
-    expect(targetOpenFlags).toHaveLength(2);
-    expect(targetOpenFlags.every((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
-  });
+      await expect(
+        reviewSkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ mode: "diff" });
+      expect(targetOpenFlags).toHaveLength(4);
+      expect(targetOpenFlags.every((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+    },
+  );
 
   it("reports unavailable reviews without mutating proposals when their inputs drift", async () => {
     const workspaceDir = await makeWorkspace();
@@ -444,7 +453,7 @@ describe("skill workshop proposals", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "reports a broken support target symlink as changed",
+    "reports broken and cyclic support target symlinks as changed",
     async () => {
       const workspaceDir = await makeWorkspace();
       const proposal = await proposeCreateSkill({
@@ -467,6 +476,15 @@ describe("skill workshop proposals", () => {
       await expect(
         applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
       ).rejects.toThrow("unresolved symlink");
+
+      await fs.rm(path.join(skillDir, "references"));
+      await fs.symlink("references", path.join(skillDir, "references"));
+      await expect(
+        reviewSkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ mode: "unavailable", reason: "target-changed" });
+      await expect(
+        applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+      ).rejects.toThrow("invalid symlink");
     },
   );
 
