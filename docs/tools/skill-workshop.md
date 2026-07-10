@@ -112,9 +112,32 @@ Iterate on a pending proposal:
 
 ```text
 Show me the morning-catchup proposal.
+Review what the morning-catchup proposal would change.
 Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
+
+`inspect` shows the stored `PROPOSAL.md`. `review` shows what approval would
+actually write: the complete canonical `SKILL.md` and support files for a
+create proposal, or a unified diff against the hash-bound live skill for an
+update proposal. Proposal-only `status`, `version`, and `date` fields are
+removed from the review, just as they are during apply.
+
+Review is read-only. If the live skill or a proposed support-file target has
+changed or disappeared since an update proposal was created, review returns an
+unavailable reason and leaves the proposal unchanged. Applying or revising the
+same proposal revalidates it and may fail or mark it stale under the existing
+lifecycle rules.
+Long reviews are paginated; pass the first page's `proposal_version` when
+requesting each later `page` so revisions cannot mix pages. Pass the same value
+when applying so Skill Workshop rejects an approval if the proposal was revised
+in between. Oversized or computationally expensive diffs, including a single
+line too long to paginate without losing its diff marker, return a bounded
+`diff-limit` result instead of partial output.
+
+Existing ID-only apply calls remain valid. With pending approval, Skill
+Workshop snapshots the current version into the approval request; passing the
+version from `review` is what binds apply to that earlier review.
 
 Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
 approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
@@ -194,26 +217,29 @@ Workshop scans, hashes, and stores them with the proposal, then writes them
 beside the live `SKILL.md` only on apply.
 
 Rejected support-file paths: absolute paths, hidden path segments, path
-traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
-and paths outside the standard support folders.
+traversal, overlapping paths, control or formatting characters, executable
+files, non-UTF-8 text, null bytes, and paths outside the standard support
+folders.
 
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | update | revise | list | inspect | apply | reject | quarantine`.
+`create | update | revise | list | inspect | review | apply | reject | quarantine`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                              | Notes                                                                |
-| -------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
-| `description`              | `create`, `update`, `revise`                         | Max 160 bytes                                                        |
-| `skill_name`               | `update`                                             | Existing skill name or key                                           |
-| `proposal_content`         | `create`, `update`, `revise`                         | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
-| `support_files`            | `create`, `update`, `revise`                         | Array of `{ path, content }`                                         |
-| `goal`, `evidence`         | `create`, `update`, `revise`                         | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
-| `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
-| `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
+| Parameter                  | Used by                                                        | Notes                                                                |
+| -------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `review`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
+| `description`              | `create`, `update`, `revise`                                   | Max 160 bytes                                                        |
+| `skill_name`               | `update`                                                       | Existing skill name or key                                           |
+| `proposal_content`         | `create`, `update`, `revise`                                   | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
+| `support_files`            | `create`, `update`, `revise`                                   | Array of `{ path, content }`                                         |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                   | Free-text context                                                    |
+| `proposal_id`              | `inspect`, `review`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
+| `page`                     | `review`                                                       | One-based output page; defaults to 1                                 |
+| `proposal_version`         | `review`, `apply`                                              | Required after page 1; binds apply to the reviewed version           |
+| `reason`                   | `apply`, `reject`, `quarantine`                                | Optional                                                             |
+| `query`, `status`, `limit` | `list`                                                         | Filter/paginate; `limit` max 50, default 20                          |
 
 Agents must use `skill_workshop` for generated skill work. They must not
 create or change proposal files through `write`, `edit`, `exec`, shell
@@ -225,8 +251,8 @@ commands, or direct filesystem operations.
 `skill_workshop` to the active `tools.allow` list, or use
 `tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
 explicit `tools.allow`. Sandboxed runs do not construct the host-side
-Skill Workshop tool, so run proposal review actions from a normal host-side
-agent session or the CLI.
+Skill Workshop tool. Run `review` from a normal host-side agent session; the
+CLI can inspect the raw proposal but does not provide the applied-form diff.
 </Note>
 
 ## Suggested skills

@@ -64,7 +64,13 @@ describe("resolveSkillWorkshopToolApproval", () => {
       timeoutMs: 70_000,
       allowedDecisions: ["allow-once", "deny"],
     });
+    expect(result?.params).toEqual({
+      action: "apply",
+      proposal_id: proposal.record.id,
+      proposal_version: proposal.record.proposedVersion,
+    });
     expect(result?.requireApproval?.description).toContain(`Proposal ID: ${proposal.record.id}`);
+    expect(result?.requireApproval?.description).toContain("Proposal version: v1");
     expect(result?.requireApproval?.description).toContain("Target skill: Weather Helper");
     expect(result?.requireApproval?.description).toContain(`Description: ${description}`);
     expect(result?.requireApproval?.description).toContain("Support files: 2");
@@ -92,6 +98,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     const proposalIdLength = 60 + 1 + 8 + 1 + 10;
     const fixedLines = [
       `Proposal ID: ${"p".repeat(proposalIdLength)}`,
+      "Proposal version: v1",
       `Description: ${description}`,
       "Support files: 0",
       `Body size: ${(Buffer.byteLength(content, "utf8") / 1024).toFixed(1)} KB`,
@@ -120,6 +127,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
 
     expect(approvalDescription.length).toBeLessThanOrEqual(PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH);
     expect(approvalDescription).toContain(`Proposal ID: ${proposal.record.id}`);
+    expect(approvalDescription).toContain("Proposal version: v1");
     expect(approvalDescription).toContain(`Description: ${description}`);
     expect(approvalDescription).toContain("Support files: 0");
     expect(approvalDescription).toContain(
@@ -151,15 +159,16 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
     const lines = result?.requireApproval?.description.split("\n") ?? [];
 
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6);
     expect(lines[1]).toContain("Target skill: Line↵Break�Spoof");
-    expect(lines[2]).toBe(
+    expect(lines[2]).toBe("Proposal version: v1");
+    expect(lines[3]).toBe(
       "Description: Real description↵Support files: 999�Body size: 999 KB↵Target skill: fake�",
     );
     for (const line of lines) {
       expect(line).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
     }
-    expect(lines[3]).toBe("Support files: 0");
+    expect(lines[4]).toBe("Support files: 0");
   });
 
   it("falls back to the action description when the proposal cannot be resolved", async () => {

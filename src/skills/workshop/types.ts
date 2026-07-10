@@ -202,11 +202,31 @@ export type SkillProposalActionInput = {
   reason?: string;
 };
 
+export type SkillProposalApplyInput = SkillProposalActionInput & {
+  expectedVersion?: string;
+};
+
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
 };
+
+export type SkillProposalReviewUnavailableReason =
+  | "proposal-changed"
+  | "target-changed"
+  | "target-missing"
+  | "diff-limit";
+
+export type SkillProposalReviewResult = { record: SkillProposalRecord } & (
+  | {
+      mode: "full";
+      content: string;
+      supportFiles: SkillProposalSupportFileInput[];
+    }
+  | { mode: "diff"; diff: string }
+  | { mode: "unavailable"; reason: SkillProposalReviewUnavailableReason }
+);
 
 export type SkillProposalApplyResult = {
   record: SkillProposalRecord;

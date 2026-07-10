@@ -28,6 +28,9 @@ export function normalizeWorkspaceSkillSupportPath(input: string): string {
   if (!trimmed) {
     throw new Error("Support file path is required.");
   }
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(trimmed)) {
+    throw new Error("Support file paths cannot contain control or formatting characters.");
+  }
   if (trimmed.includes("\\")) {
     throw new Error("Support file paths must use forward slashes.");
   }

@@ -72,6 +72,7 @@ function formatApprovalField(value: string): string {
 
 function buildLifecycleApprovalDescription(params: {
   proposalId: string;
+  proposalVersion: string;
   skillName: string;
   description: string;
   supportFileCount: number;
@@ -81,6 +82,7 @@ function buildLifecycleApprovalDescription(params: {
   const requestedSkillName = formatApprovalField(params.skillName);
   const fixedLines = [
     `Proposal ID: ${params.proposalId}`,
+    `Proposal version: ${formatApprovalField(params.proposalVersion)}`,
     `Description: ${description}`,
     `Support files: ${params.supportFileCount}`,
     `Body size: ${params.bodySizeKb} KB`,
@@ -105,6 +107,7 @@ async function resolveLifecycleApprovalDescription(params: {
 }): Promise<{
   description: string;
   proposalId?: string;
+  proposalVersion?: string;
 }> {
   if (!params.workspaceDir) {
     return { description: params.fallback };
@@ -120,12 +123,14 @@ async function resolveLifecycleApprovalDescription(params: {
     return {
       description: buildLifecycleApprovalDescription({
         proposalId: record.id,
+        proposalVersion: record.proposedVersion,
         skillName: record.target.skillName,
         description: record.description,
         supportFileCount: record.supportFiles?.length ?? 0,
         bodySizeKb: formatBodySizeKb(proposal.content),
       }),
       proposalId: record.id,
+      proposalVersion: record.proposedVersion,
     };
   } catch {
     return { description: params.fallback };
@@ -179,7 +184,20 @@ export async function resolveSkillWorkshopToolApproval(params: {
     workspaceDir: params.workspaceDir,
     fallback: text.description,
   });
+  const toolParams = asNullableRecord(params.toolParams);
+  const bindCurrentVersion =
+    action === "apply" &&
+    approvalDescription.proposalVersion &&
+    !readOptionalString(toolParams, "proposal_version");
   return {
+    ...(bindCurrentVersion
+      ? {
+          params: {
+            ...toolParams,
+            proposal_version: approvalDescription.proposalVersion,
+          },
+        }
+      : {}),
     requireApproval: {
       ...text,
       description: approvalDescription.description,
