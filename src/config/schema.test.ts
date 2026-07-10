@@ -227,6 +227,29 @@ describe("config schema", () => {
     }
   });
 
+  it("rejects the ineffective MCP disabled flag with canonical guidance", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          legacy: { disabled: true, command: "legacy-mcp" },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("expected MCP disabled config to be rejected");
+    }
+    expect(result.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["mcp", "servers", "legacy", "disabled"],
+          message: 'MCP servers use "enabled"; set "enabled": false to disable this server',
+        }),
+      ]),
+    );
+  });
+
   it("rejects empty Codex MCP agent scopes", () => {
     expect(() =>
       OpenClawSchema.parse({
