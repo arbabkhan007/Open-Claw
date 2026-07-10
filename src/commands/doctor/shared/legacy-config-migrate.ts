@@ -19,7 +19,6 @@ export function migrateLegacyConfig(raw: unknown): {
     changes.push("Migration applied; other validation issues remain — run doctor to review.");
     return {
       config: next as OpenClawConfig,
-      sourceConfig: next as OpenClawConfig,
       changes,
       partiallyValid: true,
     };

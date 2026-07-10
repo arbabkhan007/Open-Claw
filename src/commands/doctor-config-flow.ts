@@ -102,8 +102,10 @@ function isSingleTopLevelIncludeWrite(params: {
     ...Object.keys(params.sourceConfig),
     ...Object.keys(params.candidate),
   ]);
+  const sourceConfig = params.sourceConfig as Record<string, unknown>;
+  const candidate = params.candidate as Record<string, unknown>;
   const changed = [...changedKeys].filter(
-    (key) => !isDeepStrictEqual(params.sourceConfig[key], params.candidate[key]),
+    (key) => !isDeepStrictEqual(sourceConfig[key], candidate[key]),
   );
   if (changed.length !== 1) {
     return false;

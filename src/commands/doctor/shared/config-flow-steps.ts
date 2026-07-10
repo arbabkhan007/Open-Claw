@@ -38,12 +38,16 @@ export function applyLegacyCompatibilityStep(params: {
   }
 
   const issueLines = formatConfigIssueLines(params.snapshot.legacyIssues, "-");
+  const hasAuthoredIncludes = containsAuthoredInclude(params.snapshot.parsed);
+  const migrationInput = hasAuthoredIncludes
+    ? params.snapshot.sourceConfig
+    : params.snapshot.parsed;
   const {
     config: migrated,
     sourceConfig: migratedSource,
     changes,
     partiallyValid,
-  } = migrateLegacyConfig(params.snapshot.sourceConfig);
+  } = migrateLegacyConfig(migrationInput);
   if (!migrated) {
     return {
       state: {
@@ -61,8 +65,7 @@ export function applyLegacyCompatibilityStep(params: {
     };
   }
 
-  const migrationCandidate =
-    containsAuthoredInclude(params.snapshot.parsed) && migratedSource ? migratedSource : migrated;
+  const migrationCandidate = hasAuthoredIncludes && migratedSource ? migratedSource : migrated;
 
   return {
     state: {
