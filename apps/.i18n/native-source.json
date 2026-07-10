@@ -28667,7 +28667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 687,
+      "line": 703,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -28675,7 +28675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 687,
+      "line": 703,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",
