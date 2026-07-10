@@ -434,6 +434,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
+    let closeResult = { contentVisible: false, requestedContentVisible: false };
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -443,14 +444,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(text, { note: finalNote });
+        closeResult = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
-        if (contentVisible) {
+        if (closeResult.contentVisible) {
           markVisibleReplySent();
         }
-        if (contentVisible && streamText) {
+        if (closeResult.requestedContentVisible && streamText) {
           deliveredFinalTexts.add(streamText);
           if (options?.markClosedForReply !== false && !streamingCloseErroredForReply) {
             streamingClosedForReply = true;
@@ -460,6 +461,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     } finally {
       resetStreamingState();
     }
+    return closeResult;
   };
 
   const discardStreamingPreview = async () => {
@@ -517,6 +519,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
+  const sendPlainTextReply = async (paramsLocal: {
+    text: string;
+    infoKind?: string;
+    mentions?: MentionTarget[];
+  }) => {
+    await sendChunkedTextReply({
+      text: paramsLocal.text,
+      useCard: false,
+      infoKind: paramsLocal.infoKind,
+      sendChunk: async ({ chunk, isFirst }) => {
+        await sendMessageFeishu({
+          cfg,
+          to: sendTarget,
+          text: chunk,
+          replyToMessageId: sendReplyToMessageId,
+          replyInThread: effectiveReplyInThread,
+          allowTopLevelReplyFallback,
+          accountId,
+          ...(isFirst && paramsLocal.mentions?.length ? { mentions: paramsLocal.mentions } : {}),
+        });
+      },
+    });
+  };
+
   const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     let sentFallbackText = false;
@@ -536,21 +562,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         markVisibleReplySent();
         if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
           sentFallbackText = true;
-          await sendChunkedTextReply({
+          await sendPlainTextReply({
             text: options.fallbackText,
-            useCard: false,
             infoKind: "final",
-            sendChunk: async ({ chunk }) => {
-              await sendMessageFeishu({
-                cfg,
-                to: sendTarget,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                allowTopLevelReplyFallback,
-                accountId,
-              });
-            },
           });
         }
       },
@@ -563,24 +577,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 mediaUrl,
               );
               sentFallbackText = true;
-              await sendChunkedTextReply({
+              await sendPlainTextReply({
                 text: fallbackText,
-                useCard: false,
                 infoKind: "final",
-                sendChunk: async ({ chunk }) => {
-                  await sendMessageFeishu({
-                    cfg,
-                    to: sendTarget,
-                    text: chunk,
-                    replyToMessageId: sendReplyToMessageId,
-                    replyInThread: effectiveReplyInThread,
-                    allowTopLevelReplyFallback,
-                    accountId,
-                  });
-                },
               });
             },
     });
+  };
+
+  const sendRegularMediaAfterStreamingText = async (
+    payload: ReplyPayload,
+    fallbackText: string,
+  ) => {
+    let requestedContentVisible = false;
+    try {
+      ({ requestedContentVisible } = await closeStreaming());
+    } catch (error) {
+      params.runtime.error?.(
+        `feishu[${account.accountId}]: streaming close failed before media; using plain text fallback: ${String(error)}`,
+      );
+    }
+
+    try {
+      if (!requestedContentVisible && fallbackText) {
+        await sendPlainTextReply({
+          text: fallbackText,
+          infoKind: "final",
+          mentions: mentionTargets,
+        });
+      }
+    } finally {
+      // A text-path failure must not suppress an otherwise deliverable attachment.
+      await sendMediaReplies(payload);
+    }
   };
 
   const ensureNoVisibleReplyFallback = async (reason: string): Promise<boolean> => {
@@ -716,6 +745,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           await discardStreamingPreview();
         }
 
+        if (
+          info?.kind === "final" &&
+          hasMedia &&
+          !hasVoiceMedia &&
+          !shouldDeliverText &&
+          (streaming?.isActive() || streamingStartPromise || streamText)
+        ) {
+          const fallbackText = streamText;
+          await sendRegularMediaAfterStreamingText(payload, fallbackText);
+          return;
+        }
+
         if (shouldDeliverText) {
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
@@ -725,24 +766,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               if (coreBlockStreamingEnabled) {
                 // Reuse normal text chunking, but notify mentions only on the first visible chunk.
                 const isFirstBlock = !sentIndependentBlockText;
-                await sendChunkedTextReply({
+                await sendPlainTextReply({
                   text,
-                  useCard: false,
                   infoKind: "block",
-                  sendChunk: async ({ chunk, isFirst }) => {
-                    await sendMessageFeishu({
-                      cfg,
-                      to: sendTarget,
-                      text: chunk,
-                      replyToMessageId: sendReplyToMessageId,
-                      replyInThread: effectiveReplyInThread,
-                      allowTopLevelReplyFallback,
-                      accountId,
-                      ...(isFirstBlock && isFirst && mentionTargets?.length
-                        ? { mentions: mentionTargets }
-                        : {}),
-                    });
-                  },
+                  ...(isFirstBlock && mentionTargets?.length ? { mentions: mentionTargets } : {}),
                 });
                 sentIndependentBlockText = true;
                 if (hasMedia) {
@@ -780,7 +807,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
-            // Send media even when streaming handled the text
+            if (info?.kind === "final" && hasMedia) {
+              await sendRegularMediaAfterStreamingText(payload, text);
+              return;
+            }
+            // Send media even when streaming handled block text.
             if (hasMedia) {
               await sendMediaReplies(payload);
             }
@@ -809,24 +840,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
             });
           } else {
-            await sendChunkedTextReply({
+            await sendPlainTextReply({
               text,
-              useCard: false,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
-                await sendMessageFeishu({
-                  cfg,
-                  to: sendTarget,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  allowTopLevelReplyFallback,
-                  accountId,
-                  ...(info?.kind === "final" && isFirst && mentionTargets?.length
-                    ? { mentions: mentionTargets }
-                    : {}),
-                });
-              },
+              ...(info?.kind === "final" && mentionTargets?.length
+                ? { mentions: mentionTargets }
+                : {}),
             });
           }
         }
