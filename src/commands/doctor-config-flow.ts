@@ -1,14 +1,11 @@
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { INCLUDE_KEY } from "../config/includes.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { isRecord } from "../utils.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
@@ -22,6 +19,7 @@ import {
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
+import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
@@ -88,34 +86,6 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
     return [];
   }
   return Object.keys(channels).filter((channelId) => channelId !== "defaults");
-}
-
-function isSingleTopLevelIncludeWrite(params: {
-  parsed: unknown;
-  sourceConfig: OpenClawConfig;
-  candidate: OpenClawConfig;
-}): boolean {
-  if (!isRecord(params.parsed)) {
-    return false;
-  }
-  const changedKeys = new Set([
-    ...Object.keys(params.sourceConfig),
-    ...Object.keys(params.candidate),
-  ]);
-  const sourceConfig = params.sourceConfig as Record<string, unknown>;
-  const candidate = params.candidate as Record<string, unknown>;
-  const changed = [...changedKeys].filter(
-    (key) => !isDeepStrictEqual(sourceConfig[key], candidate[key]),
-  );
-  if (changed.length !== 1) {
-    return false;
-  }
-  const authoredSection = params.parsed[changed[0]];
-  return (
-    isRecord(authoredSection) &&
-    Object.keys(authoredSection).length === 1 &&
-    typeof authoredSection[INCLUDE_KEY] === "string"
-  );
 }
 
 // Past-tense "Removed X" lines must not appear under a "Doctor changes" panel
@@ -399,7 +369,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   cfg = finalized.cfg;
   const singleTopLevelIncludeWrite =
     finalized.shouldWriteConfig &&
-    isSingleTopLevelIncludeWrite({
+    isSingleTopLevelIncludeMigration({
       parsed: snapshot.parsed,
       sourceConfig: snapshot.sourceConfig,
       candidate: cfg,

@@ -1,6 +1,10 @@
 // Update-channel config repair for legacy config files before normal command startup.
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
+import {
+  containsAuthoredInclude,
+  isSingleTopLevelIncludeMigration,
+} from "./shared/include-migration-ownership.js";
 import { migrateLegacyConfig } from "./shared/legacy-config-migrate.js";
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -20,8 +24,20 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     return { snapshot: params.configSnapshot, repaired: false };
   }
 
+  const nextConfig = migrated.sourceConfig ?? validated.config;
+  if (
+    containsAuthoredInclude(params.configSnapshot.parsed) &&
+    !isSingleTopLevelIncludeMigration({
+      parsed: params.configSnapshot.parsed,
+      sourceConfig: params.configSnapshot.sourceConfig,
+      candidate: nextConfig,
+    })
+  ) {
+    return { snapshot: params.configSnapshot, repaired: false };
+  }
+
   await replaceConfigFile({
-    nextConfig: migrated.sourceConfig ?? validated.config,
+    nextConfig,
     baseHash: params.configSnapshot.hash,
     writeOptions: {
       allowConfigSizeDrop: true,

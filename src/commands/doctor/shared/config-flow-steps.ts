@@ -4,18 +4,8 @@ import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
 import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+import { containsAuthoredInclude } from "./include-migration-ownership.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
-
-function containsAuthoredInclude(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (Array.isArray(value)) {
-    return value.some(containsAuthoredInclude);
-  }
-  const record = value as Record<string, unknown>;
-  return Object.hasOwn(record, "$include") || Object.values(record).some(containsAuthoredInclude);
-}
 
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
