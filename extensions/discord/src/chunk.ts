@@ -287,37 +287,59 @@ export function chunkDiscordTextWithMode(
   return chunks;
 }
 
-// End index of a leading markdown code span (fenced or inline), or -1.
-// Used so reasoning-italics reopen can sit *after* the code opener instead of
-// gluing `_` onto backticks (`_``` / `_`code`), which Discord fails to parse.
+// Whether `line` closes `open` under the same fence grammar the chunker uses:
+// same marker char (` or ~) and closing run length >= open run length.
+function isClosingFenceLine(line: string, open: OpenFence): boolean {
+  const fenceInfo = parseFenceLine(line);
+  return Boolean(
+    fenceInfo && fenceInfo.markerChar === open.markerChar && fenceInfo.markerLen >= open.markerLen,
+  );
+}
+
+// Leading fenced block or inline code, using the chunker's fence grammar
+// (FENCE_RE / parseFenceLine): 0–3 space indent, ``` or ~~~ openers, and
+// same-char closers of equal or greater length. Returns end index or -1.
+// Used so reasoning-italics reopen sits *after* the code span instead of
+// gluing `_` onto the opener (`_``` / `_~~~ / `_`code`).
 function leadingCodeSpanEnd(body: string): number {
-  if (!body.startsWith("`")) {
+  if (!body) {
     return -1;
   }
 
-  const fenceOpen = /^(?<ticks>`{3,})(?<info>[^\n`]*)(?:\n|$)/.exec(body);
-  if (fenceOpen?.groups?.ticks) {
-    const ticks = fenceOpen.groups.ticks;
-    let searchFrom = fenceOpen[0].length;
-    while (searchFrom <= body.length) {
-      const closeAt = body.indexOf(ticks, searchFrom);
-      if (closeAt === -1) {
+  const firstNl = body.indexOf("\n");
+  const firstLine = firstNl === -1 ? body : body.slice(0, firstNl);
+  const openFence = parseFenceLine(firstLine);
+  if (openFence) {
+    if (firstNl === -1) {
+      return body.length;
+    }
+    let lineStart = firstNl + 1;
+    while (lineStart <= body.length) {
+      const lineEnd = body.indexOf("\n", lineStart);
+      const line = lineEnd === -1 ? body.slice(lineStart) : body.slice(lineStart, lineEnd);
+      if (isClosingFenceLine(line, openFence)) {
+        const fenceInfo = parseFenceLine(line);
+        if (!fenceInfo) {
+          return body.length;
+        }
+        // End after indent + markers + trailing spaces. Non-space remainder on
+        // the close line (e.g. the original wrap's `_` in ```_) stays in rest.
+        const markerEnd = fenceInfo.indent.length + fenceInfo.markerLen;
+        const trailingSpaces = /^ */.exec(line.slice(markerEnd))?.[0].length ?? 0;
+        return lineStart + markerEnd + trailingSpaces;
+      }
+      if (lineEnd === -1) {
         return body.length;
       }
-      const atLineStart = closeAt === 0 || body[closeAt - 1] === "\n";
-      if (atLineStart) {
-        const after = closeAt + ticks.length;
-        // Closing fence may be followed by newline, end, or non-tick text
-        // (e.g. the original wrap's trailing `_` attached as ```_).
-        if (after >= body.length || body[after] !== "`") {
-          return after;
-        }
-      }
-      searchFrom = closeAt + 1;
+      lineStart = lineEnd + 1;
     }
     return body.length;
   }
 
+  // Inline code (backticks only; tildes are fence-only in this grammar).
+  if (!body.startsWith("`")) {
+    return -1;
+  }
   const inlineOpen = /^(?<ticks>`+)/.exec(body);
   if (!inlineOpen?.groups?.ticks) {
     return -1;
@@ -330,6 +352,17 @@ function leadingCodeSpanEnd(body: string): number {
   return closeAt + ticks.length;
 }
 
+function startsWithCodeDelimiter(body: string): boolean {
+  if (!body) {
+    return false;
+  }
+  const firstLine = body.split("\n", 1)[0] ?? "";
+  if (parseFenceLine(firstLine)) {
+    return true;
+  }
+  return body.startsWith("`");
+}
+
 function hasReasoningItalicsOpen(chunk: string): boolean {
   const trimmed = chunk.trimStart();
   if (trimmed.startsWith("_")) {
@@ -338,7 +371,7 @@ function hasReasoningItalicsOpen(chunk: string): boolean {
   if (/^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(trimmed)) {
     return true;
   }
-  if (trimmed.startsWith("`")) {
+  if (startsWithCodeDelimiter(trimmed)) {
     const codeEnd = leadingCodeSpanEnd(trimmed);
     if (codeEnd > 0) {
       return trimmed.slice(codeEnd).trimStart().startsWith("_");
@@ -412,7 +445,8 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     if (nextBody.startsWith("_")) {
       continue;
     }
-    if (nextBody.startsWith("`")) {
+    // Fence (``` / ~~~, optional 0–3 indent restored via leadingWhitespace) or inline code.
+    if (startsWithCodeDelimiter(nextBody)) {
       adjusted[i + 1] = `${leadingWhitespace}${reopenReasoningItalicsAfterLeadingCode(nextBody)}`;
       continue;
     }
