@@ -1,36 +1,58 @@
 // Owns atomic plugin registration state across registry and process-global capabilities.
 import {
+  clearAgentHarnesses,
   listRegisteredAgentHarnesses,
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
 import {
+  clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
   restoreDetachedTaskLifecycleRuntimeRegistration,
 } from "../tasks/detached-task-runtime-state.js";
-import { listRegisteredPluginCommands, restorePluginCommands } from "./command-registry-state.js";
 import {
+  clearPluginCommands,
+  listRegisteredPluginCommands,
+  restorePluginCommands,
+} from "./command-registry-state.js";
+import {
+  clearCompactionProviders,
   listRegisteredCompactionProviders,
   restoreRegisteredCompactionProviders,
 } from "./compaction-provider.js";
 import {
+  clearEmbeddingProviders,
   listRegisteredEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
 } from "./embedding-providers.js";
 import {
+  clearPluginInteractiveHandlers,
   listPluginInteractiveHandlers,
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
 import {
+  clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredMemoryEmbeddingProviders,
 } from "./memory-embedding-providers.js";
 import {
+  clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
+
+export function clearActivatedPluginRuntimeState(): void {
+  clearAgentHarnesses();
+  clearPluginCommands();
+  clearCompactionProviders();
+  clearDetachedTaskLifecycleRuntimeRegistration();
+  clearPluginInteractiveHandlers();
+  clearEmbeddingProviders();
+  clearMemoryEmbeddingProviders();
+  clearMemoryPluginState();
+}
 
 export type PluginProcessGlobalState = {
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
