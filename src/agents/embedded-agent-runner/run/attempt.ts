@@ -1335,6 +1335,7 @@ export async function runEmbeddedAttempt(
       skillsSnapshot: skillsSnapshotForRun,
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: effectiveToolsAllow,
+      inheritRuntimeToolAllowlist: true,
     });
     const localModelLeanEnabled = isLocalModelLeanEnabled({
       config: params.config,
