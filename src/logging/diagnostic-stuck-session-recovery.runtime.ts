@@ -275,12 +275,10 @@ export async function recoverStuckDiagnosticSession(
           const outcome: StuckSessionRecoveryOutcome = {
             status: "released",
             action: "release_lane",
-            reason: "stale_lane_task",
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             lane: sessionLane,
             released,
-            queuedCount: laneSnapshot.queuedCount,
           };
           diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
           return outcome;
