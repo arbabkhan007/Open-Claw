@@ -125,7 +125,10 @@ import {
   hasMattermostThreadParticipationWithPersistence,
   recordMattermostThreadParticipation,
 } from "./thread-participation.js";
-import { processMattermostVoiceTurn } from "./voice-turn.js";
+import {
+  generateMattermostVoiceReply,
+  transcribeMattermostVoiceTurn,
+} from "./voice-turn.js";
 import { createMattermostVoiceWorker } from "./voice-worker.js";
 
 export {
@@ -2307,7 +2310,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             onDebug: (message) => runtime.log?.(message),
           });
         },
-        processTurn: async ({ channelId, userId, samples }) => {
+        transcribeTurn: async ({ channelId, userId, samples }) => {
           const access = await resolveMattermostVoiceAccess({ channelId, userId });
           if (!access.allowed || !access.channelInfo) {
             logVerboseMessage(
@@ -2322,13 +2325,35 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             teamId: access.channelInfo.team_id ?? undefined,
             peer: { kind: "direct", id: userId },
           });
-          return await processMattermostVoiceTurn({
-            accountId: account.accountId,
+          return await transcribeMattermostVoiceTurn({
             agentId: route.agentId,
             cfg,
-            channelId,
-            runtime,
             samples,
+          });
+        },
+        processTurn: async ({ abortSignal, channelId, message, userId }) => {
+          const access = await resolveMattermostVoiceAccess({ channelId, userId });
+          if (!access.allowed || !access.channelInfo) {
+            logVerboseMessage(
+              `mattermost voice: drop speaker=${userId} channel=${channelId} reason=${access.reasonCode}`,
+            );
+            return undefined;
+          }
+          const route = core.channel.routing.resolveAgentRoute({
+            cfg,
+            channel: "mattermost",
+            accountId: account.accountId,
+            teamId: access.channelInfo.team_id ?? undefined,
+            peer: { kind: "direct", id: userId },
+          });
+          return await generateMattermostVoiceReply({
+            accountId: account.accountId,
+            agentId: route.agentId,
+            abortSignal,
+            cfg,
+            channelId,
+            message,
+            runtime,
             sessionKey: route.sessionKey,
             userId,
           });
