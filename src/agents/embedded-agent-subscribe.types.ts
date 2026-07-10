@@ -98,6 +98,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
     incompleteTerminalAssistant: boolean;
     hadDeterministicSideEffect: boolean;
   }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
+  /**
+   * When false, assistant stream events bypass the terminal delivery gate while
+   * block replies still wait. Live UI surfaces rely on pre-terminal deltas.
+   */
+  deferAssistantStreamDelivery?: boolean;
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;

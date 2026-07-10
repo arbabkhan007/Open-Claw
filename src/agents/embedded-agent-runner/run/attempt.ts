@@ -3744,6 +3744,11 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          // before_agent_finalize may reject or revise the terminal assistant text.
+          // Keep live assistant deltas behind the same gate whenever that hook is active.
+          deferAssistantStreamDelivery: onBeforeTerminalDelivery
+            ? undefined
+            : params.deferAssistantStreamDelivery,
           terminalLifecyclePhase:
             (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
               ? "finishing"
