@@ -621,9 +621,17 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       const event = runCronChangedMock.mock.calls
-        .map((call) => requireRecord(call[0], "cron_changed event"))
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
         .find((hookEvent) => hookEvent.action === "finished");
-      const summary = String(event?.summary ?? "");
+      if (typeof event?.summary !== "string") {
+        throw new Error("expected cron_changed summary");
+      }
+      const summary = event.summary;
       expect(summary).toContain("[redacted-url]");
       expect(summary).toContain("[redacted-code]");
       expect(summary).toContain("token=***");
@@ -673,7 +681,10 @@ describe("buildGatewayCronService", () => {
         callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
         "cron announce payload",
       );
-      const message = String(announcePayload.message ?? "");
+      if (typeof announcePayload.message !== "string") {
+        throw new Error("expected cron announce message");
+      }
+      const message = announcePayload.message;
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
     } finally {
@@ -714,7 +725,12 @@ describe("buildGatewayCronService", () => {
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
 
       const event = runCronChangedMock.mock.calls
-        .map((call) => requireRecord(call[0], "cron_changed event"))
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
         .find((hookEvent) => hookEvent.action === "finished");
       expect(event?.summary).toBe(summary);
     } finally {

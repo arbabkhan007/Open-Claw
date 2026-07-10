@@ -418,7 +418,7 @@ describe("Anthropic provider", () => {
               {
                 type: "resource",
                 resource: { uri: "https://example.com/data.json", text: '{"key":"value"}' },
-              },
+              } as unknown as { type: "text"; text: string },
               { type: "text", text: "after image" },
             ],
             isError: false,
