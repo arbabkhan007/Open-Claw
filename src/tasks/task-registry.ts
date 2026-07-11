@@ -1787,7 +1787,7 @@ function ensureListener() {
         const startedAt =
           typeof evt.data?.startedAt === "number" ? evt.data.startedAt : current.startedAt;
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
-        if (startedAt) {
+        if (startedAt !== undefined) {
           patch.startedAt = startedAt;
         }
         if (phase === "start") {
