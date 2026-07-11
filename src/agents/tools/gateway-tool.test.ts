@@ -377,13 +377,18 @@ describe("gateway tool restart continuation", () => {
       config: {},
     });
 
-    await tool.execute?.("tool-call-update", {
-      action: "update.run",
-      sessionKey: "agent:main:session-B",
-      continuationMessage: "Reply after update restart",
-      note: "Updating now",
-      restartDelayMs: 0,
-    });
+    const controller = new AbortController();
+    await tool.execute?.(
+      "tool-call-update",
+      {
+        action: "update.run",
+        sessionKey: "agent:main:session-B",
+        continuationMessage: "Reply after update restart",
+        note: "Updating now",
+        restartDelayMs: 0,
+      },
+      controller.signal,
+    );
 
     expect(callGatewayToolMock).toHaveBeenCalledWith(
       "update.run",
@@ -394,6 +399,7 @@ describe("gateway tool restart continuation", () => {
         note: "Updating now",
         restartDelayMs: 0,
       }),
+      { signal: controller.signal },
     );
   });
 });
