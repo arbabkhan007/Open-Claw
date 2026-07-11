@@ -62,6 +62,9 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "tools.fs.workspaceAliases": ["tools", "security", "access", "advanced"],
+  "tools.fs.workspaceAliases[].path": ["tools", "security", "access", "advanced"],
+  "tools.fs.workspaceAliases[].target": ["tools", "security", "access", "advanced"],
   "tools.exec.mode": ["tools", "security", "access"],
 };
 
