@@ -156,4 +156,90 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     }).toThrow("Invalid launchd label: ../evil/label");
     expect(spawnMock).not.toHaveBeenCalled();
   });
+  it("kickstart-if-dead yields to a running KeepAlive replacement but restarts a pid=0 job (#104637 review)", async () => {
+    const { execFileSync, mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } =
+      await (async () => {
+        const cp = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+        const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+        return {
+          execFileSync: cp.execFileSync,
+          mkdtempSync: fs.mkdtempSync,
+          writeFileSync: fs.writeFileSync,
+          chmodSync: fs.chmodSync,
+          readFileSync: fs.readFileSync,
+          rmSync: fs.rmSync,
+        };
+      })();
+    const os = await vi.importActual<typeof import("node:os")>("node:os");
+    const path = await vi.importActual<typeof import("node:path")>("node:path");
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Users/test", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.test" },
+      mode: "kickstart-if-dead" as never,
+      waitForPid: 0,
+    });
+    const [, spawnArgs] = requireSpawnCall(0);
+    const script = spawnArgs[1];
+    if (typeof script !== "string") {
+      throw new Error("expected generated handoff script");
+    }
+
+    const runScript = (launchctlPrintOutput: string) => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "handoff-script-"));
+      const callLog = path.join(dir, "calls.log");
+      writeFileSync(
+        path.join(dir, "launchctl"),
+        [
+          "#!/bin/sh",
+          `echo "$@" >> ${JSON.stringify(callLog)}`,
+          'case "$1" in',
+          `  print) printf '%s\n' ${JSON.stringify(launchctlPrintOutput)}; exit 0 ;;`,
+          "  *) exit 0 ;;",
+          "esac",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(path.join(dir, "launchctl"), 0o755);
+      let status = 0;
+      try {
+        execFileSync(
+          "/bin/sh",
+          [
+            "-c",
+            script,
+            "test-handoff",
+            "gui/501/ai.openclaw.test",
+            "gui/501",
+            "/tmp/x.plist",
+            "0",
+            "ai.openclaw.test",
+          ],
+          {
+            env: {
+              PATH: `${dir}:/usr/bin:/bin`,
+              HOME: dir,
+              OPENCLAW_STATE_DIR: dir,
+            },
+            stdio: "pipe",
+          },
+        );
+      } catch (err) {
+        status = (err as { status?: number }).status ?? 1;
+      }
+      const calls = readFileSync(callLog, "utf8");
+      rmSync(dir, { recursive: true, force: true });
+      return { status, calls };
+    };
+
+    // A RUNNING replacement (KeepAlive won): the helper must not kickstart it.
+    const running = runScript("state = running\n\tpid = 4242");
+    expect(running.status).toBe(0);
+    expect(running.calls).not.toContain("kickstart");
+
+    // A loaded-but-stopped job prints pid = 0: NOT a healthy replacement — the
+    // helper must run the kickstart chain instead of declaring success.
+    const stopped = runScript("state = not running\n\tpid = 0");
+    expect(stopped.status).toBe(0);
+    expect(stopped.calls).toContain("kickstart -k gui/501/ai.openclaw.test");
+  });
 });

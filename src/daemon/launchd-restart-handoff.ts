@@ -143,7 +143,8 @@ exit "$status"
     // Routine supervised restarts (#104538): if launchd's own KeepAlive already
     // relaunched the service, leave the healthy replacement alone — a second
     // `kickstart -k` here would kill it and cause an avoidable interruption.
-    // Only when no running pid appears does the kickstart/bootstrap chain run
+    // A loaded-but-stopped job prints pid = 0, so the poll requires a non-zero
+    // pid. Only when no running pid appears does the kickstart/bootstrap chain run
     // (the KeepAlive-inert domains the issue reports).
     return `service_target="$1"
 domain="$2"
@@ -151,7 +152,7 @@ plist_path="$3"
 ${waitForCallerPid}
 pid_retry_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
 while [ "$pid_retry_count" -gt 0 ]; do
-  if launchctl print "$service_target" 2>/dev/null | grep -Eq 'pid = [0-9]+'; then
+  if launchctl print "$service_target" 2>/dev/null | grep -Eq 'pid = [1-9][0-9]*'; then
     printf '[%s] openclaw restart done source=launchd-handoff mode=${mode} reason=keepalive-relaunch\n' "$(date -u +%FT%TZ)" >&2
     exit 0
   fi
