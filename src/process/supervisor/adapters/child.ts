@@ -256,6 +256,7 @@ export async function createChildAdapter(params: {
   let hardKillRequested = false;
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
 
@@ -346,9 +347,13 @@ export async function createChildAdapter(params: {
     forcedWindowsCloseTimer.unref?.();
   };
 
+  const isWindowsHardKillSettlementBlocked = () =>
+    process.platform === "win32" && hardKillRequested && !windowsTreeKillCompleted;
+
   const maybeSettleAfterWindowsExit = () => {
     if (
       process.platform !== "win32" ||
+      isWindowsHardKillSettlementBlocked() ||
       childExitState == null ||
       !stdoutDrained ||
       !stderrDrained
@@ -383,7 +388,12 @@ export async function createChildAdapter(params: {
     scheduleForcedWindowsCloseSettlement();
   });
   child.once("close", (code, signal) => {
-    settleWait(resolveObservedExitState({ code, signal }));
+    childCloseState = { code, signal };
+    childExitState ??= childCloseState;
+    if (isWindowsHardKillSettlementBlocked()) {
+      return;
+    }
+    settleWait(resolveObservedExitState(childCloseState));
   });
 
   const wait = async () => {
@@ -444,6 +454,11 @@ export async function createChildAdapter(params: {
             // ignore kill errors
           }
           windowsTreeKillCompleted = true;
+          if (childCloseState) {
+            settleWait(resolveObservedExitState(childCloseState));
+            return;
+          }
+          maybeSettleAfterWindowsExit();
           scheduleForcedWindowsCloseSettlement();
         });
       } else {

@@ -420,6 +420,68 @@ describe("createChildAdapter", () => {
     expect(stub.child.stderr?.destroyed).toBe(true);
   });
 
+  it("blocks Windows child close until tree-kill completion", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeAndWaitMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveTreeKill = resolve;
+      }),
+    );
+
+    const stub = createStubChild(9754);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    stub.emitClose(null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveTreeKill?.();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+  });
+
+  it("blocks drained Windows streams until tree-kill completion", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeAndWaitMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveTreeKill = resolve;
+      }),
+    );
+
+    const stub = createStubChild(9755);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveTreeKill?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+  });
+
   it("preserves descendant output after ordinary Windows child exit", async () => {
     vi.useFakeTimers();
     setPlatform("win32");
