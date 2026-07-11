@@ -37,6 +37,7 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    getRestartState: vi.fn(() => "idle" as const),
     resetRestartAttempts: vi.fn(),
   };
 }
