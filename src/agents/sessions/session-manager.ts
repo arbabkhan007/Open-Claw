@@ -212,6 +212,15 @@ export interface SessionTreeNode {
   labelTimestamp?: string;
 }
 
+function compareSessionEntryTimestamps(a: SessionEntry, b: SessionEntry): number {
+  const aTimestamp = parseStrictTimestampStringMs(a.timestamp);
+  const bTimestamp = parseStrictTimestampStringMs(b.timestamp);
+  if (aTimestamp === undefined || bTimestamp === undefined) {
+    return 0;
+  }
+  return aTimestamp - bTimestamp;
+}
+
 export interface SessionContext {
   messages: AgentMessage[];
   thinkingLevel: string;
@@ -2699,11 +2708,7 @@ export class SessionManager {
     const stack: SessionTreeNode[] = [...roots];
     while (stack.length > 0) {
       const node = stack.pop()!;
-      node.children.sort(
-        (a, b) =>
-          (parseStrictTimestampStringMs(a.entry.timestamp) ?? 0) -
-          (parseStrictTimestampStringMs(b.entry.timestamp) ?? 0),
-      );
+      node.children.sort((a, b) => compareSessionEntryTimestamps(a.entry, b.entry));
       stack.push(...node.children);
     }
 
