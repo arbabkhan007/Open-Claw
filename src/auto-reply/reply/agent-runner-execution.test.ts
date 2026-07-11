@@ -1573,8 +1573,13 @@ describe("runAgentTurnWithFallback", () => {
 
   it("surfaces a stalled reply operation after the embedded run returns no payload", async () => {
     const { replyOperation } = createMockReplyOperation();
+    let operationResult: ReplyOperation["result"] = null;
+    Object.defineProperty(replyOperation, "result", {
+      configurable: true,
+      get: () => operationResult,
+    });
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      replyOperation.result = { kind: "failed", code: "run_stalled" };
+      operationResult = { kind: "failed", code: "run_stalled" };
       return { payloads: [], meta: {} };
     });
 
