@@ -1,4 +1,5 @@
 // Legacy cron config migration for zero-duration sessionRetention values.
+import { parseDurationMs } from "../../../cli/parse-duration.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -6,13 +7,30 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 
-const ZERO_DURATION_VALUES = new Set(["0h", "0d", "0ms"]);
-
+/**
+ * Returns `true` when `sessionRetention` is a non-false string that
+ * `parseDurationMs` evaluates to ≤ 0 with the same options the schema
+ * uses, so the matching doctor migration can remove it before the
+ * stricter schema rejects it on upgrade.
+ *
+ * Invalid (unparseable) strings return `false` — they are already caught
+ * by the base schema diagnostic and should not be silently removed.
+ */
 function isZeroDurationSessionRetention(raw: unknown): boolean {
   const cron = getRecord(raw);
-  if (!cron || !Object.hasOwn(cron, "sessionRetention")) return false;
+  if (!cron || !Object.hasOwn(cron, "sessionRetention")) {
+    return false;
+  }
   const val = cron.sessionRetention;
-  return typeof val === "string" && ZERO_DURATION_VALUES.has(val.trim());
+  if (typeof val !== "string") {
+    return false;
+  }
+  try {
+    const ms = parseDurationMs(val, { defaultUnit: "h" });
+    return ms <= 0;
+  } catch {
+    return false;
+  }
 }
 
 const CRON_RUN_LOG_RULE: LegacyConfigRule = {
@@ -54,14 +72,25 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON: LegacyConfigMigrationSpec[] 
     legacyRules: [CRON_SESSION_RETENTION_ZERO_RULE],
     apply: (raw, changes) => {
       const cron = getRecord(raw.cron);
-      if (!cron || !Object.hasOwn(cron, "sessionRetention")) return;
+      if (!cron || !Object.hasOwn(cron, "sessionRetention")) {
+        return;
+      }
       const val = cron.sessionRetention;
-      if (typeof val !== "string") return;
-      const trimmed = val.trim();
-      if (!ZERO_DURATION_VALUES.has(trimmed)) return;
+      if (typeof val !== "string") {
+        return;
+      }
+      let ms: number;
+      try {
+        ms = parseDurationMs(val, { defaultUnit: "h" });
+      } catch {
+        return; // unparseable — leave for schema diagnostic
+      }
+      if (ms > 0) {
+        return;
+      }
       delete cron.sessionRetention;
       changes.push(
-        `Removed cron.sessionRetention "${trimmed}" (zero duration); documented 24h default applies.`,
+        `Removed cron.sessionRetention "${val}" (zero duration); documented 24h default applies.`,
       );
     },
   }),
