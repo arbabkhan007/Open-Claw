@@ -437,7 +437,9 @@ export async function createChildAdapter(params: {
     signalProcessTree(pid, signal, { detached: childIsDetached });
   };
   const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
-    signalProcessTree(pid, signal, { detached: childIsDetached });
+    new Promise<void>((resolve) => {
+      signalProcessTree(pid, signal, { detached: childIsDetached, onComplete: resolve });
+    });
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {

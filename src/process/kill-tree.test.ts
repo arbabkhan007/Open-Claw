@@ -235,7 +235,7 @@ describe("killProcessTree", () => {
 
     await withMockedPlatform("win32", async () => {
       const completed = vi.fn();
-      void signalProcessTree(8989, "SIGKILL").then(completed);
+      signalProcessTree(8989, "SIGKILL", { onComplete: completed });
       await Promise.resolve();
       expect(completed).not.toHaveBeenCalled();
 
@@ -253,7 +253,7 @@ describe("killProcessTree", () => {
 
     await withMockedPlatform("win32", async () => {
       const completed = vi.fn();
-      void signalProcessTree(9090, "SIGKILL").then(completed);
+      signalProcessTree(9090, "SIGKILL", { onComplete: completed });
 
       await vi.advanceTimersByTimeAsync(2_999);
       expect(completed).not.toHaveBeenCalled();

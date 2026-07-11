@@ -58,18 +58,20 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
 export function signalProcessTree(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
-  opts?: { detached?: boolean },
-): Promise<void> {
+  opts?: { detached?: boolean; onComplete?: () => void },
+): void {
   if (!Number.isFinite(pid) || pid <= 0) {
-    return Promise.resolve();
+    opts?.onComplete?.();
+    return;
   }
 
   if (process.platform === "win32") {
-    return signalProcessTreeWindowsAndWait(pid, signal);
+    void signalProcessTreeWindowsAndWait(pid, signal).then(opts?.onComplete);
+    return;
   }
 
   signalProcessTreeUnix(pid, signal, opts?.detached !== false);
-  return Promise.resolve();
+  opts?.onComplete?.();
 }
 
 function normalizeGraceMs(value?: number): number {

@@ -18,7 +18,11 @@ import {
 const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
   () => ({
     spawnWithFallbackMock: vi.fn(),
-    signalProcessTreeMock: vi.fn(() => Promise.resolve()),
+    signalProcessTreeMock: vi.fn(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        opts?.onComplete?.();
+      },
+    ),
     createWindowsOutputDecoderMock: vi.fn(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
@@ -203,9 +207,11 @@ describe("createChildAdapter", () => {
     // Detachment flag is now passed to signalProcessTree so it knows whether
     // it can safely group-kill via -pid. (#71662)
     const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", {
-      detached: expectedDetached,
-    });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      4321,
+      "SIGKILL",
+      expect.objectContaining({ detached: expectedDetached }),
+    );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -227,9 +233,11 @@ describe("createChildAdapter", () => {
     adapter.kill();
     await Promise.resolve();
 
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(8888, "SIGKILL", {
-      detached: false,
-    });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      8888,
+      "SIGKILL",
+      expect.objectContaining({ detached: false }),
+    );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -239,9 +247,11 @@ describe("createChildAdapter", () => {
       const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
       adapter.kill();
       await Promise.resolve();
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(9999, "SIGKILL", {
-        detached: false,
-      });
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(
+        9999,
+        "SIGKILL",
+        expect.objectContaining({ detached: false }),
+      );
       expect(killMock).toHaveBeenCalledWith("SIGKILL");
     } finally {
       delete process.env.OPENCLAW_SERVICE_MARKER;
@@ -382,10 +392,10 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     setPlatform("win32");
     let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveTreeKill = resolve;
-      }),
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
     );
 
     const stub = createStubChild(9753);
@@ -419,10 +429,10 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     setPlatform("win32");
     let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveTreeKill = resolve;
-      }),
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
     );
 
     const stub = createStubChild(9754);
@@ -450,10 +460,10 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     setPlatform("win32");
     let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveTreeKill = resolve;
-      }),
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
     );
 
     const stub = createStubChild(9755);
