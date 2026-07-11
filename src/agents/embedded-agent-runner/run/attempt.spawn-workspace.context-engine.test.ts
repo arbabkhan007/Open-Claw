@@ -307,6 +307,25 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps the admitted run session as goal owner under a distinct policy key", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        sandboxSessionKey: "agent:main:policy:transient",
+      },
+    });
+
+    expect(
+      mockParams(hoisted.createOpenClawCodingToolsMock, 0, "createOpenClawCodingTools options")
+        .goalOwnerSessionKey,
+    ).toBe(sessionKey);
+  });
+
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
     expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});

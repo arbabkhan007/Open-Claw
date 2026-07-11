@@ -869,6 +869,20 @@ describe("exec notifyOnExit", () => {
     expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
   });
 
+  it("routes background completion events to an explicit durable notification session", async () => {
+    const policySessionKey = "agent:main:runtime-policy";
+    const ownerSessionKey = "agent:main:channel:group:example:thread:25";
+    const tool = createNotifyOnExitExecTool({
+      sessionKey: policySessionKey,
+      notifySessionKey: ownerSessionKey,
+    });
+
+    const sessionId = await startBackgroundCommand(tool, shellEcho("notify owner"));
+
+    await waitForNotifyEvent(sessionId, ownerSessionKey);
+    expect(hasNotifyEventForPrefix(sessionId.slice(0, 8), policySessionKey)).toBe(false);
+  });
+
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
     await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
       source: "exec-event",

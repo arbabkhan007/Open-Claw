@@ -600,6 +600,7 @@ describe("createCopilotToolBridge", () => {
       const opts = getOpts();
       expect(opts.sessionKey).toBe("sandbox:agent:main");
       expect(opts.runSessionKey).toBe("agent:main:main");
+      expect(opts.goalOwnerSessionKey).toBe("agent:main:main");
     });
 
     it("derives runSessionKey as undefined when sandboxSessionKey equals sessionKey", async () => {

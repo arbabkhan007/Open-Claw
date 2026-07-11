@@ -119,6 +119,8 @@ export function createOpenClawTools(
      * the live run session instead of the stale sandbox key.
      */
     runSessionKey?: string;
+    /** Durable user-facing session that owns goal state. */
+    goalOwnerSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
     runId?: string;
     agentAccountId?: string;
@@ -464,6 +466,13 @@ export function createOpenClawTools(
     pluginToolDenylist: options?.pluginToolDenylist,
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
+  const goalToolOptions = {
+    goalOwnerSessionKey: options?.goalOwnerSessionKey,
+    agentSessionKey: options?.agentSessionKey,
+    runSessionKey: options?.runSessionKey,
+    sessionAgentId,
+    config: resolvedConfig,
+  };
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -524,24 +533,9 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
-    createGetGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionAgentId,
-      config: resolvedConfig,
-    }),
-    createCreateGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionAgentId,
-      config: resolvedConfig,
-    }),
-    createUpdateGoalTool({
-      agentSessionKey: options?.agentSessionKey,
-      runSessionKey: options?.runSessionKey,
-      sessionAgentId,
-      config: resolvedConfig,
-    }),
+    createGetGoalTool(goalToolOptions),
+    createCreateGoalTool(goalToolOptions),
+    createUpdateGoalTool(goalToolOptions),
     ...(options?.sandboxed
       ? []
       : [

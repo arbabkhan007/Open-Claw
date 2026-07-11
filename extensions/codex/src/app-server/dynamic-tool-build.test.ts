@@ -1583,4 +1583,27 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(automaticSchema.properties).not.toHaveProperty("final");
   });
+  it("passes session scope and durable goal ownership into Codex dynamic tools", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sessionKey = "agent:main:main";
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+      sandboxSessionKey: "agent:main:policy:transient",
+    });
+
+    expect(factoryOptions[0]).toMatchObject({
+      goalOwnerSessionKey: "agent:main:main",
+      sessionKey: "agent:main:policy:transient",
+      runSessionKey: "agent:main:main",
+    });
+  });
 });

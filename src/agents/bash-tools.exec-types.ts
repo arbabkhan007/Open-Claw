@@ -54,6 +54,8 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** Durable session that receives detached exec completion events and approval followups. */
+  notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated
    *  on `/new` and `/reset`, so it pins exec-approval followups to the original
    *  session instance and lets stale followups drop after a session rebind. */

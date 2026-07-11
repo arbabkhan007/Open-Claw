@@ -235,6 +235,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             attempt.sessionKey && attempt.sessionKey !== params.sandboxSessionKey
               ? attempt.sessionKey
               : undefined,
+          goalOwnerSessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
