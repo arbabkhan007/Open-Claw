@@ -50,7 +50,10 @@ describe("deliverLineAutoReply", () => {
     const pushMessagesLine = vi.fn(async () => ({
       messageId: "push",
       chatId: "u1",
-      receipt: createLineSendReceipt({ messageId: "push", chatId: "u1", kind: "text" }),
+      receipt: createLineSendReceipt({
+        parts: [{ messageId: "push", kind: "text" }],
+        chatId: "u1",
+      }),
     }));
 
     const deps: LineAutoReplyDeps = {
