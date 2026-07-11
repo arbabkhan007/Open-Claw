@@ -222,6 +222,20 @@ import {
   TickEventSchema,
 } from "./frames.js";
 import {
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResultSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendTaskBlockerSchema,
+} from "./gateway-suspend.js";
+import {
   ChatAbortedEventSchema,
   ChatAbortParamsSchema,
   ChatDeltaEventSchema,
@@ -234,8 +248,6 @@ import {
   ChatMessageGetResultSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
-  ChatToolTitlesParamsSchema,
-  ChatToolTitlesResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
@@ -422,6 +434,18 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
+  GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareParams: GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareBusyResult: GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareReadyResult: GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResult: GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusParams: GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusRunningResult: GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusReadyResult: GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusResult: GatewaySuspendStatusResultSchema,
+  GatewaySuspendResumeParams: GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResult: GatewaySuspendResumeResultSchema,
 
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
@@ -774,8 +798,6 @@ export const ProtocolSchemas = {
   ChatMetadataParams: ChatMetadataParamsSchema,
   ChatMessageGetParams: ChatMessageGetParamsSchema,
   ChatMessageGetResult: ChatMessageGetResultSchema,
-  ChatToolTitlesParams: ChatToolTitlesParamsSchema,
-  ChatToolTitlesResult: ChatToolTitlesResultSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,

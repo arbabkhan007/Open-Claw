@@ -7,7 +7,7 @@ import SwiftUI
 
 extension OnboardingView {
     @ViewBuilder
-    func pageView(for pageIndex: Int) -> some View {
+    func pageView(for pageIndex: Int, contentHeight: CGFloat) -> some View {
         switch pageIndex {
         case 0:
             self.welcomePage()
@@ -16,11 +16,11 @@ extension OnboardingView {
         case 2:
             self.cliPage()
         case 3:
-            self.aiSetupPage()
+            self.aiSetupPage(contentHeight: contentHeight)
         case 5:
-            self.permissionsPage()
+            self.permissionsPage(contentHeight: contentHeight)
         case 8:
-            self.onboardingChatPage()
+            self.onboardingChatPage(contentHeight: contentHeight)
         case 9:
             self.readyPage()
         default:
@@ -655,7 +655,7 @@ extension OnboardingView {
         .buttonStyle(.plain)
     }
 
-    func permissionsPage() -> some View {
+    func permissionsPage(contentHeight: CGFloat) -> some View {
         // Fixed layout (no ScrollView): sorted by importance and sized so all
         // permissions stay visible at once — no scrollbars during onboarding.
         VStack(spacing: 12) {
@@ -689,7 +689,7 @@ extension OnboardingView {
             }
         }
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
@@ -747,28 +747,20 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled {
-            return .done
-        }
+        if self.cliInstalled { return .done }
         if self.installingCLI {
             return self.cliInstallPhase == .startingService ? .done : .running
         }
-        if self.installFailed {
-            return .failed
-        }
+        if self.installFailed { return .failed }
         return .running // status probe still deciding
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled {
-            return .done
-        }
+        if self.cliInstalled { return .done }
         if self.installingCLI {
             return self.cliInstallPhase == .startingService ? .running : .pending
         }
-        if self.installFailed {
-            return .failed
-        }
+        if self.installFailed { return .failed }
         return .pending
     }
 
@@ -910,7 +902,7 @@ extension OnboardingView {
         }
     }
 
-    func onboardingChatPage() -> some View {
+    func onboardingChatPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Text("Meet your agent")
                 .font(.largeTitle.weight(.semibold))
@@ -930,7 +922,7 @@ extension OnboardingView {
             .frame(maxHeight: .infinity)
         }
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     func readyPage() -> some View {
@@ -1010,12 +1002,8 @@ extension OnboardingView {
     }
 
     private func maybeLoadOnboardingSkills() async {
-        if self.onboardingSkillsModel.isLoading {
-            return
-        }
-        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil {
-            return
-        }
+        if self.onboardingSkillsModel.isLoading { return }
+        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
         self.didLoadOnboardingSkills = true
         await self.onboardingSkillsModel.refresh()
     }
