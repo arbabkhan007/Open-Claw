@@ -2,6 +2,7 @@
 // partial-failure metadata for multi-payload outbound sends.
 import type { MessageReceipt } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { ChannelOutboundTargetRef } from "../../channels/plugins/outbound-target.types.js";
 
 /** Successful channel send result normalized for core delivery accounting. */
 export type OutboundDeliveryResult = {
@@ -59,6 +60,7 @@ export type OutboundPayloadDeliveryOutcome =
       index: number;
       status: "sent";
       results: OutboundDeliveryResult[];
+      target?: ChannelOutboundTargetRef;
     }
   | {
       index: number;
@@ -75,6 +77,7 @@ export type OutboundPayloadDeliveryOutcome =
       error: unknown;
       sentBeforeError: boolean;
       stage: OutboundDeliveryFailureStage;
+      target?: ChannelOutboundTargetRef;
     };
 
 /** Error carrying partial delivery results when an outbound send fails mid-batch. */

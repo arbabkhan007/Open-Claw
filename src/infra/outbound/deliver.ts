@@ -2021,6 +2021,7 @@ async function deliverOutboundPayloadsCore(
         sessionKey: diagnosticSessionKey,
       });
     };
+    let payloadDeliveryTarget: ChannelOutboundTargetRef | undefined;
     try {
       throwIfAborted(abortSignal);
 
@@ -2121,6 +2122,7 @@ async function deliverOutboundPayloadsCore(
           consumeImplicitReply: replyToResolution.source === "implicit",
         });
       const deliveryTarget = deliveryHandler.buildTargetRef({ threadId: sendOverrides.threadId });
+      payloadDeliveryTarget = deliveryTarget;
       if (
         deliveryHandler.sendPayload &&
         ((effectivePayload.isError === true &&
@@ -2149,7 +2151,12 @@ async function deliverOutboundPayloadsCore(
           );
           continue;
         }
-        recordPayloadOutcome({ index: payloadIndex, status: "sent", results: deliveredResults });
+        recordPayloadOutcome({
+          index: payloadIndex,
+          status: "sent",
+          results: deliveredResults,
+          target: deliveryTarget,
+        });
         recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -2190,6 +2197,7 @@ async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             status: "sent",
             results: deliveredResults,
+            target: deliveryTarget,
           });
           recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         } else {
@@ -2247,6 +2255,7 @@ async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             status: "sent",
             results: deliveredResults,
+            target: deliveryTarget,
           });
           recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         } else {
@@ -2326,6 +2335,7 @@ async function deliverOutboundPayloadsCore(
           index: payloadIndex,
           status: "sent",
           results: deliveredResults,
+          target: deliveryTarget,
         });
         recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
       } else {
@@ -2352,6 +2362,7 @@ async function deliverOutboundPayloadsCore(
         error: err,
         sentBeforeError: results.length > 0,
         stage: "platform_send",
+        ...(payloadDeliveryTarget ? { target: payloadDeliveryTarget } : {}),
       });
       errorDeliveryDiagnostics(err);
       emitMessageSent({
