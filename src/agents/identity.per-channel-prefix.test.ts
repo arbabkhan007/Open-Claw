@@ -328,10 +328,11 @@ describe("resolveMessagePrefix with per-channel override", () => {
     const cfg = makeConfig({
       messages: { messagePrefix: "[Global] " },
       channels: {
-        telegram: { messagePrefix: "" },
+        // WhatsApp schema includes messagePrefix; TelegramConfig does not.
+        whatsapp: { messagePrefix: "" },
       },
     } satisfies OpenClawConfig);
-    expect(resolveMessagePrefix(cfg, "main", { channel: "telegram" })).toBe("");
+    expect(resolveMessagePrefix(cfg, "main", { channel: "whatsapp" })).toBe("");
   });
 
   it("account-level prefix wins over channel and global", () => {
