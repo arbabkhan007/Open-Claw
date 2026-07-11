@@ -6,7 +6,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
-import { signalProcessTree } from "../../kill-tree.js";
+import { signalProcessTree, signalProcessTreeAndWait } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
@@ -254,6 +254,7 @@ export async function createChildAdapter(params: {
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
   let hardKillRequested = false;
+  let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
@@ -330,6 +331,7 @@ export async function createChildAdapter(params: {
     if (
       process.platform !== "win32" ||
       !hardKillRequested ||
+      !windowsTreeKillCompleted ||
       childExitState == null ||
       forcedWindowsCloseTimer
     ) {
@@ -424,21 +426,33 @@ export async function createChildAdapter(params: {
   const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
     signalProcessTree(pid, signal, { detached: childIsDetached });
   };
+  const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
+    signalProcessTreeAndWait(pid, signal, { detached: childIsDetached });
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
       scheduleForcedWindowsCloseSettlement();
       if (pid) {
-        // Pass through whether the child is actually detached. Without this,
-        // `signalProcessTree` group-kills via `-pid` and takes out the gateway's
-        // own process group along with the child. (#71662)
-        signalProcessTreeForChild(pid, "SIGKILL");
-      }
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore kill errors
+        // Let the tree owner traverse the live root before directly killing it.
+        // On Windows, killing the root first can make `taskkill /T` lose the
+        // descendant relationship. (#71662)
+        void signalProcessTreeForChildAndWait(pid, "SIGKILL").then(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // ignore kill errors
+          }
+          windowsTreeKillCompleted = true;
+          scheduleForcedWindowsCloseSettlement();
+        });
+      } else {
+        windowsTreeKillCompleted = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore kill errors
+        }
       }
       scheduleForceKillWaitFallback("SIGKILL");
       return;

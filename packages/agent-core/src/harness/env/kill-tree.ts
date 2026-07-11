@@ -59,16 +59,24 @@ export function signalProcessTree(
   signal: "SIGTERM" | "SIGKILL",
   opts?: { detached?: boolean },
 ): void {
+  void signalProcessTreeAndWait(pid, signal, opts);
+}
+
+export function signalProcessTreeAndWait(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+  opts?: { detached?: boolean },
+): Promise<void> {
   if (!Number.isFinite(pid) || pid <= 0) {
-    return;
+    return Promise.resolve();
   }
 
   if (process.platform === "win32") {
-    signalProcessTreeWindows(pid, signal);
-    return;
+    return signalProcessTreeWindowsAndWait(pid, signal);
   }
 
   signalProcessTreeUnix(pid, signal, opts?.detached !== false);
+  return Promise.resolve();
 }
 
 function normalizeGraceMs(value?: number): number {
@@ -108,17 +116,21 @@ function signalProcessTreeUnix(
   }
 }
 
-function runTaskkill(args: string[]): void {
-  try {
-    const child = spawn("taskkill", args, {
-      stdio: "ignore",
-      detached: true,
-      windowsHide: true,
-    });
-    child.once("error", () => {});
-  } catch {
-    // Ignore taskkill spawn failures.
-  }
+function runTaskkill(args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn("taskkill", args, {
+        stdio: "ignore",
+        detached: true,
+        windowsHide: true,
+      });
+      child.once("error", resolve);
+      child.once("close", resolve);
+    } catch {
+      // Ignore taskkill spawn failures.
+      resolve();
+    }
+  });
 }
 
 function killProcessTreeWindows(pid: number, graceMs: number): void {
@@ -133,7 +145,14 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
 }
 
 function signalProcessTreeWindows(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  void signalProcessTreeWindowsAndWait(pid, signal);
+}
+
+function signalProcessTreeWindowsAndWait(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+): Promise<void> {
   const args =
     signal === "SIGKILL" ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
-  runTaskkill(args);
+  return runTaskkill(args);
 }
