@@ -133,7 +133,11 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs lazy agent event module failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
