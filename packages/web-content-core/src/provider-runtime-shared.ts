@@ -310,6 +310,7 @@ export function resolveWebProviderDefinition<
       ? ({
           ...params.runtimeMetadata,
           selectedProvider: provider.id,
+          selectedProviderKeySource: undefined,
         } as TRuntimeMetadata)
       : params.runtimeMetadata;
   const definition = params.createTool({
