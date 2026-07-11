@@ -187,6 +187,8 @@ export async function resolveSkillWorkshopToolApproval(params: {
   const toolParams = asNullableRecord(params.toolParams);
   const bindProposalId =
     approvalDescription.proposalId && !readOptionalString(toolParams, "proposal_id");
+  // The prompt describes this proposal snapshot, so execution must stay on the
+  // same version or a revision during the approval wait could change the action.
   const bindCurrentVersion =
     approvalDescription.proposalVersion && !readOptionalString(toolParams, "proposal_version");
   return {
