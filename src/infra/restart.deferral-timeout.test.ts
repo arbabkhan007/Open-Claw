@@ -179,7 +179,9 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     deferGatewayRestartUntilIdle({
       getPendingCount: () => {
         callCount++;
-        if (callCount === 1) throw new Error("transient");
+        if (callCount === 1) {
+          throw new Error("transient");
+        }
         return 0;
       },
       hooks,
@@ -204,8 +206,12 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     deferGatewayRestartUntilIdle({
       getPendingCount: () => {
         callCount++;
-        if (callCount <= 2) return 1; // initial + first poll: pending
-        if (callCount === 3) throw new Error("transient"); // second poll: throw
+        if (callCount <= 2) {
+          return 1; // initial + first poll: pending
+        }
+        if (callCount === 3) {
+          throw new Error("transient"); // second poll: throw
+        }
         return 0; // third poll: drained
       },
       hooks,
