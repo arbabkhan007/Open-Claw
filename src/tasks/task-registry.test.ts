@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
@@ -534,7 +535,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("uses the start event time when a new lifecycle start omits startedAt", async () => {
+  it("persists an ACP producer timestamp across lifecycle projection and SQLite reload", async () => {
     await withTaskRegistryTempDir(
       async () => {
         resetTaskRegistryForTests({ persist: false });
@@ -552,20 +553,15 @@ describe("task-registry", () => {
           lastEventAt: 1_000,
         });
 
-        vi.useFakeTimers();
-        vi.setSystemTime(2_000);
-        emitAgentEvent({
+        emitAcpLifecycleStart({
           runId: "run-reused-lifecycle",
-          stream: "lifecycle",
-          data: { phase: "start" },
+          startedAt: 2_000,
         });
-        vi.setSystemTime(2_500);
         emitAgentEvent({
           runId: "run-reused-lifecycle",
           stream: "lifecycle",
           data: { phase: "end", endedAt: 2_500 },
         });
-        vi.useRealTimers();
 
         resetTaskRegistryForTests({ persist: false });
         reloadTaskRegistryFromStore();
