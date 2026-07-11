@@ -458,6 +458,10 @@ export type GatewayCloseOptions = {
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
+  // Forced-exit status if the post-shutdown watchdog has to kill a wedged
+  // process. Defaults to 0; startup-failure cleanup passes nonzero so a
+  // failure-only supervisor still relaunches.
+  postShutdownExitCode?: number;
 };
 
 export type GatewayServer = {
@@ -534,6 +538,14 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  // Reset the shutting-down flag before any startup work so in-process restart
+  // (close handler already ran in the prior cycle, then we re-enter startup
+  // without process exit) starts answering /healthz as 200 again. Pull from
+  // the lightweight `gateway-shutdown-state` module instead of the close
+  // runtime so startup does not load shutdown-only agent/channel/plugin
+  // cleanup code. Per ClawSweeper review P2 on #88908.
+  const { resetGatewayShuttingDownState } = await import("./gateway-shutdown-state.js");
+  resetGatewayShuttingDownState();
   // runGatewayLoop calls this after closing the previous server on both fresh
   // and in-process restarts, making retired plugin generations safe to remove.
   try {
@@ -1190,7 +1202,10 @@ export async function startGatewayServer(
       await stopRegisteredGatewayLifetimeSidecars();
       await stopRegisteredPostReadySidecars();
       await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
+      // Nonzero forced-exit status: if this failed-startup cleanup wedges and
+      // the watchdog must kill the process, a failure-only supervisor still
+      // relaunches instead of reading exit 0 as an intentional clean stop.
+      await createCloseHandler()({ reason: "gateway startup failed", postShutdownExitCode: 1 });
     } finally {
       clearFallbackGatewayContextForServer();
     }
