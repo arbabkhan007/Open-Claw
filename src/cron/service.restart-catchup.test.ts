@@ -191,7 +191,7 @@ describe("CronService restart catch-up", () => {
   it("executes an overdue recurring command job immediately on start with no prior run history", async () => {
     // Regression: gateway stopped between cron add and first fire; nextRunAtMs
     // is in the past but lastRunAtMs is undefined. The startup catch-up must
-    // still detect and run the missed slot via the nextRunAtMs >= nowMs path.
+    // still detect and run the missed slot via the nowMs >= nextRunAtMs path.
     const dueAt = Date.parse("2025-12-13T15:00:00.000Z");
 
     const store = await makeStorePath();
@@ -245,7 +245,7 @@ describe("CronService restart catch-up", () => {
   it("replays missed cron slot for command job when nextRunAtMs was already advanced past the missed slot", async () => {
     // Regression: the timer fires during stop and recomputeNextRunsForMaintenance
     // advances nextRunAtMs to the following day. On restart, the normal
-    // nextRunAtMs >= nowMs path misses the job; the allowCronMissedRunByLastRun
+    // nowMs >= nextRunAtMs path misses the job; the allowCronMissedRunByLastRun
     // fallback must detect the gap between previousRunAtMs and lastRunAtMs.
     const lastRunAt = Date.parse("2025-12-12T15:00:00.000Z");
     const missedSlot = Date.parse("2025-12-13T15:00:00.000Z");
