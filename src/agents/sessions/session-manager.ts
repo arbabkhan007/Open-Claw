@@ -212,13 +212,21 @@ export interface SessionTreeNode {
   labelTimestamp?: string;
 }
 
-function compareSessionEntryTimestamps(a: SessionEntry, b: SessionEntry): number {
-  const aTimestamp = parseStrictTimestampStringMs(a.timestamp);
-  const bTimestamp = parseStrictTimestampStringMs(b.timestamp);
-  if (aTimestamp === undefined || bTimestamp === undefined) {
-    return 0;
+function sortSessionTreeNodesByTimestamp(nodes: SessionTreeNode[]): void {
+  const sortedValidNodes = nodes
+    .flatMap((node, index) => {
+      const timestamp = parseStrictTimestampStringMs(node.entry.timestamp);
+      return timestamp === undefined ? [] : [{ node, index, timestamp }];
+    })
+    .toSorted((a, b) => a.timestamp - b.timestamp || a.index - b.index);
+  let nextValidNode = 0;
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (parseStrictTimestampStringMs(nodes[index].entry.timestamp) === undefined) {
+      continue;
+    }
+    nodes[index] = sortedValidNodes[nextValidNode].node;
+    nextValidNode += 1;
   }
-  return aTimestamp - bTimestamp;
 }
 
 export interface SessionContext {
@@ -2708,7 +2716,9 @@ export class SessionManager {
     const stack: SessionTreeNode[] = [...roots];
     while (stack.length > 0) {
       const node = stack.pop()!;
-      node.children.sort((a, b) => compareSessionEntryTimestamps(a.entry, b.entry));
+      // Invalid persisted timestamps keep their append slot while valid siblings
+      // still retain the documented oldest-first order.
+      sortSessionTreeNodesByTimestamp(node.children);
       stack.push(...node.children);
     }
 

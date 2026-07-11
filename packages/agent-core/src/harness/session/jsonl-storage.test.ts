@@ -20,6 +20,29 @@ function createReadOnlyFs(content: string): JsonlStorageFs {
 }
 
 describe("JsonlSessionStorage timestamps", () => {
+  it("accepts lowercase RFC3339 separators in headers and entries", async () => {
+    const fs = createReadOnlyFs(
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-01-01t00:00:00.000z",
+        cwd: "/repo",
+      })}\n${JSON.stringify({
+        type: "custom",
+        id: "entry-1",
+        parentId: null,
+        timestamp: "2026-01-01t00:00:01.000z",
+        customType: "note",
+      })}\n`,
+    );
+
+    await expect(loadJsonlSessionMetadata(fs, "/sessions/lowercase.jsonl")).resolves.toMatchObject({
+      id: "session-1",
+    });
+    await expect(JsonlSessionStorage.open(fs, "/sessions/lowercase.jsonl")).resolves.toBeDefined();
+  });
+
   it("rejects invalid session header timestamps", async () => {
     const fs = createReadOnlyFs(
       `${JSON.stringify({

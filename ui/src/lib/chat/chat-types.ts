@@ -51,7 +51,7 @@ export type ChatItem =
       label: string;
       description?: string;
       action?: { kind: "session-checkpoints"; label: string };
-      timestamp: number;
+      timestamp: number | null;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string };

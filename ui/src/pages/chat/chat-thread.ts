@@ -920,21 +920,22 @@ function sortChatItemsByVisibleTime(
       timestampsByKey.set(item.key, timestamp);
     }
   }
-  return items
-    .map((item, index) => {
-      const timestamp = chatItemTimestamp(item);
-      const predecessorKey = toolStreamPredecessors.get(item.key);
-      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
-      return {
-        item,
-        index,
-        predecessorKey,
-        timestamp:
-          timestamp != null && predecessorTimestamp != null
-            ? Math.max(timestamp, predecessorTimestamp)
-            : timestamp,
-      };
-    })
+  const prepared = items.map((item, index) => {
+    const timestamp = chatItemTimestamp(item);
+    const predecessorKey = toolStreamPredecessors.get(item.key);
+    const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+    return {
+      item,
+      index,
+      predecessorKey,
+      timestamp:
+        timestamp != null && predecessorTimestamp != null
+          ? Math.max(timestamp, predecessorTimestamp)
+          : timestamp,
+    };
+  });
+  const sorted = prepared
+    .filter(({ item, timestamp }) => item.kind !== "divider" || timestamp !== null)
     .toSorted((a, b) => {
       if (a.timestamp == null && b.timestamp == null) {
         return a.index - b.index;
@@ -955,8 +956,16 @@ function sortChatItemsByVisibleTime(
         return -1;
       }
       return a.index - b.index;
-    })
-    .map(({ item }) => item);
+    });
+  let nextSortedItem = 0;
+  return prepared.map(({ item, timestamp }) => {
+    if (item.kind === "divider" && timestamp === null) {
+      return item;
+    }
+    const sortedItem = sorted[nextSortedItem].item;
+    nextSortedItem += 1;
+    return sortedItem;
+  });
 }
 
 type RawContentEstimateState = {
@@ -1136,12 +1145,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const raw = asRecord(msg) ?? {};
     const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
+      const timestamp = rawMessageTimestamp(msg);
       items.push({
         kind: "divider",
         key:
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
+            : `divider:compaction:${typeof marker.seq === "number" ? marker.seq : i}`,
         label: "Compacted history",
         description:
           "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
@@ -1149,7 +1159,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           kind: "session-checkpoints",
           label: "Open checkpoints",
         },
-        timestamp: normalized.timestamp ?? Date.now(),
+        timestamp,
       });
       continue;
     }

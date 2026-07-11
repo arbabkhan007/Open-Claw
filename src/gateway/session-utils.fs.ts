@@ -918,12 +918,11 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   // Compaction entries are not "message" records, but they're useful context for debugging.
   // Emit a lightweight synthetic message that the Web UI can render as a divider.
   if (entry.type === "compaction") {
-    const ts = parseStrictTimestampStringMs(entry.timestamp);
-    const timestamp = ts ?? Date.now();
+    const timestamp = parseStrictTimestampStringMs(entry.timestamp);
     return {
       role: "system",
       content: [{ type: "text", text: "Compaction" }],
-      timestamp,
+      ...(timestamp !== undefined ? { timestamp } : {}),
       __openclaw: {
         kind: "compaction",
         id: typeof entry.id === "string" ? entry.id : undefined,

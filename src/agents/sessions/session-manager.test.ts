@@ -320,6 +320,50 @@ describe("SessionManager.open", () => {
     expect(tree[0]?.children.map((child) => child.entry.id)).toEqual(["early", "invalid", "late"]);
   });
 
+  it("sorts valid children around an invalid child without moving its append slot", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const entries = [
+      buildSessionHeader(dir, "session"),
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-06-04T00:00:00.000Z",
+        message: { role: "user", content: "root" },
+      },
+      {
+        type: "message",
+        id: "late",
+        parentId: "root",
+        timestamp: "2026-06-04T00:00:02.000Z",
+        message: { role: "assistant", content: "late" },
+      },
+      {
+        type: "message",
+        id: "invalid",
+        parentId: "root",
+        timestamp: "9999-12-31",
+        message: { role: "assistant", content: "invalid" },
+      },
+      {
+        type: "message",
+        id: "early",
+        parentId: "root",
+        timestamp: "2026-06-04T00:00:01.000Z",
+        message: { role: "assistant", content: "early" },
+      },
+    ];
+    await fs.writeFile(
+      sessionFile,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const tree = SessionManager.open(sessionFile, dir, dir).getTree();
+    expect(tree[0]?.children.map((child) => child.entry.id)).toEqual(["early", "invalid", "late"]);
+  });
+
   it("still migrates old transcript versions while bypassing the warm cache", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

@@ -1669,6 +1669,26 @@ describe("buildChatItems", () => {
     expect(action.kind).toBe("session-checkpoints");
     expect(action.label).toBe("Open checkpoints");
   });
+
+  it("keeps an untimestamped compaction divider in its transcript slot", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          { role: "assistant", content: "late", timestamp: 2_000 },
+          {
+            role: "system",
+            __openclaw: { kind: "compaction", id: "checkpoint-1", seq: 2 },
+          },
+          { role: "assistant", content: "early", timestamp: 1_000 },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(3);
+    expect(messageRecord(requireGroup(items[0])).content).toBe("early");
+    expect(items[1]).toMatchObject({ kind: "divider", timestamp: null });
+    expect(messageRecord(requireGroup(items[2])).content).toBe("late");
+  });
 });
 
 describe("tool expansion state", () => {

@@ -143,6 +143,9 @@ describe("number-coercion", () => {
     expect(parseStrictTimestampStringMs("2026-01-02T03:04:05.006Z")).toBe(
       Date.parse("2026-01-02T03:04:05.006Z"),
     );
+    expect(parseStrictTimestampStringMs("2026-01-02t03:04:05.006z")).toBe(
+      Date.parse("2026-01-02T03:04:05.006Z"),
+    );
     expect(parseStrictTimestampStringMs("2026-01-02T03:04:05+08:00")).toBe(
       Date.parse("2026-01-02T03:04:05+08:00"),
     );

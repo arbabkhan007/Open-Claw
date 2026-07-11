@@ -518,6 +518,26 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
+  test("omits synthetic timestamps for compaction entries with invalid persisted timestamps", () => {
+    const sessionId = "test-session-invalid-compaction-timestamp";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "01/02/03",
+        summary: "Compacted history",
+        firstKeptEntryId: "x",
+        tokensBefore: 123,
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const marker = readSessionMessages(sessionId, storePath)[0] as Record<string, unknown>;
+    expect(marker).not.toHaveProperty("timestamp");
+  });
+
   test("reads recent messages from the transcript tail without loading the whole file", () => {
     const sessionId = "test-session-recent-tail";
     writeTranscript(tmpDir, sessionId, [

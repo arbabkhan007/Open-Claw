@@ -107,7 +107,7 @@ export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000)
 /** Largest timestamp accepted by JavaScript Date. */
 export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const STRICT_TIMESTAMP_STRING_RE =
-  /^([+-]\d{6}|\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  /^([+-]\d{6}|\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
 /** Fallback ISO value for invalid timestamp inputs. */
 export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
 
@@ -129,7 +129,7 @@ function hasValidTimestampFields(parts: RegExpMatchArray): boolean {
   const hour = Number(parts[4]);
   const minute = Number(parts[5]);
   const second = Number(parts[6]);
-  const zone = parts[7];
+  const zone = parts[7].toUpperCase();
   const zoneHour = zone === "Z" ? 0 : Number(zone.slice(1, 3));
   const zoneMinute = zone === "Z" ? 0 : Number(zone.slice(4, 6));
 
@@ -161,7 +161,8 @@ export function parseStrictTimestampStringMs(value: unknown): number | undefined
   if (!match || !hasValidTimestampFields(match)) {
     return undefined;
   }
-  return asDateTimestampMs(Date.parse(normalized));
+  const parseable = normalized.replace(/[Tt]/, "T").replace(/[Zz]$/, "Z");
+  return asDateTimestampMs(Date.parse(parseable));
 }
 
 /** Returns a Date-valid millisecond timestamp. */
