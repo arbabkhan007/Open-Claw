@@ -218,6 +218,21 @@ function buildActiveTreeEntries(params: {
   return out.toReversed();
 }
 
+function includePrecedingCompaction(
+  rawEntries: IndexedRawEntry[],
+  activeEntries: IndexedRawEntry[],
+): IndexedRawEntry[] {
+  const firstActiveEntry = activeEntries[0];
+  const firstActiveIndex = firstActiveEntry ? rawEntries.indexOf(firstActiveEntry) : -1;
+  for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
+    const entry = rawEntries[index];
+    if (entry?.record.type === "compaction") {
+      return [entry, ...activeEntries];
+    }
+  }
+  return activeEntries;
+}
+
 function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry[] {
   const entries: IndexedTranscriptEntry[] = [];
   let seq = 0;
@@ -293,7 +308,7 @@ async function buildSessionTranscriptIndex(
     }
   }
   const activeRawEntries = tree.hasExplicitLeafUpdate
-    ? buildActiveTreeEntries({ byId, leafId: tree.leafId })
+    ? includePrecedingCompaction(rawEntries, buildActiveTreeEntries({ byId, leafId: tree.leafId }))
     : rawEntries;
   return {
     filePath,
