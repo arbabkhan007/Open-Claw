@@ -243,9 +243,9 @@ describe("CronService restart catch-up", () => {
   });
 
   it("replays missed cron slot for command job when nextRunAtMs was already advanced past the missed slot", async () => {
-    // Regression: the timer fires during stop and recomputeNextRunsForMaintenance
-    // advances nextRunAtMs to the following day. On restart, the normal
-    // nowMs >= nextRunAtMs path misses the job; the allowCronMissedRunByLastRun
+    // Fixture: nextRunAtMs is persisted one day ahead of the last run, as may
+    // happen when state is recomputed around a restart. The normal
+    // nowMs >= nextRunAtMs path does not fire; the allowCronMissedRunByLastRun
     // fallback must detect the gap between previousRunAtMs and lastRunAtMs.
     const lastRunAt = Date.parse("2025-12-12T15:00:00.000Z");
     const missedSlot = Date.parse("2025-12-13T15:00:00.000Z");
