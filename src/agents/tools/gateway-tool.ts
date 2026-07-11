@@ -456,7 +456,7 @@ export function createGatewayTool(opts?: {
     description:
       "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. For config.patch that intentionally removes array entries, pass replacePaths with the exact affected array path. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
@@ -550,7 +550,7 @@ export function createGatewayTool(opts?: {
         const replacePaths = rawReplacePaths
           ? [...normalizeConfigPatchReplacePaths(rawReplacePaths)]
           : undefined;
-        const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
         // Always fetch config.get so we can compare protected exec settings
         // against the current snapshot before forwarding any write RPC.
         const snapshotConfig = getSnapshotConfig(snapshot);
@@ -566,7 +566,7 @@ export function createGatewayTool(opts?: {
 
       if (action === "config.get") {
         const path = readStringParam(params, "path");
-        const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
         const result = selectGatewayConfigGetResult(snapshot, path);
         return createGatewayConfigGetToolResult(result);
       }
@@ -576,7 +576,12 @@ export function createGatewayTool(opts?: {
           label: "path",
         });
         try {
-          const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+          const result = await callGatewayTool(
+            "config.schema.lookup",
+            gatewayOpts,
+            { path },
+            { signal },
+          );
           return jsonResult({ ok: true, result });
         } catch (error) {
           if (isConfigSchemaPathNotFoundError(error)) {
@@ -598,13 +603,18 @@ export function createGatewayTool(opts?: {
           currentConfig: snapshotConfig,
           raw,
         });
-        const result = await callGatewayTool("config.apply", gatewayOpts, {
-          raw,
-          baseHash,
-          sessionKey,
-          note,
-          restartDelayMs,
-        });
+        const result = await callGatewayTool(
+          "config.apply",
+          gatewayOpts,
+          {
+            raw,
+            baseHash,
+            sessionKey,
+            note,
+            restartDelayMs,
+          },
+          { signal },
+        );
         return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "config.patch") {
@@ -616,14 +626,19 @@ export function createGatewayTool(opts?: {
           raw,
           replacePaths,
         });
-        const result = await callGatewayTool("config.patch", gatewayOpts, {
-          raw,
-          baseHash,
-          sessionKey,
-          note,
-          restartDelayMs,
-          ...(replacePaths ? { replacePaths } : {}),
-        });
+        const result = await callGatewayTool(
+          "config.patch",
+          gatewayOpts,
+          {
+            raw,
+            baseHash,
+            sessionKey,
+            note,
+            restartDelayMs,
+            ...(replacePaths ? { replacePaths } : {}),
+          },
+          { signal },
+        );
         return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "update.run") {
@@ -634,13 +649,18 @@ export function createGatewayTool(opts?: {
           ...gatewayOpts,
           timeoutMs: updateTimeoutMs,
         };
-        const result = await callGatewayTool("update.run", updateGatewayOpts, {
-          sessionKey,
-          note,
-          continuationMessage,
-          restartDelayMs,
-          timeoutMs: updateTimeoutMs,
-        });
+        const result = await callGatewayTool(
+          "update.run",
+          updateGatewayOpts,
+          {
+            sessionKey,
+            note,
+            continuationMessage,
+            restartDelayMs,
+            timeoutMs: updateTimeoutMs,
+          },
+          { signal },
+        );
         return jsonResult({ ok: true, result });
       }
 
