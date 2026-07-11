@@ -534,6 +534,52 @@ describe("task-registry", () => {
     });
   });
 
+  it("uses the start event time when a new lifecycle start omits startedAt", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-reused-lifecycle",
+          task: "Reuse a persisted task row",
+          status: "queued",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+          lastEventAt: 1_000,
+        });
+
+        vi.useFakeTimers();
+        vi.setSystemTime(2_000);
+        emitAgentEvent({
+          runId: "run-reused-lifecycle",
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
+        vi.setSystemTime(2_500);
+        emitAgentEvent({
+          runId: "run-reused-lifecycle",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 2_500 },
+        });
+        vi.useRealTimers();
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-reused-lifecycle"), {
+          status: "succeeded",
+          startedAt: 2_000,
+          endedAt: 2_500,
+        });
+      },
+      { durableStore: true },
+    );
+  });
+
   it("keeps subagent abort lifecycle projections provisional", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
