@@ -2035,7 +2035,7 @@ export async function runEmbeddedAttempt(
       copyCodeModeControlToolIdentity(tool as never, wrappedTool as never);
       return wrappedTool;
     });
-const runtimeSelfContextToolAvailable = effectiveTools.some(
+    const runtimeSelfContextToolAvailable = effectiveTools.some(
       (tool) => tool.name === RUNTIME_SELF_CONTEXT_TOOL_NAME,
     );
 
