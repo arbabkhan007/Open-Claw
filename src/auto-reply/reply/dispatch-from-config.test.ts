@@ -62,9 +62,10 @@ type AbortResult = {
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
+type RouteReply = (typeof import("./route-reply.js"))["routeReply"];
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<RouteReply>(async () => ({ ok: true, messageId: "mock" })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -740,6 +741,7 @@ function createDispatcher(): ReplyDispatcher {
       await Promise.all(beforeDeliverTasks);
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getCancelledCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
@@ -767,6 +769,59 @@ function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
 
 function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
+}
+
+async function dispatchFailedCommandProgressBeforeReply(params: {
+  dispatcher: ReplyDispatcher;
+  ctx?: DispatchReplyArgs["ctx"];
+  replyKind?: "block" | "final";
+}) {
+  setNoAbort();
+  const previousSessionEntry = sessionStoreMocks.currentEntry;
+  sessionStoreMocks.currentEntry = {
+    sessionId: "s1",
+    updatedAt: 0,
+    sendPolicy: "allow",
+    verboseLevel: "on",
+  };
+  const failedCommand = {
+    phase: "end",
+    name: "exec",
+    status: "failed",
+    exitCode: 1,
+  } as const;
+  const onCommandOutput = vi.fn();
+  const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+    await opts?.onCommandOutput?.(failedCommand);
+    if (params.replyKind === "final") {
+      return { text: "visible answer" } satisfies ReplyPayload;
+    }
+    await opts?.onBlockReply?.({ text: "visible answer" });
+    return undefined;
+  };
+
+  try {
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx:
+          params.ctx ??
+          buildTestCtx({
+            Provider: "telegram",
+            ChatType: "direct",
+            SessionKey: "agent:main:telegram:direct:U1",
+          }),
+        cfg: emptyConfig,
+        dispatcher: params.dispatcher,
+        replyResolver,
+        replyOptions: { onCommandOutput },
+      });
+      return { failedCommand, onCommandOutput, result };
+    } finally {
+      await settleReplyDispatcher({ dispatcher: params.dispatcher });
+    }
+  } finally {
+    sessionStoreMocks.currentEntry = previousSessionEntry;
+  }
 }
 
 type MockAcpRuntime = AcpRuntime & {
@@ -5054,13 +5109,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      title: "Exec",
-      name: "exec",
-      status: "failed",
-      exitCode: 1,
-    });
+    expect(onCommandOutput).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -5107,6 +5156,7 @@ describe("dispatchReplyFromConfig", () => {
       verboseLevel: "on",
     };
     const onCommandOutput = vi.fn();
+    const onToolResult = vi.fn();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -5143,17 +5193,13 @@ describe("dispatchReplyFromConfig", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onCommandOutput,
+        onToolResult,
       },
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      title: "Exec",
-      name: "exec",
-      status: "failed",
-      exitCode: 2,
-    });
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -5245,7 +5291,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses terminal tool-error fallbacks when regular verbose progress is visible", async () => {
+  it("keeps terminal tool-error fallbacks available when regular verbose failed command progress is hidden", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -5281,24 +5327,19 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { onCommandOutput },
     });
 
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      name: "exec",
-      status: "failed",
-      exitCode: 1,
-    });
+    expect(onCommandOutput).not.toHaveBeenCalled();
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("keeps tool-error fallbacks eligible when a channel declines failed progress", async () => {
+  it("keeps tool-error fallbacks eligible when a channel declines full-verbose failed progress", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
       sendPolicy: "allow",
-      verboseLevel: "on",
+      verboseLevel: "full",
     };
     const dispatcher = createDispatcher();
     const onCommandOutput = vi.fn(async () => false as const);
@@ -5344,7 +5385,263 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("suppresses terminal tool-error fallbacks in group sessions when verbose progress is visible", async () => {
+  it("flushes buffered regular-verbose failed command progress when no final reply is visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn();
+    const failedCommand = {
+      phase: "end",
+      name: "exec",
+      status: "failed",
+      exitCode: 1,
+    } as const;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onCommandOutput?.(failedCommand);
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onCommandOutput },
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  type BufferedFailureDeliveryScenario = {
+    name: string;
+    transport: "direct" | "routed";
+    replyKind: "block" | "final";
+    outcome: "delivered" | "suppressed" | "cancelled" | "declined" | "failed";
+    shouldFlush: boolean;
+    tts?: boolean;
+    expectedKinds?: Array<"block" | "final">;
+    expectedCancelled?: { tool: number; block: number; final: number };
+    expectedFailed?: { tool: number; block: number; final: number };
+    expectedQueuedFinal?: boolean;
+  };
+  const bufferedFailureDeliveryScenarios: BufferedFailureDeliveryScenario[] = [
+    ...(["delivered", "suppressed", "failed"] as const).map((outcome) => ({
+      name: `handles buffered failed progress when routed block delivery is ${outcome}`,
+      transport: "routed" as const,
+      replyKind: "block" as const,
+      outcome,
+      shouldFlush: outcome !== "delivered",
+      expectedKinds: ["block" as const],
+    })),
+    {
+      name: "flushes buffered failed progress when a dispatcher cancels block delivery",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "cancelled",
+      shouldFlush: true,
+      expectedCancelled: { tool: 0, block: 1, final: 0 },
+    },
+    {
+      name: "flushes buffered failed progress when a dispatcher declines the block",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "declined",
+      shouldFlush: true,
+    },
+    {
+      name: "discards buffered failed progress after confirmed dispatcher block delivery",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "delivered",
+      shouldFlush: false,
+      expectedKinds: ["block"],
+    },
+    {
+      name: "flushes buffered failed progress when a routed final is suppressed",
+      transport: "routed",
+      replyKind: "final",
+      outcome: "suppressed",
+      shouldFlush: true,
+      expectedKinds: ["final"],
+      expectedQueuedFinal: false,
+    },
+    {
+      name: "flushes buffered failed progress when a direct final is cancelled",
+      transport: "direct",
+      replyKind: "final",
+      outcome: "cancelled",
+      shouldFlush: true,
+      expectedCancelled: { tool: 0, block: 0, final: 1 },
+    },
+    {
+      name: "flushes buffered failed progress when direct final delivery fails",
+      transport: "direct",
+      replyKind: "final",
+      outcome: "failed",
+      shouldFlush: true,
+      expectedKinds: ["final"],
+      expectedFailed: { tool: 0, block: 0, final: 1 },
+    },
+    {
+      name: "flushes buffered failed progress when direct block and TTS delivery are cancelled",
+      transport: "direct",
+      replyKind: "block",
+      outcome: "cancelled",
+      shouldFlush: true,
+      tts: true,
+      expectedCancelled: { tool: 0, block: 1, final: 1 },
+    },
+    {
+      name: "flushes buffered failed progress when routed block and TTS delivery are suppressed",
+      transport: "routed",
+      replyKind: "block",
+      outcome: "suppressed",
+      shouldFlush: true,
+      tts: true,
+      expectedKinds: ["block", "final"],
+      expectedQueuedFinal: false,
+    },
+  ];
+
+  it.each(bufferedFailureDeliveryScenarios)("$name", async (scenario) => {
+    ttsMocks.state.synthesizeFinalAudio = scenario.tts === true;
+    const deliver = vi.fn<Parameters<typeof createReplyDispatcher>[0]["deliver"]>(
+      async (_payload, _info) => {
+        if (scenario.outcome === "failed") {
+          throw new Error("delivery failed");
+        }
+      },
+    );
+    const dispatcher = (() => {
+      if (scenario.transport === "routed") {
+        mocks.routeReply.mockResolvedValue(
+          scenario.outcome === "failed"
+            ? { ok: false, messageId: "mock", error: "delivery failed" }
+            : {
+                ok: true,
+                messageId: "mock",
+                ...(scenario.outcome === "suppressed"
+                  ? { suppressed: true, reason: "cancelled_by_reply_payload_sending_hook" }
+                  : {}),
+              },
+        );
+        return createDispatcher();
+      }
+      if (scenario.outcome === "declined") {
+        const declinedDispatcher = createDispatcher();
+        vi.mocked(declinedDispatcher.sendBlockReply).mockReturnValue(false);
+        return declinedDispatcher;
+      }
+      return createReplyDispatcher({
+        deliver,
+        ...(scenario.outcome === "cancelled" ? { beforeDeliver: () => null } : {}),
+      });
+    })();
+    const ctx =
+      scenario.transport === "routed"
+        ? buildTestCtx({
+            Provider: "discord",
+            Surface: "discord",
+            OriginatingChannel: "slack",
+            OriginatingTo: "channel:C123",
+            ChatType: "direct",
+            SessionKey: "agent:main:slack:direct:U1",
+          })
+        : undefined;
+
+    const { failedCommand, onCommandOutput, result } =
+      await dispatchFailedCommandProgressBeforeReply({
+        dispatcher,
+        ctx,
+        replyKind: scenario.replyKind,
+      });
+
+    if (scenario.shouldFlush) {
+      expect(onCommandOutput).toHaveBeenCalledWith(failedCommand);
+    } else {
+      expect(onCommandOutput).not.toHaveBeenCalled();
+    }
+    if (scenario.transport === "routed") {
+      expect(mocks.routeReply.mock.calls.map(([call]) => call.replyKind)).toEqual(
+        scenario.expectedKinds,
+      );
+      expect(mocks.routeReply.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ payload: { text: "visible answer" } }),
+      );
+    } else if (scenario.outcome === "declined") {
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "visible answer" });
+    } else {
+      expect(deliver.mock.calls.map(([, info]) => info?.kind)).toEqual(
+        scenario.expectedKinds ?? [],
+      );
+    }
+    if (scenario.expectedCancelled) {
+      expect(dispatcher.getCancelledCounts?.()).toEqual(scenario.expectedCancelled);
+    }
+    if (scenario.expectedFailed) {
+      expect(dispatcher.getFailedCounts()).toEqual(scenario.expectedFailed);
+    }
+    if (scenario.expectedQueuedFinal !== undefined) {
+      expect(result.queuedFinal).toBe(scenario.expectedQueuedFinal);
+    }
+    if (scenario.tts && scenario.transport === "routed") {
+      expect(mocks.routeReply.mock.calls[1]?.[0]).toEqual(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            mediaUrl: "https://example.com/tts-synth.opus",
+            spokenText: "visible answer",
+          }),
+        }),
+      );
+    }
+  });
+
+  it("flushes buffered regular-verbose failed tool payloads when no final reply is visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const failedPayload = {
+      text: "⚠️ 🛠️ Exec failed",
+      isError: true,
+    } satisfies ReplyPayload;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(failedPayload);
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(failedPayload);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps terminal tool-error fallbacks available when regular verbose failed item progress is hidden", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -5382,14 +5679,56 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { onItemEvent },
     });
 
-    expect(onItemEvent).toHaveBeenCalledWith({
-      itemId: "item-1",
-      kind: "tool",
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps full verbose failed command progress visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "full",
+    };
+    const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      receivedOptions = opts;
+      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+      await opts?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onCommandOutput },
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      phase: "end",
       name: "exec",
       status: "failed",
+      exitCode: 1,
     });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
