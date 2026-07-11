@@ -13,6 +13,8 @@ type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
+  /** launchd only: resolves false if the detached handoff failed to spawn. */
+  handoffSettled?: Promise<boolean>;
 };
 
 type GatewayUpdateRespawnResult = GatewayRespawnResult & {
@@ -103,6 +105,10 @@ export function restartGatewayProcessWithFreshPid(
           detail: handoff.detail ?? "launchd kickstart handoff scheduling failed",
         };
       }
+      return {
+        mode: "supervised",
+        ...(handoff.settled ? { handoffSettled: handoff.settled } : {}),
+      };
     }
     return { mode: "supervised" };
   }

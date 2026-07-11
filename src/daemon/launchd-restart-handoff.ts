@@ -16,6 +16,13 @@ type LaunchdRestartHandoffResult = {
   ok: boolean;
   pid?: number;
   detail?: string;
+  /**
+   * Resolves once the detached helper either spawned ("spawn" event) or failed
+   * at the OS level ("error" event, reported asynchronously after spawn()
+   * returns). Callers about to exit the process should confirm this resolved
+   * true before trusting the handoff to relaunch the service.
+   */
+  settled?: Promise<boolean>;
 };
 
 type LaunchdRestartTarget = {
@@ -290,8 +297,16 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: restartEnv,
       },
     );
+    // OS-level spawn failures arrive asynchronously after spawn() returns; the
+    // listener keeps them from becoming unhandled process errors during the
+    // caller's pre-exit window, and `settled` lets the caller confirm the
+    // helper actually exists before exiting the gateway.
+    const settled = new Promise<boolean>((resolve) => {
+      child.once("spawn", () => resolve(true));
+      child.once("error", () => resolve(false));
+    });
     child.unref();
-    return { ok: true, pid: child.pid ?? undefined };
+    return { ok: true, pid: child.pid ?? undefined, settled };
   } catch (err) {
     return {
       ok: false,

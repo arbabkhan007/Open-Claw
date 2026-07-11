@@ -36,7 +36,7 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 afterEach(() => {
   spawnMock.mockReset();
   unrefMock.mockReset();
-  spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+  spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
 });
 
 describe("scheduleDetachedLaunchdRestartHandoff", () => {
@@ -53,7 +53,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       waitForPid: 9876,
     });
 
-    expect(result).toEqual({ ok: true, pid: 4242 });
+    expect(result).toEqual({ ok: true, pid: 4242, settled: expect.any(Promise) });
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = requireSpawnCall();
     expect(args[0]).toBe("-c");
@@ -241,5 +241,39 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     const stopped = runScript("state = not running\n\tpid = 0");
     expect(stopped.status).toBe(0);
     expect(stopped.calls).toContain("kickstart -k gui/501/ai.openclaw.test");
+  });
+  it("settles false when the detached helper fails to spawn asynchronously (#104637 review)", async () => {
+    const listeners = new Map<string, (arg?: unknown) => void>();
+    spawnMock.mockReturnValue({
+      pid: undefined,
+      unref: unrefMock,
+      once: vi.fn((event: string, cb: (arg?: unknown) => void) => listeners.set(event, cb)),
+    });
+    const result = scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Users/test", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.test" },
+      mode: "kickstart-if-dead" as never,
+      waitForPid: 123,
+    });
+    expect(result.ok).toBe(true);
+    // The OS reports the failure after spawn() returned; the listener keeps it
+    // from becoming an unhandled error and the caller can observe it.
+    listeners.get("error")?.(new Error("spawn /bin/sh ENOENT"));
+    await expect(result.settled).resolves.toBe(false);
+  });
+
+  it("settles true once the detached helper spawns", async () => {
+    const listeners = new Map<string, (arg?: unknown) => void>();
+    spawnMock.mockReturnValue({
+      pid: 777,
+      unref: unrefMock,
+      once: vi.fn((event: string, cb: (arg?: unknown) => void) => listeners.set(event, cb)),
+    });
+    const result = scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Users/test", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.test" },
+      mode: "kickstart-if-dead" as never,
+      waitForPid: 123,
+    });
+    listeners.get("spawn")?.();
+    await expect(result.settled).resolves.toBe(true);
   });
 });
