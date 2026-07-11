@@ -371,7 +371,33 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("settles wait from exit state on Windows even when close never arrives", async () => {
+  it("bounds Windows stream settlement after an explicit hard kill", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+
+    const stub = createStubChild(9753);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(249);
+    expect(settled).not.toHaveBeenCalled();
+    expect(stub.child.stdout?.destroyed).toBe(false);
+    expect(stub.child.stderr?.destroyed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+    expect(stub.child.stdout?.destroyed).toBe(true);
+    expect(stub.child.stderr?.destroyed).toBe(true);
+  });
+
+  it("preserves descendant output after ordinary Windows child exit", async () => {
     vi.useFakeTimers();
     setPlatform("win32");
 
@@ -387,6 +413,10 @@ describe("createChildAdapter", () => {
       });
       return { ...stub, adapter: adapterLocal };
     })();
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+    adapter.onStdout(stdout);
+    adapter.onStderr(stderr);
 
     const settled = vi.fn();
     void adapter.wait().then((result) => {
@@ -394,13 +424,22 @@ describe("createChildAdapter", () => {
     });
 
     emitExit(0, null);
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(settled).not.toHaveBeenCalled();
+    expect(child.stdout?.destroyed).toBe(false);
+    expect(child.stderr?.destroyed).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(1);
+    const stdoutPipe = child.stdout as PassThrough;
+    const stderrPipe = child.stderr as PassThrough;
+    stdoutPipe.write("late stdout");
+    stderrPipe.write("late stderr");
+    stdoutPipe.end();
+    stderrPipe.end();
+    await vi.runAllTimersAsync();
+
+    expect(stdout).toHaveBeenCalledWith("late stdout");
+    expect(stderr).toHaveBeenCalledWith("late stderr");
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
-    expect(child.stdout?.destroyed).toBe(true);
-    expect(child.stderr?.destroyed).toBe(true);
   });
 
   it("disables detached mode in service-managed runtime", async () => {
@@ -601,7 +640,7 @@ describe("createChildAdapter", () => {
     expect(() => child.stdout?.emit("error", stdoutErr)).not.toThrow();
     expect(() => child.stderr?.emit("error", stderrErr)).not.toThrow();
     await vi.advanceTimersByTimeAsync(300);
-    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+    expect(settled).not.toHaveBeenCalled();
 
     adapter.onStdout(() => {});
     adapter.onStdout(() => {});

@@ -19,7 +19,7 @@ import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const FORCED_WINDOWS_CLOSE_SETTLE_MS = 250;
 const WINDOWS_PACKAGE_MANAGER_SHIMS = ["npm", "pnpm", "yarn", "npx"] as const;
 
 function resolveChildInvocation(params: {
@@ -252,8 +252,9 @@ export async function createChildAdapter(params: {
   let rejectWait: ((reason?: unknown) => void) | null = null;
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+  let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
+  let hardKillRequested = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let windowsCloseFallbackTimer: NodeJS.Timeout | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
 
@@ -265,12 +266,12 @@ export async function createChildAdapter(params: {
     forceKillWaitFallbackTimer = null;
   };
 
-  const clearWindowsCloseFallbackTimer = () => {
-    if (!windowsCloseFallbackTimer) {
+  const clearForcedWindowsCloseTimer = () => {
+    if (!forcedWindowsCloseTimer) {
       return;
     }
-    clearTimeout(windowsCloseFallbackTimer);
-    windowsCloseFallbackTimer = null;
+    clearTimeout(forcedWindowsCloseTimer);
+    forcedWindowsCloseTimer = null;
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
@@ -278,7 +279,7 @@ export async function createChildAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
-    clearWindowsCloseFallbackTimer();
+    clearForcedWindowsCloseTimer();
     waitResult = value;
     if (resolveWait) {
       const resolve = resolveWait;
@@ -293,7 +294,7 @@ export async function createChildAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
-    clearWindowsCloseFallbackTimer();
+    clearForcedWindowsCloseTimer();
     waitError = error;
     if (rejectWait) {
       const reject = rejectWait;
@@ -325,6 +326,24 @@ export async function createChildAdapter(params: {
     };
   };
 
+  const scheduleForcedWindowsCloseSettlement = () => {
+    if (
+      process.platform !== "win32" ||
+      !hardKillRequested ||
+      childExitState == null ||
+      forcedWindowsCloseTimer
+    ) {
+      return;
+    }
+    const exitState = childExitState;
+    forcedWindowsCloseTimer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      settleWait(resolveObservedExitState(exitState));
+    }, FORCED_WINDOWS_CLOSE_SETTLE_MS);
+    forcedWindowsCloseTimer.unref?.();
+  };
+
   const maybeSettleAfterWindowsExit = () => {
     if (
       process.platform !== "win32" ||
@@ -335,22 +354,6 @@ export async function createChildAdapter(params: {
       return;
     }
     settleWait(resolveObservedExitState(childExitState));
-  };
-
-  const scheduleWindowsCloseFallback = () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-    clearWindowsCloseFallbackTimer();
-    windowsCloseFallbackTimer = setTimeout(() => {
-      if (childExitState == null) {
-        return;
-      }
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      settleWait(resolveObservedExitState(childExitState));
-    }, WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS);
-    windowsCloseFallbackTimer.unref?.();
   };
 
   child.stdout?.once("end", () => {
@@ -375,7 +378,7 @@ export async function createChildAdapter(params: {
   });
   child.once("exit", (code, signal) => {
     childExitState = { code, signal };
-    scheduleWindowsCloseFallback();
+    scheduleForcedWindowsCloseSettlement();
   });
   child.once("close", (code, signal) => {
     settleWait(resolveObservedExitState({ code, signal }));
@@ -424,6 +427,8 @@ export async function createChildAdapter(params: {
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
+      hardKillRequested = true;
+      scheduleForcedWindowsCloseSettlement();
       if (pid) {
         // Pass through whether the child is actually detached. Without this,
         // `signalProcessTree` group-kills via `-pid` and takes out the gateway's
@@ -451,7 +456,7 @@ export async function createChildAdapter(params: {
 
   const dispose = () => {
     clearForceKillWaitFallback();
-    clearWindowsCloseFallbackTimer();
+    clearForcedWindowsCloseTimer();
     child.removeAllListeners();
   };
 
