@@ -394,11 +394,13 @@ describe("createChildAdapter", () => {
     });
 
     emitExit(0, null);
-    child.stdout?.emit("end");
-    child.stderr?.emit("end");
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(settled).not.toHaveBeenCalled();
 
+    await vi.advanceTimersByTimeAsync(1);
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+    expect(child.stdout?.destroyed).toBe(true);
+    expect(child.stderr?.destroyed).toBe(true);
   });
 
   it("disables detached mode in service-managed runtime", async () => {
@@ -599,7 +601,7 @@ describe("createChildAdapter", () => {
     expect(() => child.stdout?.emit("error", stdoutErr)).not.toThrow();
     expect(() => child.stderr?.emit("error", stderrErr)).not.toThrow();
     await vi.advanceTimersByTimeAsync(300);
-    expect(settled).not.toHaveBeenCalled();
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
 
     adapter.onStdout(() => {});
     adapter.onStdout(() => {});

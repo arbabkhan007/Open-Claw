@@ -343,7 +343,12 @@ export async function createChildAdapter(params: {
     }
     clearWindowsCloseFallbackTimer();
     windowsCloseFallbackTimer = setTimeout(() => {
-      maybeSettleAfterWindowsExit();
+      if (childExitState == null) {
+        return;
+      }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      settleWait(resolveObservedExitState(childExitState));
     }, WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS);
     windowsCloseFallbackTimer.unref?.();
   };
