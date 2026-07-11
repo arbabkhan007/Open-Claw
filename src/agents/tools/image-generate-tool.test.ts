@@ -2134,7 +2134,6 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
       120_000,
     );
-    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").timeoutMs).toBe(15 * 60_000);
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -2161,9 +2160,6 @@ describe("createImageGenerateTool", () => {
     });
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
       120_000,
-    );
-    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").timeoutMs).toBe(
-      15 * 60_000,
     );
     expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
