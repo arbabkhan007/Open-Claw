@@ -24,6 +24,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -2329,6 +2330,8 @@ class ChatPane extends OpenClawLightDomElement {
               gatewayAvailable: Boolean(state.client),
               loading: state.chatLoading,
               modelCatalog: state.chatModelCatalog,
+              catalogMode: state.chatModelCatalogMode,
+              modelSettingsHref: pathForRoute("ai-agents", state.basePath),
               modelOverrides: state.sessions.state.modelOverrides,
               modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
               modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,

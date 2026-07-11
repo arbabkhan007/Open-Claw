@@ -36,6 +36,8 @@ export type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
+  catalogMode?: "replace";
+  modelSettingsHref?: string;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionRuntimeId?: string;
@@ -250,6 +252,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     modelSelectionLocked: props.modelSelectionLocked === true,
     modelOnly: props.mode === "model",
     modelOptions,
+    catalogMode: props.catalogMode,
+    modelSettingsHref: props.modelSettingsHref,
     onRequestUpdate: props.onRequestUpdate,
     selectedModelValue: currentOverride,
     selectedThinkingValue: thinking.currentOverride,
@@ -297,6 +301,8 @@ function renderChatModelReasoningSelect(params: {
   modelSelectionLocked: boolean;
   modelOnly: boolean;
   modelOptions: ChatModelProviderOption[];
+  catalogMode?: "replace";
+  modelSettingsHref?: string;
   selectedModelValue: string;
   selectedThinkingValue: string;
   sessionKey: string;
@@ -317,6 +323,8 @@ function renderChatModelReasoningSelect(params: {
     modelSelectionLocked,
     modelOnly,
     modelOptions,
+    catalogMode,
+    modelSettingsHref,
     selectedModelValue,
     selectedThinkingValue,
     sessionKey,
@@ -599,6 +607,16 @@ function renderChatModelReasoningSelect(params: {
                   )}
                 </div>
               </div>
+              ${catalogMode === "replace"
+                ? html`
+                    <div class="chat-controls__catalog-hint" role="note">
+                      <span>${t("chat.selectors.replaceModeHint")}</span>
+                      ${modelSettingsHref
+                        ? html`<a href=${modelSettingsHref}>${t("chat.selectors.manageModels")}</a>`
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
             `}
         ${showReasoningPanel
           ? html`

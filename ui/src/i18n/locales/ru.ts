@@ -3886,6 +3886,8 @@ export const ru: TranslationMap = {
       modelLockedLabel: "Выбор модели управляется для этого сеанса",
       lockedSessionModel: "Модель сеанса",
       nativeCodexModel: "Модель, управляемая Codex",
+      replaceModeHint: "Replace mode shows only models explicitly listed in Settings.",
+      manageModels: "Manage models",
       thinkingLevel: "Уровень мышления чата",
     },
     toolCards: {

@@ -217,6 +217,7 @@ export type ChatPageHost = ChatHost &
     chatSideResultTerminalRuns: Set<string>;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
+    chatModelCatalogMode?: "replace";
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
@@ -710,6 +711,7 @@ function applyChatMetadataResult(
   const models = applyModelCatalogResult(result.models);
   if (models) {
     host.chatModelCatalog = models;
+    host.chatModelCatalogMode = result.catalogMode === "replace" ? "replace" : undefined;
   }
   const commandsApplied = applyRemoteSlashCommandsResult({
     client,
@@ -739,9 +741,10 @@ async function refreshCompatibilityModelCatalog(
   agentId: string | null | undefined,
   requestVersion: number,
 ) {
-  const models = await loadModels(client);
+  const result = await loadModels(client, { includeMetadata: true });
   if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
-    host.chatModelCatalog = models;
+    host.chatModelCatalog = result.models;
+    host.chatModelCatalogMode = result.catalogMode;
   }
 }
 
@@ -773,6 +776,7 @@ export async function refreshChatMetadata(
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
+    host.chatModelCatalogMode = undefined;
     return;
   }
   const client = host.client;
@@ -786,6 +790,7 @@ export async function refreshChatMetadata(
     if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
       if (shouldClearUnresolvedModels) {
         host.chatModelCatalog = [];
+        host.chatModelCatalogMode = undefined;
       }
       await Promise.allSettled([
         ...(shouldRefreshCompatibilityModels
@@ -806,6 +811,7 @@ export async function refreshChatMetadata(
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
     if (!metadataApplied.models && shouldClearUnresolvedModels) {
       host.chatModelCatalog = [];
+      host.chatModelCatalogMode = undefined;
     }
     if (!metadataApplied.models || !metadataApplied.commands) {
       await Promise.allSettled([
@@ -821,6 +827,7 @@ export async function refreshChatMetadata(
     if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       if (shouldClearUnresolvedModels) {
         host.chatModelCatalog = [];
+        host.chatModelCatalogMode = undefined;
       }
       await Promise.allSettled([
         ...(shouldRefreshCompatibilityModels
@@ -1269,6 +1276,7 @@ export function createPageState(
     chatModelsLoading: false,
     chatMetadataRequestVersion: 0,
     chatModelCatalog: [] as ModelCatalogEntry[],
+    chatModelCatalogMode: undefined,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
     sessionsResult: null,

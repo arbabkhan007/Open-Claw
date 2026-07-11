@@ -64,6 +64,10 @@ type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
 };
+type ModelsListResult = {
+  models: ModelsListEntryWithCapabilities[];
+  catalogMode?: "replace";
+};
 type ModelsListAvailability = ModelAuthAvailability;
 type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
 
@@ -451,7 +455,7 @@ export async function buildModelsListResult(params: {
   preloadedCatalog?: ModelCatalogSnapshot;
   catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-}): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
+}): Promise<ModelsListResult> {
   const cfg = params.context.getRuntimeConfig();
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
@@ -482,6 +486,7 @@ export async function buildModelsListResult(params: {
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, workspaceDir })
     : undefined;
+  const catalogMode = view !== "all" && cfg.models?.mode === "replace" ? "replace" : undefined;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
     const authoredEntries = buildProviderConfigModelCatalogForBrowse({
@@ -503,6 +508,7 @@ export async function buildModelsListResult(params: {
     });
     const inventory = await inventoryProjector.projectCatalog();
     return {
+      ...(catalogMode ? { catalogMode } : {}),
       models: await buildPublicModelsListEntries({
         catalog: inventory,
         cfg,
@@ -566,6 +572,7 @@ export async function buildModelsListResult(params: {
     },
   });
   return {
+    ...(catalogMode ? { catalogMode } : {}),
     models: await buildPublicModelsListEntries({
       catalog: models,
       cfg,
