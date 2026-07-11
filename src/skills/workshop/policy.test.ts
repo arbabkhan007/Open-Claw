@@ -101,6 +101,12 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(resolvedByName?.requireApproval?.description).toContain(
       `Proposal ID: ${proposal.record.id}`,
     );
+    expect(resolvedByName?.params).toEqual({
+      action: "reject",
+      name: "weather-helper",
+      proposal_id: proposal.record.id,
+      proposal_version: proposal.record.proposedVersion,
+    });
   });
 
   it("bounds approval metadata without splitting UTF-16 surrogates", async () => {

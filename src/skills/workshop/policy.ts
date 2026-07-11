@@ -185,14 +185,19 @@ export async function resolveSkillWorkshopToolApproval(params: {
     fallback: text.description,
   });
   const toolParams = asNullableRecord(params.toolParams);
+  const bindProposalId =
+    approvalDescription.proposalId && !readOptionalString(toolParams, "proposal_id");
   const bindCurrentVersion =
     approvalDescription.proposalVersion && !readOptionalString(toolParams, "proposal_version");
   return {
-    ...(bindCurrentVersion
+    ...(bindProposalId || bindCurrentVersion
       ? {
           params: {
             ...toolParams,
-            proposal_version: approvalDescription.proposalVersion,
+            ...(bindProposalId ? { proposal_id: approvalDescription.proposalId } : {}),
+            ...(bindCurrentVersion
+              ? { proposal_version: approvalDescription.proposalVersion }
+              : {}),
           },
         }
       : {}),
