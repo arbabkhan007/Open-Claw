@@ -86,7 +86,7 @@ function expectLaunchdSupervisedWithKickstartHandoff(params?: { launchJobLabel?:
   // launchd relaunch is actively scheduled (#104538): the detached kickstart
   // handoff waits for this pid, so exit no longer depends on KeepAlive alone.
   expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
-    mode: "kickstart",
+    mode: "kickstart-if-dead",
     waitForPid: process.pid,
   });
   expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
@@ -128,7 +128,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     expect(result.mode).toBe("supervised");
     expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
-      mode: "kickstart",
+      mode: "kickstart-if-dead",
       waitForPid: process.pid,
     });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     expect(result.mode).toBe("supervised");
     expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
-      mode: "kickstart",
+      mode: "kickstart-if-dead",
       waitForPid: process.pid,
     });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();

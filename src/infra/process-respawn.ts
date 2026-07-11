@@ -94,7 +94,7 @@ export function restartGatewayProcessWithFreshPid(
       // fallback — launchd still performs the relaunch itself. A scheduling
       // failure falls back to the caller's in-process restart path.
       const handoff = scheduleDetachedLaunchdRestartHandoff({
-        mode: "kickstart",
+        mode: "kickstart-if-dead",
         waitForPid: process.pid,
       });
       if (!handoff.ok) {
