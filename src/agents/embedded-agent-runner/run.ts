@@ -7,6 +7,7 @@ import {
   addTimerTimeoutGraceMs,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
@@ -2669,6 +2670,30 @@ async function runEmbeddedAgentInternal(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
+          // A pending live `/model` switch that could not restart this attempt
+          // (mid-turn work already happened, so canRestartForLiveSwitch was
+          // false) still reflects the user's current model selection from the
+          // session store. Reuse the already-resolved selection so compaction
+          // targets the selected model instead of the stale run-start
+          // provider/modelId, which otherwise reverts the session to the
+          // pre-switch provider on every compaction (#95696).
+          const compactionProvider = requestedSelection?.provider ?? provider;
+          const compactionModelId = requestedSelection?.model ?? modelId;
+          // Pair the compaction auth profile with the live selection too. A
+          // profile pinned by the switch wins; otherwise keep the run-start
+          // profile only when the provider is unchanged, since a cross-provider
+          // switch leaves that profile's credentials bound to the wrong
+          // provider (#95696).
+          const compactionAuthProfileId =
+            requestedSelection == null
+              ? lastProfileId
+              : (requestedSelection.authProfileId ??
+                (normalizeProviderId(requestedSelection.provider) === normalizeProviderId(provider)
+                  ? lastProfileId
+                  : undefined));
+          // ── Timeout-triggered compaction ──────────────────────────────────
+          // When the LLM times out with high context usage, compact before
+          // retrying to break the death spiral of repeated timeouts.
           if (
             !nativeModelOwned &&
             contextTokenBudget !== undefined &&
@@ -2712,14 +2737,14 @@ async function runEmbeddedAgentInternal(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
-                    authProfileId: lastProfileId,
+                    authProfileId: compactionAuthProfileId,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
                     senderId: params.senderId,
-                    provider,
-                    modelId,
+                    provider: compactionProvider,
+                    modelId: compactionModelId,
                     harnessRuntime: agentHarness.id,
                     modelSelectionLocked: params.modelSelectionLocked,
                     modelFallbacksOverride: params.modelFallbacksOverride,
@@ -2923,14 +2948,14 @@ async function runEmbeddedAgentInternal(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
-                    authProfileId: lastProfileId,
+                    authProfileId: compactionAuthProfileId,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
                     senderId: params.senderId,
-                    provider,
-                    modelId,
+                    provider: compactionProvider,
+                    modelId: compactionModelId,
                     harnessRuntime: agentHarness.id,
                     modelSelectionLocked: params.modelSelectionLocked,
                     thinkLevel,
