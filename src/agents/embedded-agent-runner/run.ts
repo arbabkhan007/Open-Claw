@@ -152,6 +152,7 @@ import { DEFAULT_AGENT_TIMEOUT_MS } from "../timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { isRunnerAbortError } from "./abort.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import {
@@ -3221,10 +3222,23 @@ async function runEmbeddedAgentInternal(
               throw toErrorObject(promptError, "Prompt failed");
             }
           }
+          // Some provider SDK stream aborts mark the attempt aborted without an external stop.
+          // Only replay the model call when no timeout or side effect made the prompt unsafe.
+          const replaySafePromptAbortFallback =
+            aborted &&
+            !externalAbort &&
+            !timedOut &&
+            !idleTimedOut &&
+            !timedOutDuringCompaction &&
+            !timedOutDuringToolExecution &&
+            promptErrorSource === "prompt" &&
+            isRunnerAbortError(promptError) &&
+            attempt.replayMetadata.replaySafe &&
+            !attempt.replayMetadata.hadPotentialSideEffects;
 
           if (
             promptError &&
-            !aborted &&
+            (!aborted || replaySafePromptAbortFallback) &&
             promptErrorSource !== "compaction" &&
             !hasRecoverableCodexAppServerTimeoutOutcome &&
             !shouldSurfaceCodexCompletionTimeout
@@ -3358,7 +3372,9 @@ async function runEmbeddedAgentInternal(
               promptFailoverReason === "timeout" &&
               !attempt.codexAppServerFailure &&
               attempt.promptTimeoutOutcome?.replayInvalid !== true &&
-              attempt.replayMetadata.replaySafe;
+              attempt.replayMetadata.replaySafe &&
+              !attempt.replayMetadata.hadPotentialSideEffects &&
+              (!aborted || replaySafePromptAbortFallback);
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
