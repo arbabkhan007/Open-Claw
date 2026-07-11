@@ -1,6 +1,7 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
@@ -75,15 +76,31 @@ export function restartGatewayProcessWithFreshPid(
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
-    // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
-    // Avoid detached kickstart/start handoffs here so restart timing stays tied
-    // to launchd's native supervision rather than a second helper process.
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
         return {
           mode: "failed",
           detail: restart.detail ?? `${restart.method} restart failed`,
+        };
+      }
+    }
+    if (supervisor === "launchd") {
+      // Exiting and trusting KeepAlive alone leaves the gateway dead in launchd
+      // domains where KeepAlive never fires (#104538). Schedule the same
+      // detached kickstart handoff the managed restart command uses: it waits
+      // for THIS pid to exit (restart timing stays sequenced by the real
+      // process exit), re-enables the service, and kickstarts with a bootstrap
+      // fallback — launchd still performs the relaunch itself. A scheduling
+      // failure falls back to the caller's in-process restart path.
+      const handoff = scheduleDetachedLaunchdRestartHandoff({
+        mode: "kickstart",
+        waitForPid: process.pid,
+      });
+      if (!handoff.ok) {
+        return {
+          mode: "failed",
+          detail: handoff.detail ?? "launchd kickstart handoff scheduling failed",
         };
       }
     }

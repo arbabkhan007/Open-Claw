@@ -6,6 +6,7 @@ import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
+const scheduleLaunchdHandoffMock = vi.hoisted(() => vi.fn(() => ({ ok: true, pid: 4242 })));
 const isContainerEnvironmentMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:child_process", async () => {
@@ -19,6 +20,10 @@ vi.mock("node:child_process", async () => {
 });
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
+}));
+vi.mock("../daemon/launchd-restart-handoff.js", () => ({
+  scheduleDetachedLaunchdRestartHandoff: (...args: unknown[]) =>
+    scheduleLaunchdHandoffMock(...args),
 }));
 vi.mock("./container-environment.js", () => ({
   isContainerEnvironment: () => isContainerEnvironmentMock(),
@@ -43,6 +48,8 @@ afterEach(() => {
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
   triggerOpenClawRestartMock.mockClear();
+  scheduleLaunchdHandoffMock.mockReset();
+  scheduleLaunchdHandoffMock.mockReturnValue({ ok: true, pid: 4242 });
   isContainerEnvironmentMock.mockReset();
   isContainerEnvironmentMock.mockReturnValue(false);
   vi.restoreAllMocks();
@@ -63,7 +70,7 @@ function mockDetachedChild(pid: number) {
   };
 }
 
-function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: string }) {
+function expectLaunchdSupervisedWithKickstartHandoff(params?: { launchJobLabel?: string }) {
   setPlatform("darwin");
   if (params?.launchJobLabel) {
     process.env.LAUNCH_JOB_LABEL = params.launchJobLabel;
@@ -71,6 +78,12 @@ function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: str
   process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
   const result = restartGatewayProcessWithFreshPid();
   expect(result).toEqual({ mode: "supervised" });
+  // launchd relaunch is actively scheduled (#104538): the detached kickstart
+  // handoff waits for this pid, so exit no longer depends on KeepAlive alone.
+  expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
+    mode: "kickstart",
+    waitForPid: process.pid,
+  });
   expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   expect(spawnMock).not.toHaveBeenCalled();
 }
@@ -96,9 +109,9 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when OpenClaw launchd markers are present on macOS (no kickstart)", () => {
+  it("returns supervised and schedules the kickstart handoff for launchd markers on macOS", () => {
     clearSupervisorHints();
-    expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
+    expectLaunchdSupervisedWithKickstartHandoff({ launchJobLabel: "ai.openclaw.gateway" });
   });
 
   it("returns supervised for a real gateway launchd job without the injected marker", () => {
@@ -109,6 +122,10 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result.mode).toBe("supervised");
+    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
+      mode: "kickstart",
+      waitForPid: process.pid,
+    });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -121,12 +138,30 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result.mode).toBe("supervised");
+    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
+      mode: "kickstart",
+      waitForPid: process.pid,
+    });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised on macOS when launchd label is set (no kickstart)", () => {
-    expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
+  it("returns supervised and schedules the kickstart handoff when launchd label is set", () => {
+    expectLaunchdSupervisedWithKickstartHandoff({ launchJobLabel: "ai.openclaw.gateway" });
+  });
+
+  it("falls back to failed when the launchd kickstart handoff cannot be scheduled (#104538)", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    scheduleLaunchdHandoffMock.mockReturnValue({ ok: false, detail: "spawn EPERM" });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    // The caller's in-process fallback keeps the gateway alive instead of
+    // exiting into a launchd domain with no scheduled relaunch.
+    expect(result.mode).toBe("failed");
+    expect(result.detail).toContain("EPERM");
   });
 
   it("launchd supervisor never returns failed regardless of triggerOpenClawRestart outcome", () => {
@@ -192,7 +227,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when OPENCLAW_LAUNCHD_LABEL is set (stock launchd plist)", () => {
     clearSupervisorHints();
-    expectLaunchdSupervisedWithoutKickstart();
+    expectLaunchdSupervisedWithKickstartHandoff();
   });
 
   it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {
