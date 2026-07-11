@@ -46,6 +46,13 @@ export type ActiveEmbeddedRunSnapshot = {
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   timer: NodeJS.Timeout;
+  /**
+   * When set, the waiter tracks one captured run generation. It resolves once
+   * that handle is no longer the active registry occupant (clear, force-clear,
+   * or replace). Session-only waiters omit this and wait until the session has
+   * no active embedded handle.
+   */
+  handle?: EmbeddedAgentQueueHandle;
 };
 
 export type AbandonedEmbeddedRun = {
