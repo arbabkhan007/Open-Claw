@@ -6,7 +6,12 @@ import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
-const scheduleLaunchdHandoffMock = vi.hoisted(() => vi.fn(() => ({ ok: true, pid: 4242 })));
+const scheduleLaunchdHandoffMock = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]): { ok: boolean; pid?: number; detail?: string } => ({
+    ok: true,
+    pid: 4242,
+  })),
+);
 const isContainerEnvironmentMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:child_process", async () => {
@@ -23,7 +28,7 @@ vi.mock("./restart.js", () => ({
 }));
 vi.mock("../daemon/launchd-restart-handoff.js", () => ({
   scheduleDetachedLaunchdRestartHandoff: (...args: unknown[]) =>
-    scheduleLaunchdHandoffMock(...args),
+    scheduleLaunchdHandoffMock(...(args as [unknown])),
 }));
 vi.mock("./container-environment.js", () => ({
   isContainerEnvironment: () => isContainerEnvironmentMock(),
