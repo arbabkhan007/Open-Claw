@@ -262,7 +262,7 @@ import { mapThinkingLevelForProvider } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
-const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const MAX_SAME_MODEL_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
@@ -1642,7 +1642,7 @@ async function runEmbeddedAgentInternal(
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
-      let sameModelIdleTimeoutRetries = 0;
+      let sameModelTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
       // profile/auth retries within this embedded run (a wrapper-local
@@ -3584,13 +3584,12 @@ async function runEmbeddedAgentInternal(
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             timedOutByRunBudget,
-            allowSameModelIdleTimeoutRetry:
+            allowSameModelTimeoutRetry:
               timedOut &&
-              idleTimedOut &&
               !timedOutDuringCompaction &&
-              !fallbackConfigured &&
+              !timedOutDuringToolExecution &&
               canRestartForLiveSwitch &&
-              sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+              sameModelTimeoutRetries < MAX_SAME_MODEL_TIMEOUT_RETRIES,
             allowSameModelRateLimitRetry: rateLimitProfileRotations < rateLimitProfileRotationLimit,
             assistantProfileFailureReason,
             lastProfileId,
@@ -3624,7 +3623,7 @@ async function runEmbeddedAgentInternal(
             const retryTraceResult =
               assistantFailoverOutcome.retryKind === "same_model_rate_limit"
                 ? "same_model_rate_limit"
-                : assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                : assistantFailoverOutcome.retryKind === "same_model_timeout" ||
                     assistantFailoverReason === "timeout"
                   ? "timeout"
                   : "rotate_profile";
@@ -3635,8 +3634,8 @@ async function runEmbeddedAgentInternal(
               ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
               stage: "assistant",
             });
-            if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
-              sameModelIdleTimeoutRetries += 1;
+            if (assistantFailoverOutcome.retryKind === "same_model_timeout") {
+              sameModelTimeoutRetries += 1;
             }
             if (assistantFailoverOutcome.retryKind !== "same_model_rate_limit") {
               consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
