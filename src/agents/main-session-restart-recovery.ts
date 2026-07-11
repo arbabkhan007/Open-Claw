@@ -57,6 +57,9 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
+const DEFAULT_PENDING_FINAL_DELIVERY_MAX_RECOVERY_ATTEMPTS = 10;
+const PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_BASE_MS = 30_000;
+const PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_MAX_MS = 30 * 60_000;
 const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
@@ -86,6 +89,66 @@ function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
 
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeAttemptCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount: number): number {
+  if (attemptCount <= 0) {
+    return 0;
+  }
+  const exponent = Math.max(0, Math.min(attemptCount - 1, 20));
+  return Math.min(
+    PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_BASE_MS * 2 ** exponent,
+    PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_MAX_MS,
+  );
+}
+
+// Returns when a backoff-deferred pending final becomes eligible again, or
+// undefined when no backoff applies. Future last-attempt timestamps (clock
+// skew) retry immediately instead of stalling recovery until they pass.
+function resolvePendingFinalDeliveryBackoffEligibleAtMs(params: {
+  entry: SessionEntry;
+  nowMs: number;
+}): number | undefined {
+  const attemptCount = normalizeAttemptCount(params.entry.pendingFinalDeliveryAttemptCount);
+  const lastAttemptAt = normalizeFiniteTimestamp(params.entry.pendingFinalDeliveryLastAttemptAt);
+  if (attemptCount <= 0 || lastAttemptAt === undefined || lastAttemptAt > params.nowMs) {
+    return undefined;
+  }
+  const nextEligibleAtMs =
+    lastAttemptAt + resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount);
+  return nextEligibleAtMs > params.nowMs ? nextEligibleAtMs : undefined;
+}
+
+type PendingFinalDeliveryDeferral = {
+  count: number;
+  nextEligibleAtMs: number;
+};
+
+type MainSessionRecoveryCounts = {
+  recovered: number;
+  failed: number;
+  skipped: number;
+  // Present only when backoff deferred at least one pending final delivery;
+  // the scheduler uses nextEligibleAtMs to run one follow-up pass so deferred
+  // entries retry in this process instead of waiting for the next restart.
+  deferred?: PendingFinalDeliveryDeferral;
+};
+
+function mergePendingFinalDeliveryDeferral(
+  current: PendingFinalDeliveryDeferral | undefined,
+  next: PendingFinalDeliveryDeferral | undefined,
+): PendingFinalDeliveryDeferral | undefined {
+  if (!current || !next) {
+    return current ?? next;
+  }
+  return {
+    count: current.count + next.count,
+    nextEligibleAtMs: Math.min(current.nextEligibleAtMs, next.nextEligibleAtMs),
+  };
 }
 
 function hasCurrentProcessOwner(params: {
@@ -476,6 +539,46 @@ async function markSessionFailed(params: {
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
+async function deadLetterPendingFinalDelivery(params: {
+  attemptCount: number;
+  maxAttempts: number;
+  storePath: string;
+  sessionKey: string;
+}): Promise<boolean> {
+  const cleared = await applySessionEntryReplacements({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry || (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText)) {
+        return { result: false };
+      }
+      entry.abortedLastRun = false;
+      entry.updatedAt = Date.now();
+      entry.pendingFinalDelivery = undefined;
+      entry.pendingFinalDeliveryText = undefined;
+      entry.pendingFinalDeliveryCreatedAt = undefined;
+      entry.pendingFinalDeliveryLastAttemptAt = undefined;
+      entry.pendingFinalDeliveryAttemptCount = undefined;
+      entry.pendingFinalDeliveryLastError = undefined;
+      entry.pendingFinalDeliveryContext = undefined;
+      entry.pendingFinalDeliveryIntentId = undefined;
+      entry.restartRecoveryDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryRunId = undefined;
+      return {
+        result: true,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  if (cleared) {
+    log.warn(
+      `dead-lettered pending final delivery for ${params.sessionKey} after ${params.attemptCount}/${params.maxAttempts} restart recovery attempts`,
+    );
+  }
+  return cleared;
+}
+
 async function sendUnresumableSessionNotice(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -731,8 +834,11 @@ async function recoverStore(params: {
   resumedSessionKeys: Set<string>;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+  maxPendingFinalDeliveryAttempts?: number;
+}): Promise<MainSessionRecoveryCounts> {
+  const result: MainSessionRecoveryCounts = { recovered: 0, failed: 0, skipped: 0 };
+  const maxPendingFinalDeliveryAttempts =
+    params.maxPendingFinalDeliveryAttempts ?? DEFAULT_PENDING_FINAL_DELIVERY_MAX_RECOVERY_ATTEMPTS;
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -790,6 +896,33 @@ async function recoverStore(params: {
     }
 
     if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      const pendingFinalDeliveryAttemptCount = normalizeAttemptCount(
+        entry.pendingFinalDeliveryAttemptCount,
+      );
+      if (pendingFinalDeliveryAttemptCount >= maxPendingFinalDeliveryAttempts) {
+        await deadLetterPendingFinalDelivery({
+          attemptCount: pendingFinalDeliveryAttemptCount,
+          maxAttempts: maxPendingFinalDeliveryAttempts,
+          storePath: params.storePath,
+          sessionKey,
+        });
+        result.skipped++;
+        continue;
+      }
+      const backoffEligibleAtMs = resolvePendingFinalDeliveryBackoffEligibleAtMs({
+        entry,
+        nowMs: Date.now(),
+      });
+      if (backoffEligibleAtMs !== undefined) {
+        log.info(
+          `pending final delivery restart recovery backoff active for ${sessionKey} after ${pendingFinalDeliveryAttemptCount}/${maxPendingFinalDeliveryAttempts} attempts`,
+        );
+        result.deferred = mergePendingFinalDeliveryDeferral(result.deferred, {
+          count: 1,
+          nextEligibleAtMs: backoffEligibleAtMs,
+        });
+        continue;
+      }
       const resumed = await resumeMainSession({
         cfg: params.cfg,
         entry,
@@ -888,9 +1021,10 @@ export async function recoverRestartAbortedMainSessions(
     resumedSessionKeys?: Set<string>;
     activeSessionIds?: Iterable<string>;
     activeSessionKeys?: Iterable<string>;
+    maxPendingFinalDeliveryAttempts?: number;
   } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+): Promise<MainSessionRecoveryCounts> {
+  const result: MainSessionRecoveryCounts = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
@@ -900,10 +1034,12 @@ export async function recoverRestartAbortedMainSessions(
       resumedSessionKeys,
       activeSessionIds: params.activeSessionIds,
       activeSessionKeys: params.activeSessionKeys,
+      maxPendingFinalDeliveryAttempts: params.maxPendingFinalDeliveryAttempts,
     });
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    result.deferred = mergePendingFinalDeliveryDeferral(result.deferred, storeResult.deferred);
   }
 
   if (result.recovered > 0 || result.failed > 0) {
@@ -922,8 +1058,9 @@ export async function recoverStartupOrphanedMainSessions(
     activeSessionKeys?: Iterable<string>;
     updatedBeforeMs?: number;
     resumedSessionKeys?: Set<string>;
+    maxPendingFinalDeliveryAttempts?: number;
   } = {},
-): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+): Promise<{ marked: number } & MainSessionRecoveryCounts> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
   const marked = await markStartupOrphanedMainSessionsForRecovery({
     cfg: params.cfg,
@@ -938,12 +1075,14 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys: params.resumedSessionKeys,
     activeSessionIds: params.activeSessionIds,
     activeSessionKeys: params.activeSessionKeys,
+    maxPendingFinalDeliveryAttempts: params.maxPendingFinalDeliveryAttempts,
   });
   return {
     marked: marked.marked,
     recovered: recovered.recovered,
     failed: recovered.failed,
     skipped: marked.skipped + recovered.skipped,
+    deferred: recovered.deferred,
   };
 }
 
@@ -953,6 +1092,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
     delayMs?: number;
     maxRetries?: number;
     stateDir?: string;
+    maxPendingFinalDeliveryAttempts?: number;
   } = {},
 ): void {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
@@ -972,11 +1112,18 @@ export function scheduleRestartAbortedMainSessionRecovery(
           stateDir: params.stateDir,
           resumedSessionKeys,
           updatedBeforeMs: startupRecoveryCutoffMs,
+          maxPendingFinalDeliveryAttempts: params.maxPendingFinalDeliveryAttempts,
         }),
     )
       .then((result) => {
         if (result.failed > 0 && attempt < maxRetries) {
+          // The failed-retry pass recomputes deferrals, so do not also
+          // schedule a deferred follow-up here; that would double-schedule.
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+          return;
+        }
+        if (result.deferred) {
+          scheduleDeferredFollowUp(result.deferred.nextEligibleAtMs);
         }
       })
       .catch((err: unknown) => {
@@ -997,6 +1144,19 @@ export function scheduleRestartAbortedMainSessionRecovery(
     setTimeout(() => {
       runRecoveryAttempt(attempt, delay);
     }, delay).unref?.();
+  };
+
+  // Backoff-deferred pending finals are not failures, so the failed-retry
+  // ladder never re-runs them; without this follow-up they would wait for the
+  // next gateway restart. One pass per deferral, naturally bounded by the
+  // per-entry attempt cap (dead-letter) and the backoff ceiling.
+  const scheduleDeferredFollowUp = (nextEligibleAtMs: number) => {
+    const followUpDelay = Math.max(0, nextEligibleAtMs - Date.now());
+    setTimeout(() => {
+      // Fresh attempt ladder: deferred follow-ups do not consume the
+      // failed-retry budget of the pass that scheduled them.
+      runRecoveryAttempt(1, initialDelay);
+    }, followUpDelay).unref?.();
   };
 
   scheduleAttempt(1, initialDelay);
