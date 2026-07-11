@@ -178,8 +178,10 @@ export function modelCallSpanName(evt: { api?: string; model?: string }): string
   return `${genAiOperationName(evt.api)} ${lowCardinalityAttr(evt.model)}`;
 }
 
-export function modelCallSpanKind(): SpanKind | undefined {
-  return emitLatestGenAiSemconv() ? SpanKind.CLIENT : undefined;
+// Model calls wrap provider inference requests. Keep their kind CLIENT even when the
+// legacy span name is used so trace backends preserve the remote dependency edge.
+export function modelCallSpanKind(): SpanKind {
+  return SpanKind.CLIENT;
 }
 
 export function addUpstreamRequestIdSpanEvent(
