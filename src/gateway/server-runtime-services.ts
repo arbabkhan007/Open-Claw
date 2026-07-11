@@ -7,6 +7,7 @@ import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-r
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import { startPendingFinalDeliveryReaper } from "./pending-final-delivery-reaper-service.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
   createNoopHeartbeatRunner,
@@ -255,6 +256,11 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
+  // Steady-state companion to the one-shot pending-delivery recovery above:
+  // delivers replies stranded in pendingFinalDelivery on a wedged lane (#93625).
+  if (!isVitestRuntimeEnv()) {
+    startPendingFinalDeliveryReaper({ cfg: params.cfgAtStart });
+  }
   const stopModelPricingRefresh = !isVitestRuntimeEnv()
     ? startGatewayModelPricingRefreshOnDemand({
         config: params.cfgAtStart,
