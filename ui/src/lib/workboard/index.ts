@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
 // Control UI controller manages workboard gateway state.
 
@@ -2677,7 +2678,12 @@ export function getWorkboardLifecycle(
       sourceUpdatedAt: sessionUpdatedAtValue(session),
     };
   }
-  if (session.hasActiveRun === true || session.status === "running") {
+  // Paused (sessions_yield) rows report hasActiveRun:false while a queued
+  // continuation is pending; `isSessionRunActive` keeps them in the running
+  // lifecycle so preset/health filters and execution-status sync do not
+  // resolve the card to idle mid-yield. Keep the raw running-status check so
+  // a running row without a live-run flag stays running until staleness.
+  if (isSessionRunActive(session) || session.status === "running") {
     return {
       session,
       state: "running",
@@ -2930,7 +2936,12 @@ function sessionTitle(session: GatewaySessionRow, recentUserText: string | null)
 }
 
 function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
-  if (session.hasActiveRun === true || session.status === "running") {
+  // Use the shared `isSessionRunActive` so paused (sessions_yield) sessions
+  // are reported as `running` in the Workboard view. A paused session has a
+  // queued continuation pending; treating it as `done` / `review` here would
+  // let the Workboard mark the yield as resolved while the runner is still
+  // about to drain the continuation.
+  if (isSessionRunActive(session)) {
     return "running";
   }
   if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
