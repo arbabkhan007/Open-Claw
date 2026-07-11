@@ -16,7 +16,6 @@ import {
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptActiveEntries,
-  selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
