@@ -42,7 +42,11 @@ import {
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  expireStaleReplyOperation,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
@@ -1572,15 +1576,45 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("surfaces a stalled reply operation after the embedded run returns no payload", async () => {
-    const { replyOperation } = createMockReplyOperation();
-    let operationResult: ReplyOperation["result"] = null;
-    Object.defineProperty(replyOperation, "result", {
-      configurable: true,
-      get: () => operationResult,
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:stalled-empty-reply",
+      sessionId: "stalled-empty-reply",
+      resetTriggered: false,
     });
+    replyOperation.setPhase("running");
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      operationResult = { kind: "failed", code: "run_stalled" };
+      expect(expireStaleReplyOperation(replyOperation, "no_activity")).toBe(true);
+      expect(replyOperation.abortSignal.aborted).toBe(true);
       return { payloads: [], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    await expect(
+      runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      }),
+    ).resolves.toEqual({
+      kind: "final",
+      payload: {
+        text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+        isError: true,
+      },
+    });
+  });
+
+  it("surfaces a stalled reply operation after its aborted embedded run rejects", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:stalled-rejected-reply",
+      sessionId: "stalled-rejected-reply",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(expireStaleReplyOperation(replyOperation, "no_activity")).toBe(true);
+      expect(replyOperation.abortSignal.aborted).toBe(true);
+      throw new Error("embedded run aborted after stale recovery");
     });
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();

@@ -2899,6 +2899,18 @@ async function runAgentTurnWithFallbackInternal(
           ? restartAbortReason
           : createAgentRunRestartAbortError();
       }
+      // Stale recovery records run_stalled before aborting this operation.
+      // Prefer that terminal cause so the broader abort-signal fallback does not hide its reply.
+      if (isReplyOperationStalled(params.replyOperation)) {
+        settledLifecycleTerminal?.emit(
+          "error",
+          new Error("Reply operation expired after making no progress"),
+        );
+        return {
+          kind: "final",
+          payload: buildStalledRunReplyPayload(),
+        };
+      }
       if (isReplyOperationUserAbort(params.replyOperation)) {
         settledLifecycleTerminal?.emit("end", runResult);
         await drainPendingToolTasks({
@@ -2910,16 +2922,6 @@ async function runAgentTurnWithFallbackInternal(
           payload: {
             text: SILENT_REPLY_TOKEN,
           },
-        };
-      }
-      if (isReplyOperationStalled(params.replyOperation)) {
-        settledLifecycleTerminal?.emit(
-          "error",
-          new Error("Reply operation expired after making no progress"),
-        );
-        return {
-          kind: "final",
-          payload: buildStalledRunReplyPayload(),
         };
       }
       commitTerminalOutcome();
@@ -3141,6 +3143,15 @@ async function runAgentTurnWithFallbackInternal(
         };
       }
 
+      // See the settled path: stale recovery aborts after recording run_stalled.
+      if (isReplyOperationStalled(params.replyOperation)) {
+        takePendingLifecycleTerminal()?.emit("error", err);
+        return {
+          kind: "final",
+          payload: buildStalledRunReplyPayload(),
+        };
+      }
+
       if (isReplyOperationUserAbort(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("error", err);
         return {
@@ -3148,14 +3159,6 @@ async function runAgentTurnWithFallbackInternal(
           payload: {
             text: SILENT_REPLY_TOKEN,
           },
-        };
-      }
-
-      if (isReplyOperationStalled(params.replyOperation)) {
-        takePendingLifecycleTerminal()?.emit("error", err);
-        return {
-          kind: "final",
-          payload: buildStalledRunReplyPayload(),
         };
       }
 
