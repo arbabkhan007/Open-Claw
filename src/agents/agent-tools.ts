@@ -438,6 +438,13 @@ export function createOpenClawCodingTools(options?: {
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  /**
+   * True when this run is processing a sessions_send agent-to-agent message. The
+   * target's reply already returns through the sessions_send tool result, so the
+   * routed turn omits sessions_send to stop the target reverse-calling the
+   * requester and duplicating content (issue #39476).
+   */
+  interAgentSendTurn?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Keep the message tool available even when the selected profile omits it. */
@@ -979,6 +986,7 @@ export function createOpenClawCodingTools(options?: {
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
+          interAgentSendTurn: options?.interAgentSendTurn,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
