@@ -25,6 +25,7 @@ describe("CronService restart catch-up", () => {
     onEvent?: ReturnType<typeof vi.fn>;
     nowMs?: () => number;
     runIsolatedAgentJob?: ReturnType<typeof vi.fn>;
+    runCommandJob?: ReturnType<typeof vi.fn>;
     startupDeferredMissedAgentJobDelayMs?: number;
   }) {
     return new CronService({
@@ -37,6 +38,7 @@ describe("CronService restart catch-up", () => {
       runIsolatedAgentJob:
         (params.runIsolatedAgentJob as never) ??
         (vi.fn(async () => ({ status: "ok" as const })) as never),
+      ...(params.runCommandJob ? { runCommandJob: params.runCommandJob as never } : {}),
       onEvent: params.onEvent as ((evt: CronEvent) => void) | undefined,
       ...(params.startupDeferredMissedAgentJobDelayMs !== undefined
         ? { startupDeferredMissedAgentJobDelayMs: params.startupDeferredMissedAgentJobDelayMs }
@@ -184,6 +186,119 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
       },
     );
+  });
+
+  it("executes an overdue recurring command job immediately on start with no prior run history", async () => {
+    // Regression: gateway stopped between cron add and first fire; nextRunAtMs
+    // is in the past but lastRunAtMs is undefined. The startup catch-up must
+    // still detect and run the missed slot via the nextRunAtMs >= nowMs path.
+    const dueAt = Date.parse("2025-12-13T15:00:00.000Z");
+
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const onEvent = vi.fn();
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "echo done" }));
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-overdue-command-job",
+        name: "daily shell task",
+        enabled: true,
+        createdAtMs: dueAt - 60_000,
+        updatedAtMs: dueAt - 60_000,
+        schedule: { kind: "cron", expr: "0 15 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "command", argv: ["echo", "FIRED"] },
+        state: {
+          nextRunAtMs: dueAt,
+          // no lastRunAtMs: job was added but gateway stopped before its first fire
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      onEvent,
+      runCommandJob,
+    });
+
+    try {
+      await cron.start();
+
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "restart-overdue-command-job");
+      expect(updated?.state.lastRunStatus ?? updated?.state.lastStatus).toBe("ok");
+      expect(updated?.state.lastRunAtMs).toBeDefined();
+      expect(updated?.state.nextRunAtMs).toBeGreaterThan(dueAt);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("replays missed cron slot for command job when nextRunAtMs was already advanced past the missed slot", async () => {
+    // Regression: the timer fires during stop and recomputeNextRunsForMaintenance
+    // advances nextRunAtMs to the following day. On restart, the normal
+    // nextRunAtMs >= nowMs path misses the job; the allowCronMissedRunByLastRun
+    // fallback must detect the gap between previousRunAtMs and lastRunAtMs.
+    const lastRunAt = Date.parse("2025-12-12T15:00:00.000Z");
+    const missedSlot = Date.parse("2025-12-13T15:00:00.000Z");
+    const advancedNext = Date.parse("2025-12-14T15:00:00.000Z"); // nextRunAtMs already advanced
+
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const onEvent = vi.fn();
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const, summary: "echo done" }));
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-advanced-command-job",
+        name: "daily shell task",
+        enabled: true,
+        createdAtMs: lastRunAt,
+        updatedAtMs: lastRunAt,
+        schedule: { kind: "cron", expr: "0 15 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "command", argv: ["echo", "FIRED"] },
+        state: {
+          nextRunAtMs: advancedNext, // already advanced past the missed slot
+          lastRunAtMs: lastRunAt,
+          lastRunStatus: "ok",
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      onEvent,
+      runCommandJob,
+    });
+
+    try {
+      await cron.start();
+
+      // The job ran once the day before; the Dec 13 slot was skipped when
+      // nextRunAtMs was advanced. Startup catch-up must detect and replay it.
+      expect(runCommandJob).toHaveBeenCalledTimes(1);
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "restart-advanced-command-job");
+      expect(updated?.state.lastRunStatus ?? updated?.state.lastStatus).toBe("ok");
+      expect(updated?.state.lastRunAtMs).toBeGreaterThan(missedSlot);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
   });
 
   it("does not replay completed one-shot jobs restored with lastRunStatus only", async () => {
