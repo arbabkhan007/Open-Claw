@@ -69,7 +69,6 @@ import {
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
-  REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -635,13 +634,11 @@ async function loadReferenceAssets(params: {
             maxBytes: params.maxBytes,
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
-            responseHeaderTimeoutMs: REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           })
         : await loadWebMedia(resolvedPath ?? resolvedInput, {
             maxBytes: params.maxBytes,
             localRoots,
             ssrfPolicy: params.ssrfPolicy,
-            responseHeaderTimeoutMs: REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           });
     if (media.kind !== params.expectedKind) {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);

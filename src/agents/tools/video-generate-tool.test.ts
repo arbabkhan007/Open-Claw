@@ -16,7 +16,6 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
-import { REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS } from "./media-tool-shared.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
 import {
   createVideoGenerateTool,
@@ -1644,32 +1643,6 @@ describe("createVideoGenerateTool", () => {
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
     const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
     expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
-  });
-
-  it("applies the shared response-header deadline when loading remote reference assets", async () => {
-    // Regression for PR 103209: video_generate loads reference URLs through
-    // loadWebMedia and must forward the canonical response-header deadline so
-    // a stalled upstream cannot hang the call indefinitely.
-    mockVideoPluginProvider({
-      imageToVideo: { enabled: true, maxInputImages: 1 },
-    });
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    mockSavedVideoResult();
-    const tool = createVideoPluginTool();
-
-    await tool.execute("call-1", {
-      prompt: "lobster",
-      image: "/tmp/reference.png",
-    });
-
-    const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
-    expect(loadCall?.[0]).toBe("/tmp/reference.png");
-    const loadOptions = loadCall?.[1] as { responseHeaderTimeoutMs?: number } | undefined;
-    expect(loadOptions?.responseHeaderTimeoutMs).toBe(REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS);
   });
 
   it("rejects audio data: URLs via the templated rejection branch", async () => {
