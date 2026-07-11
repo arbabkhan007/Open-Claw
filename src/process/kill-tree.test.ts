@@ -249,6 +249,23 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Windows bounds taskkill completion when no event arrives", async () => {
+    const taskkillChild = new EventEmitter();
+    spawnMock.mockReturnValueOnce(taskkillChild);
+
+    await withMockedPlatform("win32", async () => {
+      const completed = vi.fn();
+      void signalProcessTreeAndWait(9090, "SIGKILL").then(completed);
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(completed).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completed).toHaveBeenCalledOnce();
+      expectTaskkillCall(0, ["/F", "/T", "/PID", "9090"]);
+    });
+  });
+
   it("on Windows force-kills synchronously without delayed taskkill", async () => {
     await withMockedPlatform("win32", async () => {
       killProcessTree(9999, { force: true });

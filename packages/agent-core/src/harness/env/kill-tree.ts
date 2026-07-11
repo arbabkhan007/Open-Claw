@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
+const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -118,17 +119,28 @@ function signalProcessTreeUnix(
 
 function runTaskkill(args: string[]): Promise<void> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(completionTimer);
+      resolve();
+    };
+    const completionTimer = setTimeout(finish, TASKKILL_COMPLETION_TIMEOUT_MS);
+    completionTimer.unref?.();
     try {
       const child = spawn("taskkill", args, {
         stdio: "ignore",
         detached: true,
         windowsHide: true,
       });
-      child.once("error", resolve);
-      child.once("close", resolve);
+      child.once("error", finish);
+      child.once("close", finish);
     } catch {
       // Ignore taskkill spawn failures.
-      resolve();
+      finish();
     }
   });
 }
