@@ -59,14 +59,6 @@ export function signalProcessTree(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
   opts?: { detached?: boolean },
-): void {
-  void signalProcessTreeAndWait(pid, signal, opts);
-}
-
-export function signalProcessTreeAndWait(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  opts?: { detached?: boolean },
 ): Promise<void> {
   if (!Number.isFinite(pid) || pid <= 0) {
     return Promise.resolve();

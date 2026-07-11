@@ -6,7 +6,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
-import { signalProcessTree, signalProcessTreeAndWait } from "../../kill-tree.js";
+import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
@@ -437,7 +437,7 @@ export async function createChildAdapter(params: {
     signalProcessTree(pid, signal, { detached: childIsDetached });
   };
   const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
-    signalProcessTreeAndWait(pid, signal, { detached: childIsDetached });
+    signalProcessTree(pid, signal, { detached: childIsDetached });
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {

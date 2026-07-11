@@ -19,7 +19,6 @@ vi.mock("node:child_process", async () => {
 
 let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
 let signalProcessTree: typeof import("./kill-tree.js").signalProcessTree;
-let signalProcessTreeAndWait: typeof import("./kill-tree.js").signalProcessTreeAndWait;
 
 function expectTaskkillCall(index: number, args: string[]) {
   expect(spawnMock.mock.calls[index]).toStrictEqual([
@@ -37,8 +36,7 @@ describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {
-    ({ killProcessTree, signalProcessTree, signalProcessTreeAndWait } =
-      await import("./kill-tree.js"));
+    ({ killProcessTree, signalProcessTree } = await import("./kill-tree.js"));
   });
 
   beforeEach(() => {
@@ -237,7 +235,7 @@ describe("killProcessTree", () => {
 
     await withMockedPlatform("win32", async () => {
       const completed = vi.fn();
-      void signalProcessTreeAndWait(8989, "SIGKILL").then(completed);
+      void signalProcessTree(8989, "SIGKILL").then(completed);
       await Promise.resolve();
       expect(completed).not.toHaveBeenCalled();
 
@@ -255,7 +253,7 @@ describe("killProcessTree", () => {
 
     await withMockedPlatform("win32", async () => {
       const completed = vi.fn();
-      void signalProcessTreeAndWait(9090, "SIGKILL").then(completed);
+      void signalProcessTree(9090, "SIGKILL").then(completed);
 
       await vi.advanceTimersByTimeAsync(2_999);
       expect(completed).not.toHaveBeenCalled();

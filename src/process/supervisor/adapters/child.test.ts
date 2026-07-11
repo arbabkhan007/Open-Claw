@@ -15,20 +15,16 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const {
-  spawnWithFallbackMock,
-  signalProcessTreeMock,
-  signalProcessTreeAndWaitMock,
-  createWindowsOutputDecoderMock,
-} = vi.hoisted(() => ({
-  spawnWithFallbackMock: vi.fn(),
-  signalProcessTreeMock: vi.fn(),
-  signalProcessTreeAndWaitMock: vi.fn(() => Promise.resolve()),
-  createWindowsOutputDecoderMock: vi.fn(() => ({
-    decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
-    flush: () => "",
-  })),
-}));
+const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
+  () => ({
+    spawnWithFallbackMock: vi.fn(),
+    signalProcessTreeMock: vi.fn(() => Promise.resolve()),
+    createWindowsOutputDecoderMock: vi.fn(() => ({
+      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+      flush: () => "",
+    })),
+  }),
+);
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -36,7 +32,6 @@ vi.mock("../../spawn-utils.js", () => ({
 
 vi.mock("../../kill-tree.js", () => ({
   signalProcessTree: signalProcessTreeMock,
-  signalProcessTreeAndWait: signalProcessTreeAndWaitMock,
 }));
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
@@ -208,7 +203,7 @@ describe("createChildAdapter", () => {
     // Detachment flag is now passed to signalProcessTree so it knows whether
     // it can safely group-kill via -pid. (#71662)
     const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
-    expect(signalProcessTreeAndWaitMock).toHaveBeenCalledWith(4321, "SIGKILL", {
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", {
       detached: expectedDetached,
     });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
@@ -232,7 +227,7 @@ describe("createChildAdapter", () => {
     adapter.kill();
     await Promise.resolve();
 
-    expect(signalProcessTreeAndWaitMock).toHaveBeenCalledWith(8888, "SIGKILL", {
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(8888, "SIGKILL", {
       detached: false,
     });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
@@ -244,7 +239,7 @@ describe("createChildAdapter", () => {
       const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
       adapter.kill();
       await Promise.resolve();
-      expect(signalProcessTreeAndWaitMock).toHaveBeenCalledWith(9999, "SIGKILL", {
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(9999, "SIGKILL", {
         detached: false,
       });
       expect(killMock).toHaveBeenCalledWith("SIGKILL");
@@ -387,7 +382,7 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     setPlatform("win32");
     let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeAndWaitMock.mockReturnValueOnce(
+    signalProcessTreeMock.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         resolveTreeKill = resolve;
       }),
@@ -424,7 +419,7 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     setPlatform("win32");
     let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeAndWaitMock.mockReturnValueOnce(
+    signalProcessTreeMock.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         resolveTreeKill = resolve;
       }),
@@ -455,7 +450,7 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     setPlatform("win32");
     let resolveTreeKill: (() => void) | undefined;
-    signalProcessTreeAndWaitMock.mockReturnValueOnce(
+    signalProcessTreeMock.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         resolveTreeKill = resolve;
       }),
