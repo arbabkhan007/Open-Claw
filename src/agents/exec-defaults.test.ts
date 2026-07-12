@@ -32,7 +32,7 @@ describe("resolveExecDefaults", () => {
     ).toBe(false);
   });
 
-  it("does not advertise node routing when exec host is auto and sandbox is available", () => {
+  it("advertises node routing when exec host is auto and sandbox is available", () => {
     const defaults = resolveExecDefaults({
       cfg: {
         tools: {
@@ -46,7 +46,7 @@ describe("resolveExecDefaults", () => {
 
     expect(defaults.host).toBe("auto");
     expect(defaults.effectiveHost).toBe("sandbox");
-    expect(defaults.canRequestNode).toBe(false);
+    expect(defaults.canRequestNode).toBe(true);
   });
 
   it("keeps node routing available when exec host is auto without sandbox", () => {
@@ -298,7 +298,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("blocks node advertising in helper calls when sandbox is available", () => {
+  it("allows node advertising in helper calls when sandbox is available", () => {
     expect(
       canExecRequestNode({
         cfg: {
@@ -310,7 +310,7 @@ describe("resolveExecDefaults", () => {
         },
         sandboxAvailable: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
