@@ -106,6 +106,54 @@ describe("mime detection", () => {
       expected: "application/zip",
     },
     {
+      name: "does not let audio extensions override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/fake.mp3",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let video extensions override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/fake.mp4",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let audio headers override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "audio/mpeg",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let video headers override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "video/mp4",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
       name: "uses extension mapping for JavaScript assets",
       input: async () => ({
         filePath: "/tmp/a2ui.bundle.js",

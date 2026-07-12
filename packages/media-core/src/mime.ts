@@ -192,8 +192,14 @@ function isGenericMime(mime?: string): boolean {
   return m === "application/octet-stream" || m === "application/zip";
 }
 
-function isImageMime(mime?: string): boolean {
-  return mediaKindFromMime(normalizeMimeType(mime)) === "image";
+/**
+ * Image/audio/video extension or header claims conflict with a generic sniffed
+ * container (ZIP / octet-stream). Document types (e.g. XLSX) may still refine
+ * generic ZIP bytes; media families must not.
+ */
+function conflictsWithGenericContainer(mime?: string): boolean {
+  const kind = mediaKindFromMime(normalizeMimeType(mime));
+  return kind === "image" || kind === "audio" || kind === "video";
 }
 
 async function detectMimeImpl(opts: {
@@ -207,12 +213,14 @@ async function detectMimeImpl(opts: {
   const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
   const sniffedGenericContainer = sniffed && isGenericMime(sniffed);
-  const trustedExtMime = sniffedGenericContainer && isImageMime(extMime) ? undefined : extMime;
+  const trustedExtMime =
+    sniffedGenericContainer && conflictsWithGenericContainer(extMime) ? undefined : extMime;
   const trustedHeaderMime =
-    sniffedGenericContainer && isImageMime(headerMime) ? undefined : headerMime;
+    sniffedGenericContainer && conflictsWithGenericContainer(headerMime) ? undefined : headerMime;
 
   // Prefer sniffed types, but don't let generic container types override a more
-  // specific extension mapping (e.g. XLSX vs ZIP).
+  // specific document extension mapping (e.g. XLSX vs ZIP). Image/audio/video
+  // claims against generic containers are untrusted so families stay consistent.
   if (sniffed && (!isGenericMime(sniffed) || !trustedExtMime)) {
     return sniffed;
   }
