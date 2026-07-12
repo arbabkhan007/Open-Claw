@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import {
@@ -45,6 +46,7 @@ type EventHandlerBtwPresenter = {
 };
 
 const MAX_ABORT_DIAGNOSTIC_LENGTH = 160;
+const MAX_TRACKED_TOOL_VALIDATION_DIAGNOSTICS = 64;
 
 function formatAbortDiagnostic(value: string | undefined): string | undefined {
   const diagnostic = sanitizeRenderableText(value ?? "")
@@ -124,6 +126,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     string,
     { errorMessage: string; timer: ReturnType<typeof setTimeout> }
   >();
+  const toolValidationDiagnostics = new Map<string, string>();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -213,6 +216,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     completedRuns.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
+    toolValidationDiagnostics.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -652,6 +656,27 @@ export function createEventHandlers(context: EventHandlerContext) {
     return selectedAgentId === defaultAgentId;
   };
 
+  const noteToolValidationDiagnostic = (evt: AgentEvent) => {
+    const data = evt.data ?? {};
+    const phase = asString(data.phase, "");
+    if (evt.stream === "assistant" || (evt.stream === "tool" && phase === "start")) {
+      toolValidationDiagnostics.delete(evt.runId);
+      return;
+    }
+    const summary = readToolValidationErrorSummary(data.toolErrorSummary);
+    if (!summary) {
+      return;
+    }
+    toolValidationDiagnostics.set(evt.runId, summary);
+    while (toolValidationDiagnostics.size > MAX_TRACKED_TOOL_VALIDATION_DIAGNOSTICS) {
+      const oldestRunId = toolValidationDiagnostics.keys().next().value;
+      if (!oldestRunId) {
+        break;
+      }
+      toolValidationDiagnostics.delete(oldestRunId);
+    }
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -796,7 +821,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      const diagnostic = formatAbortDiagnostic(evt.errorMessage);
+      const diagnostic = formatAbortDiagnostic(
+        evt.errorMessage ?? toolValidationDiagnostics.get(evt.runId),
+      );
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
@@ -986,6 +1013,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as AgentEvent;
     syncSessionKey();
+    if (
+      evt.sessionKey &&
+      (!isSameSessionKey(evt.sessionKey, state.currentSessionKey) ||
+        !isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId))
+    ) {
+      return;
+    }
+    noteToolValidationDiagnostic(evt);
     // System-injected runs (bridge-notify, webhook, cron) never go through the
     // TUI submit path, so no active/pending run id exists when their lifecycle
     // "start" arrives — leaving the status bar idle until the response lands.
@@ -1031,6 +1066,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "tool") {
+      const data = evt.data ?? {};
+      const phase = asString(data.phase, "");
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
@@ -1040,8 +1077,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!allowToolEvents) {
         return;
       }
-      const data = evt.data ?? {};
-      const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
       const toolName = asString(data.name, "tool");
       if (!toolCallId) {
@@ -1180,6 +1215,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     deferredHistoryRunEvents.clear();
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
+    toolValidationDiagnostics.clear();
   };
 
   const consumeCompletedRunForPendingSend = (runId: string) => {

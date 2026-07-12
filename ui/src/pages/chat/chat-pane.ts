@@ -1929,8 +1929,10 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
-      onSend: () =>
-        catalogKey ? void this.continueCatalogSession(catalogKey) : void state.handleSendChat(),
+      onSend: (messageOverride) =>
+        catalogKey
+          ? void this.continueCatalogSession(catalogKey)
+          : void state.handleSendChat(messageOverride),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
