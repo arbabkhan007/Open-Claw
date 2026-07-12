@@ -11,6 +11,7 @@ import {
   applyContextPruningDefaults,
   applyCronDefaults,
   applyMessageDefaults,
+  resolveNormalizedProviderModelMaxTokens,
 } from "./defaults.js";
 
 const mocks = vi.hoisted(() => ({
@@ -143,5 +144,62 @@ describe("config defaults", () => {
 
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+  });
+
+  describe("resolveNormalizedProviderModelMaxTokens", () => {
+    it("leaves non-Mistral providers unchanged", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "openai",
+          modelId: "gpt-4o",
+          contextWindow: 128_000,
+          rawMaxTokens: 200_000,
+        }),
+      ).toBe(128_000);
+    });
+
+    it("keeps Mistral raw maxTokens below the safe cap", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "mistral-large-latest",
+          contextWindow: 32_768,
+          rawMaxTokens: 8_192,
+        }),
+      ).toBe(8_192);
+    });
+
+    it("caps Mistral maxTokens at the per-model safe maximum", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "mistral-large-latest",
+          contextWindow: 32_768,
+          rawMaxTokens: 17_000,
+        }),
+      ).toBe(16_384);
+    });
+
+    it("caps Mistral maxTokens by context window when it is smaller than the safe cap", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "mistral-large-latest",
+          contextWindow: 8_192,
+          rawMaxTokens: 20_000,
+        }),
+      ).toBe(8_192);
+    });
+
+    it("falls back to the default safe cap for unknown Mistral models", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "unknown-model",
+          contextWindow: 32_768,
+          rawMaxTokens: 20_000,
+        }),
+      ).toBe(8_192);
+    });
   });
 });
