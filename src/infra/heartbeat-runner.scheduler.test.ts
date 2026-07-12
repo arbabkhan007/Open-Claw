@@ -698,11 +698,14 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("recomputes next due from current time after slow runOnce to prevent cadence decay (#104951)", async () => {
+  it("recomputes next due from current time after slow runOnce that crosses phase boundary (#104951)", async () => {
     useFakeHeartbeatTime();
 
-    const intervalMs = 30 * 60_000;
-    const slowRunDurationMs = 20_000; // runOnce takes 20 seconds of wall-clock time
+    const intervalMs = 5 * 60_000; // 5 minutes
+    // runOnce takes 6 minutes — crosses the next 5-minute phase boundary.
+    // With the stale-now bug, computeNextHeartbeatPhaseDueMs uses the pre-run
+    // timestamp, producing a nextDueMs already in the past → delay = 0 → immediate re-arm.
+    const slowRunDurationMs = 6 * 60_000;
     let callCount = 0;
 
     const runSpy = vi.fn().mockImplementation(async () => {
@@ -712,7 +715,11 @@ describe("startHeartbeatRunner", () => {
       return { status: "ran", durationMs: slowRunDurationMs };
     });
 
-    const runner = startDefaultRunner(runSpy);
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "5m" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
     const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
 
     // First heartbeat fires at the scheduled slot
@@ -720,12 +727,12 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     // Advance by a small amount (< interval) — should NOT trigger a second run.
-    // If the stale-now bug were present, advanceAgentSchedule would compute a
-    // nextDueMs that's already in the past, causing immediate re-arm (0 ms timer).
+    // Without the fix, the stale `now` produces a past nextDueMs → 0ms timer → immediate re-arm.
+    // With the fix (fresh Date.now()), next due is correctly in the future.
     await vi.advanceTimersByTimeAsync(5_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Advance to the next full interval — now it should fire again
+    // Advance to the next full interval from current wall-clock — now it should fire again
     await vi.advanceTimersByTimeAsync(intervalMs);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
