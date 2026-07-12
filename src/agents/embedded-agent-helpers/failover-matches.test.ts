@@ -212,14 +212,19 @@ describe("generic assistant error text classification (#93931)", () => {
   });
 });
 
-describe("HTTP 429 overload wording (#98101)", () => {
-  it("keeps Z.AI code 1305 in rate-limit backoff while preserving overload copy", () => {
+describe("z.ai code 1305 — overload vs content rejection (#98101, #103529)", () => {
+  it("keeps Z.AI code 1305 in rate-limit backoff but surfaces more specific message", () => {
     const message =
       "429 status code (exceeded limit)\n" +
       '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
     expect(classifyFailoverReason(message)).toBe("rate_limit");
     expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("rate_limit");
-    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
+    // The message should now hint at possible content rejection (#103529)
+    // while still preserving the "overloaded" diagnosis for the user.
+    const result = formatRateLimitOrOverloadedErrorCopy(message);
+    expect(result).toContain("1305");
+    expect(result).toContain("content restriction");
+    expect(result).not.toBe(
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
@@ -231,4 +236,17 @@ describe("HTTP 429 overload wording (#98101)", () => {
       ),
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
+});
+
+it("matches canonical z.ai payload with quoted code value (#103529)", () => {
+  // The real z.ai Coding Plan response has the code as a quoted string
+  // nested inside {"error":{...}} (#103529).
+  const canonMessage =
+    '{"error":{"code":"1305","message":"The service may be temporarily overloaded, please try again later."}}';
+  const result = formatRateLimitOrOverloadedErrorCopy(canonMessage);
+  expect(result).toContain("1305");
+  expect(result).toContain("content restriction");
+  expect(result).not.toBe(
+    "The AI service is temporarily overloaded. Please try again in a moment.",
+  );
 });

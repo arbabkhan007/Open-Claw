@@ -72,6 +72,16 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+// Z.ai Coding Plan returns 429 with code 1305 for overload and possible
+// content-based rejection (#103529). The classifyFailoverReason hook in the
+const ZAI_CODE_1305_RE = /"code"\s*:\s*"?1305"?\b/;
+// The classifyFailoverReason hook in the z.ai plugin ensures code 1305 is
+// classified as "overloaded" before reaching the generic formatter; the
+// regex here provides context-specific copy when only the response body is
+// available. See extensions/zai/index.ts.
+// z.ai plugin ensures this is classified as "overloaded" before reaching
+// the generic formatter; the regex provides context-specific copy
+// when only the response body is available. See extensions/zai/index.ts.
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -126,7 +136,10 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
-export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+export function formatRateLimitOrOverloadedErrorCopy(
+  raw: string,
+  provider?: string,
+): string | undefined {
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
@@ -136,6 +149,15 @@ export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | unde
     if (providerMessage) {
       return providerMessage;
     }
+  }
+  // Z.ai code 1305 surfaces as "overloaded" but can be a content-based rejection or overload
+  // when the system prompt contains the OpenClaw signature line (#103529).
+  // Only surface the z.ai 1305 diagnostic when the provider is known to be
+  // z.ai (or unknown — the classifyFailoverReason hook is NOT used for this
+  // PR, so code 1305 remains classified as rate_limit for model-scoped
+  // cooldown). Call sites that track provider identity should pass it in.
+  if (ZAI_CODE_1305_RE.test(raw) && (!provider || provider === "zai")) {
+    return "⚠️ Provider returned code 1305. This can be a transient overload or a provider-side content restriction — try again later or with a different model.";
   }
   // Retry classification still owns 429 backoff; user copy can preserve the provider's
   // overload wording when there is no more actionable retry/reset detail.
