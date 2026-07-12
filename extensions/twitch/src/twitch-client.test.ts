@@ -31,6 +31,7 @@ const messageHandlers: Array<(channel: string, user: string, message: string, ms
 const authSuccessHandlers: Array<() => void> = [];
 const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
 const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
+const connectHandlers: Array<() => void> = [];
 
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: any) => {
@@ -49,6 +50,10 @@ const mockOnDisconnect = vi.fn((handler: (manual: boolean, reason?: Error) => vo
   disconnectHandlers.push(handler);
   return { unbind: mockUnbind };
 });
+const mockOnConnect = vi.fn((handler: () => void) => {
+  connectHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
 
 const mockAddUserForToken = vi.fn().mockResolvedValue("123456");
 const mockOnRefresh = vi.fn();
@@ -60,6 +65,7 @@ vi.mock("@twurple/chat", () => ({
     onAuthenticationSuccess = mockOnAuthenticationSuccess;
     onAuthenticationFailure = mockOnAuthenticationFailure;
     onDisconnect = mockOnDisconnect;
+    onConnect = mockOnConnect;
     connect = mockConnect;
     join = mockJoin;
     say = mockSay;
@@ -133,6 +139,7 @@ describe("TwitchClientManager", () => {
     authSuccessHandlers.length = 0;
     authFailureHandlers.length = 0;
     disconnectHandlers.length = 0;
+    connectHandlers.length = 0;
 
     // Re-set up the default token mock implementation after clearing
     resolveTwitchTokenMock.mockReturnValue({
@@ -195,8 +202,10 @@ describe("TwitchClientManager", () => {
       await Promise.resolve();
 
       expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(authSuccessHandlers).toHaveLength(1);
-      authSuccessHandlers[0]?.();
+      // setupClientHandlers registers the persistent readiness listener first,
+      // then connectClient adds the connect-phase resolver last.
+      expect(authSuccessHandlers).toHaveLength(2);
+      authSuccessHandlers.at(-1)?.();
 
       const [client1, client2] = await Promise.all([first, second]);
       expect(client1).toBe(client2);
@@ -207,7 +216,7 @@ describe("TwitchClientManager", () => {
 
       const connection = manager.getClient(testAccount);
       await Promise.resolve();
-      authFailureHandlers[0]?.("bad token", 1);
+      authFailureHandlers.at(-1)?.("bad token", 1);
 
       let settled = false;
       void connection.then(
@@ -224,11 +233,13 @@ describe("TwitchClientManager", () => {
         "Twitch authentication failed for testbot; waiting for retry, disconnect, or timeout: bad token",
       );
 
-      disconnectHandlers[0]?.(false, new Error("disconnected"));
+      // The connect-phase listener is registered last (setupClientHandlers adds
+      // the persistent liveness listener first), so target the most recent one.
+      disconnectHandlers.at(-1)?.(false, new Error("disconnected"));
       await Promise.resolve();
       expect(settled).toBe(false);
 
-      authSuccessHandlers[0]?.();
+      authSuccessHandlers.at(-1)?.();
       await expect(connection).resolves.toBeTruthy();
     });
 
@@ -237,8 +248,9 @@ describe("TwitchClientManager", () => {
 
       const connection = manager.getClient(testAccount);
       await Promise.resolve();
-      authFailureHandlers[0]?.("bad token", 1);
-      disconnectHandlers[0]?.(true);
+      authFailureHandlers.at(-1)?.("bad token", 1);
+      // Connect-phase listener is the last registered (see note above).
+      disconnectHandlers.at(-1)?.(true);
 
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
     });
@@ -250,7 +262,7 @@ describe("TwitchClientManager", () => {
       await Promise.resolve();
 
       await manager.disconnectAll();
-      authSuccessHandlers[0]?.();
+      authSuccessHandlers.at(-1)?.();
 
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
       expect(mockQuit).toHaveBeenCalledTimes(2);
@@ -493,7 +505,7 @@ describe("TwitchClientManager", () => {
 
       const key = manager.getAccountKey(testAccount);
       expect((manager as any).messageHandlers.has(key)).toBe(false);
-      authSuccessHandlers[0]?.();
+      authSuccessHandlers.at(-1)?.();
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
 
       messageHandlers[0]?.("#testchannel", "testuser", "stale", {
@@ -803,6 +815,59 @@ describe("TwitchClientManager", () => {
       // Note: The implementation doesn't handle concurrent getClient calls,
       // so multiple connections may be created. This is expected behavior.
       expect(mockConnect).toHaveBeenCalled();
+    });
+  });
+
+  describe("onConnectionChange (transport liveness)", () => {
+    it("notifies connected:false on a post-handshake disconnect", async () => {
+      await manager.getClient(testAccount);
+      const statuses: Array<{ connected: boolean; reason?: string }> = [];
+      manager.onConnectionChange(testAccount, (status) => statuses.push(status));
+
+      // Readiness, not raw transport: the persistent listener drives
+      // connected:true from auth success (survives the connect handshake), so a
+      // later ChatClient disconnect still fires.
+      for (const handler of authSuccessHandlers) {
+        handler();
+      }
+      expect(statuses.at(-1)).toEqual({ connected: true });
+
+      for (const handler of disconnectHandlers) {
+        handler(false, new Error("connection reset"));
+      }
+      expect(statuses.at(-1)?.connected).toBe(false);
+      expect(statuses.at(-1)?.reason).toContain("connection reset");
+    });
+
+    it("does not report healthy on raw transport connect before auth", async () => {
+      await manager.getClient(testAccount);
+      const statuses: Array<{ connected: boolean; reason?: string }> = [];
+      manager.onConnectionChange(testAccount, (status) => statuses.push(status));
+
+      // Twurple fires onConnect on socket open before authentication. Liveness
+      // must not wire onConnect, or a reconnect whose auth later fails would
+      // latch connected:true (false healthy). Prove no onConnect listener owns
+      // the connection status, then that a failed reconnect auth surfaces error.
+      expect(connectHandlers).toHaveLength(0);
+      for (const handler of authFailureHandlers) {
+        handler("Login authentication failed", 1);
+      }
+      expect(statuses.at(-1)).toEqual({
+        connected: false,
+        reason: "Login authentication failed",
+      });
+    });
+
+    it("stops notifying once the registration is removed", async () => {
+      await manager.getClient(testAccount);
+      const statuses: Array<{ connected: boolean }> = [];
+      const unregister = manager.onConnectionChange(testAccount, (status) => statuses.push(status));
+
+      unregister();
+      for (const handler of disconnectHandlers) {
+        handler(false, new Error("ignored"));
+      }
+      expect(statuses).toHaveLength(0);
     });
   });
 });
