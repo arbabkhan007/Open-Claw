@@ -84,4 +84,6 @@ export interface ReadToolDetails {
 export interface WriteToolInput {
   path: string;
   content: string;
+  /** Append at EOF when supported; avoids read-modify-write lost updates but is not transactional. */
+  append?: boolean;
 }

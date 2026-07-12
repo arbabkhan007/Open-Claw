@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWriteTool, createWriteToolDefinition, type WriteOperations } from "./write.js";
 
 describe("write tool", () => {
   let tmpDir = "";
@@ -23,10 +23,14 @@ describe("write tool", () => {
     return path.join(tmpDir, name);
   }
 
-  function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
+  function createRecoverableOperations(
+    writeFile: WriteOperations["writeFile"],
+    appendFile?: WriteOperations["appendFile"],
+  ): WriteOperations {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
+      appendFile,
       readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async (absolutePath) => {
         try {
@@ -155,5 +159,284 @@ describe("write tool", () => {
       text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to different.txt`,
     });
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
+  });
+
+  it("appends to an existing file and reports byte length", async () => {
+    const filePath = await createTempPath("append.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf8");
+    const tool = createWriteTool(tmpDir);
+    const content = "beta 😀\n";
+
+    const result = await tool.execute(
+      "call-append",
+      { path: filePath, content, append: true },
+      undefined,
+    );
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${Buffer.byteLength(content, "utf8")} bytes to ${filePath}`,
+    });
+    expect(
+      (tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters
+        .properties,
+    ).toHaveProperty("append");
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(`alpha\n${content}`);
+  });
+
+  it("skips overwrite precheck operations before invoking the append backend", async () => {
+    const filePath = await createTempPath("append-no-precheck.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const statFile = vi.fn(async () => ({ type: "file" as const, size: 5, mtimeMs: 1 }));
+    const readFile = vi.fn(async () => await new Promise<Buffer>(() => {}));
+    const appendFile = vi.fn(async (absolutePath: string, content: string) => {
+      await fs.appendFile(absolutePath, content, "utf8");
+    });
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: async () => {},
+        appendFile,
+        readFile,
+        statFile,
+      },
+    });
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("append blocked in overwrite precheck")), 500);
+    });
+
+    try {
+      await Promise.race([
+        tool.execute("call-append-no-precheck", {
+          path: filePath,
+          content: "next\n",
+          append: true,
+        }),
+        timeout,
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+
+    expect(statFile).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(appendFile).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\nnext\n");
+  });
+
+  it("creates a missing file when append is true", async () => {
+    const filePath = await createTempPath("nested/new.txt");
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute(
+      "call-append-create",
+      { path: filePath, content: "first\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("first\n");
+  });
+
+  it("preserves intentional duplicate appends instead of using overwrite no-op detection", async () => {
+    const filePath = await createTempPath("duplicate.txt");
+    await fs.writeFile(filePath, "same\n", "utf8");
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute(
+      "call-append-duplicate",
+      { path: filePath, content: "same\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("same\nsame\n");
+  });
+
+  it("rejects append before side effects when an injected backend has no append operation", async () => {
+    const filePath = await createTempPath("unsupported/append.txt");
+    let mkdirCalled = false;
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: async () => {
+          mkdirCalled = true;
+        },
+        writeFile: async () => {},
+      },
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-unsupported",
+        { path: filePath, content: "extra\n", append: true },
+        undefined,
+      ),
+    ).rejects.toThrow("Append mode is not supported");
+    expect(mkdirCalled).toBe(false);
+    expect(
+      (tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters
+        .properties,
+    ).not.toHaveProperty("append");
+  });
+
+  it("rejects malformed append values", async () => {
+    const definition = createWriteToolDefinition(tmpDir);
+
+    await expect(
+      definition.execute(
+        "call-append-invalid",
+        { path: "bad.txt", content: "x", append: "true" } as never,
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow("Invalid append parameter");
+  });
+
+  it("reports success when cancellation arrives after the backend acknowledges append", async () => {
+    const filePath = await createTempPath("append-abort.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf8");
+          controller.abort();
+        },
+      ),
+    });
+
+    const result = await tool.execute(
+      "call-append-abort",
+      { path: filePath, content: "more\n", append: true },
+      controller.signal,
+    );
+
+    const firstContent = result.content[0];
+    expect(firstContent?.type).toBe("text");
+    expect(firstContent?.type === "text" ? firstContent.text : "").toContain(
+      "Successfully appended",
+    );
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\nmore\n");
+  });
+
+  it("does not infer append success when the backend mutates but does not acknowledge", async () => {
+    const filePath = await createTempPath("append-abort-unacknowledged.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf8");
+          controller.abort();
+          throw new Error("Operation aborted");
+        },
+      ),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-abort-unacknowledged",
+        { path: filePath, content: "more\n", append: true },
+        controller.signal,
+      ),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\nmore\n");
+  });
+
+  it("reports an uncertain append when cancellation lands before persistence", async () => {
+    const filePath = await createTempPath("append-abort-before.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async () => {
+          controller.abort();
+          throw new Error("Operation aborted");
+        },
+      ),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-abort-before",
+        { path: filePath, content: "more\n", append: true },
+        controller.signal,
+      ),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\n");
+  });
+
+  it("keeps cancellation before the append backend starts as a definite abort", async () => {
+    const filePath = await createTempPath("append-abort-prestart.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const controller = new AbortController();
+    controller.abort();
+    const appendFile = vi.fn(async () => {});
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}, appendFile),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-abort-prestart",
+        { path: filePath, content: "more\n", append: true },
+        controller.signal,
+      ),
+    ).rejects.toThrow(/^Operation aborted$/);
+    expect(appendFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\n");
+  });
+
+  it("reports a partial ENOSPC append as uncertain", async () => {
+    const filePath = await createTempPath("append-enospc.txt");
+    await fs.writeFile(filePath, "seed\n", "utf8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath) => {
+          await fs.appendFile(absolutePath, "par", "utf8");
+          const error = new Error("no space left on device") as NodeJS.ErrnoException;
+          error.code = "ENOSPC";
+          throw error;
+        },
+      ),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-enospc",
+        { path: filePath, content: "partial\n", append: true },
+        undefined,
+      ),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("seed\npar");
+  });
+
+  it("does not infer timeout recovery from content identical to the existing tail", async () => {
+    const filePath = await createTempPath("append-timeout-duplicate.txt");
+    await fs.writeFile(filePath, "same\n", "utf8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        async () => {},
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf8");
+          throw new Error("remote append timed out");
+        },
+      ),
+    });
+
+    await expect(
+      tool.execute(
+        "call-append-timeout",
+        { path: filePath, content: "same\n", append: true },
+        undefined,
+      ),
+    ).rejects.toThrow(/Append outcome is uncertain; do not retry automatically/);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("same\nsame\n");
   });
 });

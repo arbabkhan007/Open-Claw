@@ -1,7 +1,7 @@
 /**
  * Pinned Python mutation helper for sandbox filesystem writes.
  *
- * Performs symlink-resistant create/replace/delete operations inside a previously validated sandbox boundary.
+ * Performs symlink-resistant create/replace/append/delete operations inside a previously validated sandbox boundary.
  */
 import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
 import type {
@@ -40,6 +40,12 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "WRITE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL",
   "if hasattr(os, 'O_NOFOLLOW'):",
   "    WRITE_FLAGS |= os.O_NOFOLLOW",
+  "",
+  "APPEND_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_APPEND",
+  "if hasattr(os, 'O_NOFOLLOW'):",
+  "    APPEND_FLAGS |= os.O_NOFOLLOW",
+  "if hasattr(os, 'O_NONBLOCK'):",
+  "    APPEND_FLAGS |= os.O_NONBLOCK",
   "",
   "def split_relative(path_value):",
   "    segments = []",
@@ -103,6 +109,27 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        return stat.S_IMODE(target_stat.st_mode)",
   "    return None",
   "",
+  "def write_all(fd, data):",
+  "    remaining = memoryview(data)",
+  "    while remaining:",
+  "        try:",
+  "            written = os.write(fd, remaining)",
+  "        except InterruptedError:",
+  "            continue",
+  "        if written <= 0:",
+  "            raise OSError(errno.EIO, 'short write made no progress')",
+  "        remaining = remaining[written:]",
+  "",
+  "def validate_append_target(parent_fd, basename):",
+  "    try:",
+  "        target_stat = os.lstat(basename, dir_fd=parent_fd)",
+  "    except FileNotFoundError:",
+  "        return",
+  "    if not stat.S_ISREG(target_stat.st_mode):",
+  "        raise OSError(errno.EPERM, 'only regular files are allowed', basename)",
+  "    if target_stat.st_nlink > 1:",
+  "        raise OSError(errno.EPERM, 'hardlinked file is not allowed', basename)",
+  "",
   "def write_atomic(parent_fd, basename, stdin_buffer):",
   "    target_mode = existing_regular_file_mode(parent_fd, basename)",
   "    temp_fd = None",
@@ -133,6 +160,22 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "                os.unlink(temp_name, dir_fd=parent_fd)",
   "            except FileNotFoundError:",
   "                pass",
+  "",
+  "def append_file(parent_fd, basename, stdin_buffer):",
+  "    validate_append_target(parent_fd, basename)",
+  "    file_fd = os.open(basename, APPEND_FLAGS, 0o600, dir_fd=parent_fd)",
+  "    try:",
+  "        file_stat = os.fstat(file_fd)",
+  "        if not stat.S_ISREG(file_stat.st_mode):",
+  "            raise OSError(errno.EPERM, 'only regular files are allowed', basename)",
+  "        if file_stat.st_nlink > 1:",
+  "            raise OSError(errno.EPERM, 'hardlinked file is not allowed', basename)",
+  "        payload = stdin_buffer.read()",
+  "        write_all(file_fd, payload)",
+  "        os.fsync(file_fd)",
+  "    finally:",
+  "        os.close(file_fd)",
+  "    os.fsync(parent_fd)",
   "",
   "def read_file(parent_fd, basename):",
   "    file_fd = os.open(basename, READ_FLAGS, dir_fd=parent_fd)",
@@ -350,6 +393,16 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
   "        os.close(root_fd)",
+  "elif operation == 'append':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    parent_fd = None",
+  "    try:",
+  "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
+  "        append_file(parent_fd, sys.argv[4], sys.stdin.buffer)",
+  "    finally:",
+  "        if parent_fd is not None:",
+  "            os.close(parent_fd)",
+  "        os.close(root_fd)",
   "elif operation == 'read':",
   "    root_fd = open_dir(sys.argv[2])",
   "    parent_fd = None",
@@ -450,6 +503,23 @@ export function buildPinnedWritePlan(params: {
     checks: [params.check],
     args: [
       "write",
+      params.pinned.mountRootPath,
+      params.pinned.relativeParentPath,
+      params.pinned.basename,
+      params.mkdir ? "1" : "0",
+    ],
+  });
+}
+
+export function buildPinnedAppendPlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxEntry;
+  mkdir: boolean;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: [
+      "append",
       params.pinned.mountRootPath,
       params.pinned.relativeParentPath,
       params.pinned.basename,
