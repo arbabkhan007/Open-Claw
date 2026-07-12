@@ -706,10 +706,7 @@ describe("startHeartbeatRunner", () => {
     // With the stale-now bug, computeNextHeartbeatPhaseDueMs uses the pre-run
     // timestamp, producing a nextDueMs already in the past → delay = 0 → immediate re-arm.
     const slowRunDurationMs = 6 * 60_000;
-    let callCount = 0;
-
     const runSpy = vi.fn().mockImplementation(async () => {
-      callCount++;
       // Simulate wall-clock time passing during runOnce execution
       vi.setSystemTime(Date.now() + slowRunDurationMs);
       return { status: "ran", durationMs: slowRunDurationMs };
