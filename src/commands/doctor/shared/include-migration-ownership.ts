@@ -31,10 +31,11 @@ export function isSingleTopLevelIncludeMigration(params: {
   const changed = [...changedKeys].filter(
     (key) => !isDeepStrictEqual(sourceConfig[key], candidate[key]),
   );
-  if (changed.length !== 1) {
+  const changedKey = changed.length === 1 ? changed[0] : undefined;
+  if (changedKey === undefined) {
     return false;
   }
-  const authoredSection = params.parsed[changed[0]];
+  const authoredSection = params.parsed[changedKey];
   return (
     isRecord(authoredSection) &&
     Object.keys(authoredSection).length === 1 &&
