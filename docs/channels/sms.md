@@ -349,7 +349,7 @@ The webhook route also enforces, independent of signature validation:
 
 - `POST` only.
 - Failed-request budget of 300 requests per minute per SMS account, webhook route, and resolved client address. All requests count toward this budget, but HTTP 429 is applied only after a request fails body parsing, Twilio validation, or AccountSid matching.
-- Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and resolved client address after those checks pass (HTTP 429 above that). If signature validation is disabled, this 30/min limit is the unauthenticated dispatch cap.
+- Dispatchable callback rate limit of 30 accepted callbacks per minute per SMS account, webhook route, and resolved client address after those checks pass. Signature-validated callbacks over this limit are acknowledged with HTTP 200 and empty TwiML but not dispatched, because Twilio treats non-2xx webhook responses as delivery failures and does not retry them. If signature validation is disabled, this 30/min limit is the unauthenticated dispatch cap and over-limit requests keep HTTP 429.
 - Client addresses are resolved through the shared Gateway trusted-proxy rules. If `gateway.trustedProxies` contains the reverse proxy that forwards Twilio callbacks, OpenClaw keys these limits from the forwarded client address; otherwise it falls back to the direct socket address.
 - The payload `AccountSid` must match the configured `accountSid` (HTTP 403 otherwise).
 - Replayed `MessageSid` values are deduplicated for 10 minutes.

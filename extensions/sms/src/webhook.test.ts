@@ -5,7 +5,9 @@ import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import { createSmsWebhookHandler } from "./webhook.js";
+import { createSmsWebhookHandler, testing } from "./webhook.js";
+
+const { resetSmsWebhookRateLimitersForTest } = testing;
 
 const dispatchSmsInboundEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -197,6 +199,134 @@ describe("createSmsWebhookHandler", () => {
     );
   });
 
+  it("acks validated callbacks over the rate limit with empty TwiML instead of 429", async () => {
+    const log = { warn: vi.fn() };
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+      log,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const { body, signature } = createSignedSmsPayload(createMessageSid(100 + i));
+      const res = createResponse();
+      await handler(createRequest(body, signature, { remoteAddress: "203.0.113.10" }), res);
+      expect(res.statusCode).toBe(200);
+    }
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
+
+    const dropped = createSignedSmsPayload(createMessageSid(130));
+    const droppedRes = createResponse();
+    await handler(
+      createRequest(dropped.body, dropped.signature, { remoteAddress: "203.0.113.10" }),
+      droppedRes,
+    );
+
+    expect(droppedRes.statusCode).toBe(200);
+    expect(droppedRes.body).toBe("<Response></Response>");
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
+    expect(log.warn).toHaveBeenCalledWith(
+      `SMS webhook rate limit exceeded for ${activeAccountId}:/webhooks/sms:203.0.113.10; acknowledged validated callback ${createMessageSid(130)} without dispatch`,
+    );
+  });
+
+  it("keeps 429 for over-limit traffic that fails validation", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+    const { body } = createSignedSmsPayload(createMessageSid(200));
+
+    for (let i = 0; i < 300; i += 1) {
+      const res = createResponse();
+      await handler(
+        createRequest(body, "invalid-signature", { remoteAddress: "203.0.113.11" }),
+        res,
+      );
+      expect(res.statusCode).toBe(403);
+    }
+
+    const throttledRes = createResponse();
+    await handler(
+      createRequest(body, "invalid-signature", { remoteAddress: "203.0.113.11" }),
+      throttledRes,
+    );
+    expect(throttledRes.statusCode).toBe(429);
+
+    const valid = createSignedSmsPayload(createMessageSid(201));
+    const ackedRes = createResponse();
+    await handler(
+      createRequest(valid.body, valid.signature, { remoteAddress: "203.0.113.11" }),
+      ackedRes,
+    );
+
+    expect(ackedRes.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay-cache callbacks dropped by the rate limit", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const { body, signature } = createSignedSmsPayload(createMessageSid(300 + i));
+      await handler(
+        createRequest(body, signature, { remoteAddress: "203.0.113.12" }),
+        createResponse(),
+      );
+    }
+    const dropped = createSignedSmsPayload(createMessageSid(330));
+    await handler(
+      createRequest(dropped.body, dropped.signature, { remoteAddress: "203.0.113.12" }),
+      createResponse(),
+    );
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
+
+    // Reset stands in for the fixed window expiring before Twilio redelivers the SID.
+    resetSmsWebhookRateLimitersForTest();
+    const redeliveredRes = createResponse();
+    await handler(
+      createRequest(dropped.body, dropped.signature, { remoteAddress: "203.0.113.12" }),
+      redeliveredRes,
+    );
+
+    expect(redeliveredRes.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(31);
+  });
+
+  it("keeps 429 for over-limit traffic when signature validation is disabled", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount({ dangerouslyDisableSignatureValidation: true }),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const { body } = createSignedSmsPayload(createMessageSid(400 + i));
+      const res = createResponse();
+      await handler(
+        createRequest(body, "unused-signature", { remoteAddress: "203.0.113.13" }),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+    }
+
+    const { body } = createSignedSmsPayload(createMessageSid(430));
+    const throttledRes = createResponse();
+    await handler(
+      createRequest(body, "unused-signature", { remoteAddress: "203.0.113.13" }),
+      throttledRes,
+    );
+
+    expect(throttledRes.statusCode).toBe(429);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
+  });
+
   it("rejects signed webhooks for a different Twilio account", async () => {
     const body = `AccountSid=AC-other&From=%2B15551234567&To=%2B15557654321&Body=hello&SmsMessageSid=${createMessageSid(8)}`;
     const signature = computeTestTwilioSignature({
@@ -292,7 +422,8 @@ describe("createSmsWebhookHandler", () => {
     });
     const rateLimitedRes = createResponse();
     await supportHandler(createRequest(rateLimited.body, rateLimited.signature), rateLimitedRes);
-    expect(rateLimitedRes.statusCode).toBe(429);
+    expect(rateLimitedRes.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(30);
 
     const defaultValid = createSignedBody({
       account: defaultAccount,
@@ -302,6 +433,7 @@ describe("createSmsWebhookHandler", () => {
     await defaultHandler(createRequest(defaultValid.body, defaultValid.signature), defaultRes);
 
     expect(defaultRes.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(31);
   });
 
   it("keeps validation-disabled webhook dispatches on the stricter callback budget", async () => {

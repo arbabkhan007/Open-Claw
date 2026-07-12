@@ -93,6 +93,25 @@ function rejectInvalidRequestRateLimit(params: {
   return true;
 }
 
+function rejectCallbackDispatchRateLimit(params: {
+  key: string;
+  log?: SmsWebhookLog;
+  res: ServerResponse;
+}): true {
+  params.log?.warn?.(`SMS webhook rate limit exceeded for ${params.key}`);
+  respondTwiml(params.res, 429, "Rate limit exceeded");
+  return true;
+}
+
+function resetSmsWebhookRateLimitersForTest(): void {
+  invalidRequestRateLimiter.clear();
+  callbackDispatchRateLimiter.clear();
+}
+
+/** Test-only hooks for webhook state that is otherwise private. */
+export const testing = {
+  resetSmsWebhookRateLimitersForTest,
+};
 // Each account route owns its guard so one saturated account cannot block sibling accounts.
 export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
   const webhookReplayGuard = resolveSmsWebhookReplayGuard(params.account);
@@ -157,8 +176,17 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       return rejectInvalidRequestRateLimit({ key, log: params.log, res });
     }
     if (callbackDispatchRateLimiter.isRateLimited(key)) {
-      params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
-      respondTwiml(res, 429, "Rate limit exceeded");
+      if (params.account.dangerouslyDisableSignatureValidation) {
+        // Without signature validation nothing distinguishes Twilio from an attacker,
+        // so unauthenticated over-limit traffic keeps the fail-closed 429.
+        return rejectCallbackDispatchRateLimit({ key, log: params.log, res });
+      }
+      // Ack before the replay guard remembers the SID so a Twilio redelivery of this
+      // dropped message can still dispatch once the window clears.
+      params.log?.warn?.(
+        `SMS webhook rate limit exceeded for ${key}; acknowledged validated callback ${msg.messageSid} without dispatch`,
+      );
+      respondTwiml(res, 200);
       return true;
     }
     const replayDecision = webhookReplayGuard.remember(msg.messageSid);
