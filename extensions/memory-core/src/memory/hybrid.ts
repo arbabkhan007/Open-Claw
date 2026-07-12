@@ -166,23 +166,24 @@ export async function mergeHybridResults(params: {
           : entry.pathScore;
     // Make fusion modality-aware: non-text media (image/audio) only carries a
     // synthetic label as text, so its keyword signal is structurally near zero.
-    // Drop the text weight for such candidates and renormalize the remaining
-    // weights so the score collapses to the vector signal on the same [0,1]
-    // scale as text candidates. Only drop the signal when the candidate also has
-    // a vector signal, so a keyword-only media hit keeps its text-weighted score.
-    // Text candidates are unchanged: their weights already sum to 1, so dividing
-    // by weightSum is a no-op. Gate the drop on a positive configured vector
-    // weight so a valid keyword match is never removed when vectorWeight is 0.
+    // For such candidates drop the text weight and renormalize by the remaining
+    // vector weight so the score collapses to the vector signal on the same
+    // [0,1] scale as text candidates. Only drop the signal when the candidate
+    // has a vector signal but no keyword signal, so a keyword-only or both-signal
+    // media hit keeps its text-weighted score. Gate the drop on a positive
+    // configured vector weight so a valid keyword match is never removed when
+    // vectorWeight is 0.
     const dropMediaTextSignal =
       entry.hasVector &&
       !entry.hasKeyword &&
       params.vectorWeight > 0 &&
       params.isNonTextMediaPath?.(entry.path) === true;
-    const effectiveTextWeight = dropMediaTextSignal ? 0 : params.textWeight;
-    const weightSum = params.vectorWeight + effectiveTextWeight;
-    const weightedContent =
-      params.vectorWeight * entry.vectorScore + effectiveTextWeight * keywordScore;
-    const contentScore = weightSum > 0 ? weightedContent / weightSum : 0;
+    // Renormalize only for the vector-only media case. Every other candidate
+    // keeps the established unnormalized weighted formula, so custom weights
+    // that do not sum to one preserve their score scale and result ordering.
+    const contentScore = dropMediaTextSignal
+      ? entry.vectorScore
+      : params.vectorWeight * entry.vectorScore + params.textWeight * keywordScore;
     const hasWeightedContentRelevance = contentScore > 0;
     // With decay enabled, reserve the lower half of an exact tier for path
     // identity and the upper half for content relevance. This lets recency beat

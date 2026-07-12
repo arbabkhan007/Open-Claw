@@ -739,4 +739,62 @@ describe("memory hybrid helpers", () => {
     expect(image?.textScore).toBeCloseTo(0.8);
     expect(image?.score ?? 0).toBeGreaterThan(0.7 * 0.95);
   });
+
+  it("keeps the established weighted score for vector-only non-media candidates when weights do not sum to one", async () => {
+    const notePath = "memory/notes.md";
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 1,
+      isNonTextMediaPath: (path) => path.endsWith(".png"),
+      vector: [
+        {
+          id: "note",
+          path: notePath,
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "vec-note",
+          vectorScore: 0.6,
+        },
+      ],
+      keyword: [],
+    });
+
+    const note = merged.find((r) => r.path === notePath);
+    expect(note?.score).toBeCloseTo(1 * 0.6);
+  });
+
+  it("keeps the established weighted score for both-signal non-media candidates when weights do not sum to one", async () => {
+    const notePath = "memory/notes.md";
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 1,
+      isNonTextMediaPath: (path) => path.endsWith(".png"),
+      vector: [
+        {
+          id: "note",
+          path: notePath,
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "vec-note",
+          vectorScore: 0.6,
+        },
+      ],
+      keyword: [
+        {
+          id: "note",
+          path: notePath,
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "kw-note",
+          textScore: 0.9,
+        },
+      ],
+    });
+
+    const note = merged.find((r) => r.path === notePath);
+    expect(note?.score).toBeCloseTo(1 * 0.6 + 1 * 0.9);
+  });
 });
