@@ -35,6 +35,7 @@ import {
   appendSqliteTranscriptMessage,
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
+  applySqliteSessionStoreProjection,
   appendSqliteExpectedSessionTranscriptTurn,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
@@ -47,8 +48,6 @@ import {
   updateSqliteSessionLastRoute,
   loadExactSqliteSessionEntry,
   loadLatestSqliteAssistantText,
-  loadLatestSqliteAssistantMessage,
-  loadLatestSqliteMessage,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
@@ -94,11 +93,6 @@ import {
   type SessionEntryLifecycleMutationResult,
   type SessionEntryLifecycleRemoval,
   type SessionEntryLifecycleUpsert,
-  type SessionEntryPatchProjectionContext,
-  type SessionEntryPatchProjectionFailure,
-  type SessionEntryPatchProjectionResult,
-  type SessionEntryPatchProjectionSnapshot,
-  type SessionEntryPatchProjectionTarget,
   type SessionLifecycleArchivedTranscript,
   type SessionLifecycleArtifactCleanupParams,
   type SessionLifecycleArtifactCleanupResult,
@@ -117,6 +111,13 @@ import {
 } from "./transcript-tree.js";
 import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+
+export { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionIdentityMutation,
+  SessionIdentityMutationListener,
+  SessionIdentityMutationTarget,
+} from "../../sessions/session-lifecycle-events.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -332,16 +333,6 @@ export type LatestTranscriptAssistantText = {
   id?: string;
   text: string;
   timestamp?: number;
-};
-
-export type LatestTranscriptAssistantMessage = {
-  id?: string;
-  message: unknown;
-};
-
-export type LatestTranscriptMessage = {
-  id?: string;
-  message: unknown;
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
@@ -786,12 +777,25 @@ export type SessionEntryCreateWithTranscriptOptions = {
   requireWriteSuccess?: boolean;
 };
 
-export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
-export type SessionPatchProjectionFailure = SessionEntryPatchProjectionFailure;
+export type SessionPatchProjectionSnapshot = {
+  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
+};
+
+export type SessionPatchProjectionTarget = {
+  candidateKeys?: readonly string[];
+  primaryKey: string;
+};
+
+export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
+  SessionPatchProjectionTarget & {
+    existingEntry?: SessionEntry;
+  };
+
+export type SessionPatchProjectionFailure = { ok: false };
+
 export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
-  SessionEntryPatchProjectionResult<TFailure>;
-export type SessionPatchProjectionSnapshot = SessionEntryPatchProjectionSnapshot;
-export type SessionPatchProjectionTarget = SessionEntryPatchProjectionTarget;
+  | { ok: true; entry: SessionEntry }
+  | TFailure;
 
 export type {
   DeleteSessionEntryLifecycleResult,
@@ -1852,6 +1856,26 @@ export async function applySessionEntryReplacements<T>(params: {
 }
 
 /**
+ * Applies a detached whole-store projection under the storage writer lane.
+ * Compatibility adapters use this to preserve callback serialization while
+ * steady-state runtime callers stay on row-level accessors.
+ */
+export async function applySessionStoreProjection<T>(params: {
+  activeSessionKey?: string;
+  agentId?: string;
+  skipMaintenance?: boolean;
+  storePath: string;
+  update: (store: Record<string, SessionEntry>) =>
+    | Promise<{ persist: boolean; result: T }>
+    | {
+        persist: boolean;
+        result: T;
+      };
+}): Promise<T> {
+  return await applySqliteSessionStoreProjection(params);
+}
+
+/**
  * Runs an operation while preserving one temporary session mapping.
  * The storage backend snapshots exactly the named key before the operation and
  * restores that entry, or deletes it when it did not previously exist, after
@@ -2360,22 +2384,6 @@ export function readLatestTranscriptAssistantText(
   options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
   return loadLatestSqliteAssistantText(scope, options);
-}
-
-/** Reads the latest assistant message payload without materializing the whole transcript. */
-export function readLatestTranscriptAssistantMessage(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptAssistantMessage | undefined {
-  return loadLatestSqliteAssistantMessage(scope, options);
-}
-
-/** Reads the latest transcript message payload without materializing the whole transcript. */
-export function readLatestTranscriptMessage(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptMessage | undefined {
-  return loadLatestSqliteMessage(scope, options);
 }
 
 /**

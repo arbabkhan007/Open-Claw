@@ -158,7 +158,7 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
   if (!needle) {
     return true;
   }
-  return [connector.id, connector.name, connector.description].some((value) =>
+  return [connector.id, connector.name, t(connector.descriptionKey)].some((value) =>
     value.toLocaleLowerCase().includes(needle),
   );
 }
@@ -422,7 +422,7 @@ function pluginMenuItems(
   rowKey: string,
   options: { details: boolean },
 ): PluginMenuItem[] {
-  const blocked = !props.canMutate || props.busy[rowKey];
+  const blocked = !props.canMutate || (props.busy[rowKey] ?? false);
   const items: PluginMenuItem[] = [];
   if (options.details) {
     items.push({
@@ -620,7 +620,7 @@ function renderInventoryPulse(props: PluginsViewProps) {
 
 function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-row plugins-row--${plugin.state} plugins-row--clickable"
@@ -751,8 +751,10 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       <div class="plugins-row__copy">
         <div class="plugins-row__title">
           <h3>${server.name}</h3>
-          <span class="plugins-badge plugins-badge--mcp">MCP</span>
-          ${server.auth === "oauth" ? html`<span class="plugins-badge">OAuth</span>` : nothing}
+          <span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
+          ${server.auth === "oauth"
+            ? html`<span class="plugins-badge">${t("pluginsPage.oauth")}</span>`
+            : nothing}
         </div>
         <p class="plugins-row__target">${server.target}</p>
         <div class="plugins-row__meta"><span>${server.transport}</span></div>
@@ -855,7 +857,7 @@ function renderInstalled(props: PluginsViewProps) {
 
 function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-card plugins-card--clickable"
@@ -900,7 +902,7 @@ function renderConnectorCard(
   props: PluginsViewProps,
 ): TemplateResult {
   const key = connectorRowKey(connector.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const isMcp = connector.action.kind === "mcp";
   const installed =
     isMcp &&
@@ -921,10 +923,10 @@ function renderConnectorCard(
         <div class="plugins-card__title-row">
           <h3>${connector.name}</h3>
         </div>
-        <p>${connector.description}</p>
+        <p>${t(connector.descriptionKey)}</p>
         <div class="plugins-card__meta">
           ${isMcp
-            ? html`<span class="plugins-badge plugins-badge--mcp">MCP</span>
+            ? html`<span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
                 <span>${t("pluginsPage.connectorMcpNote")}</span>`
             : html`<span>${t("pluginsPage.connectorClawHubNote")}</span>`}
         </div>
@@ -1006,7 +1008,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
   const key = clawHubRowKey(pkg.name);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1192,7 +1194,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
     return nothing;
   }
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <div
       class="plugins-detail-backdrop"

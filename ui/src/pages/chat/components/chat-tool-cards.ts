@@ -256,7 +256,9 @@ export function renderToolPreview(
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
+        <span class="chat-tool-card__preview-label"
+          >${preview.title?.trim() || t("chat.toolCards.canvas")}</span
+        >
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${preview.mcpApp
@@ -264,10 +266,10 @@ export function renderToolPreview(
               .sessionKey=${options?.sessionKey ?? ""}
               .viewId=${preview.mcpApp.viewId}
               .height=${preview.preferredHeight ?? 600}
-              .title=${preview.title?.trim() || "MCP App"}
+              .title=${preview.title?.trim() || t("mcpApp.title")}
             ></mcp-app-view>`
           : renderPreviewFrame({
-              title: preview.title?.trim() || "Canvas",
+              title: preview.title?.trim() || t("chat.toolCards.canvas"),
               src: resolveCanvasIframeUrl(
                 preview.url,
                 options?.canvasPluginSurfaceUrl,
@@ -482,10 +484,10 @@ function tokenizeCommand(command: string): CommandToken[] {
   let index = 0;
   let expectName = true;
   while (index < command.length) {
-    const char = command[index];
+    const char = command.charAt(index);
     if (/\s/.test(char)) {
       let end = index;
-      while (end < command.length && /\s/.test(command[end])) {
+      while (end < command.length && /\s/.test(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "ws" });
@@ -494,8 +496,8 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (char === "'" || char === '"') {
       let end = index + 1;
-      while (end < command.length && command[end] !== char) {
-        end += command[end] === "\\" ? 2 : 1;
+      while (end < command.length && command.charAt(end) !== char) {
+        end += command.charAt(end) === "\\" ? 2 : 1;
       }
       end = Math.min(end + 1, command.length);
       tokens.push({ text: command.slice(index, end), cls: "str" });
@@ -505,7 +507,7 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (COMMAND_OP_CHARS.has(char)) {
       let end = index;
-      while (end < command.length && COMMAND_OP_CHARS.has(command[end])) {
+      while (end < command.length && COMMAND_OP_CHARS.has(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "op" });
@@ -516,10 +518,10 @@ function tokenizeCommand(command: string): CommandToken[] {
     let end = index;
     while (
       end < command.length &&
-      !/\s/.test(command[end]) &&
-      !COMMAND_OP_CHARS.has(command[end]) &&
-      command[end] !== "'" &&
-      command[end] !== '"'
+      !/\s/.test(command.charAt(end)) &&
+      !COMMAND_OP_CHARS.has(command.charAt(end)) &&
+      command.charAt(end) !== "'" &&
+      command.charAt(end) !== '"'
     ) {
       end++;
     }
@@ -643,7 +645,7 @@ function renderToolWorkspaceFilePath(
         <button
           class="chat-tool-card__detail chat-tool-card__detail-link"
           type="button"
-          title="Open file"
+          title=${t("chat.toolCards.openFile")}
           @click=${() => onOpenWorkspaceFile({ path })}
         >
           ${label}
@@ -845,12 +847,12 @@ export function renderExpandedToolCardContent(
   const sidebarAction = canOpenSidebar
     ? html`
         <div class="chat-tool-card__actions">
-          <openclaw-tooltip content="Open in the side panel">
+          <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
             <button
               class="chat-tool-card__action-btn"
               type="button"
               @click=${() => onOpenSidebar?.(sidebarActionContent)}
-              aria-label="Open tool details in side panel"
+              aria-label=${t("chat.toolCards.openDetails")}
             >
               <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
             </button>
