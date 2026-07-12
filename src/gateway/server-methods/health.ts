@@ -2,7 +2,10 @@
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
+import {
+  buildDeliveryQueueHealthSummary,
+  buildRuntimeConfigHealth,
+} from "../../commands/health.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
@@ -90,16 +93,25 @@ function cachedHealthDiffersFromRuntime(
 }
 
 /** Merges cheap live runtime facts into a cached health summary before responding. */
-function mergeCachedHealthRuntimeState(params: {
+async function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
-}): HealthSummary {
+  includeSensitive: boolean;
+}): Promise<HealthSummary> {
   const {
     contextEngines: _cachedContextEngines,
     deliveryQueues: _cachedDeliveryQueues,
+    runtimeConfig: _cachedRuntimeConfig,
     ...cached
   } = params.cached;
+  // Runtime-config drift compares the live gateway config against the disk
+  // file, so a cached "ok" must not mask drift that appeared after the cache
+  // was filled; recompute it on every cache hit like delivery queues.
+  // Fingerprints stay gated to admin-scoped callers.
+  const runtimeConfig = await buildRuntimeConfigHealth({
+    includeFingerprints: params.includeSensitive,
+  });
   // Dead-letter counts are cheap SQLite reads; recompute them like context
   // engines so a delivery that failed after the cache was filled is not hidden
   // for a refresh interval.
@@ -127,6 +139,7 @@ function mergeCachedHealthRuntimeState(params: {
     ...(params.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
       : {}),
+    ...(runtimeConfig ? { runtimeConfig } : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),
@@ -161,10 +174,11 @@ export const healthHandlers: GatewayRequestHandlers = {
     ) {
       respond(
         true,
-        mergeCachedHealthRuntimeState({
+        await mergeCachedHealthRuntimeState({
           cached,
           eventLoop: context.getEventLoopHealth?.(),
           configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
+          includeSensitive,
         }),
         undefined,
         { cached: true },
