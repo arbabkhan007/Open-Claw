@@ -613,6 +613,16 @@ export async function runSessionsCleanup(params: {
         restrictArchivedTranscriptsToStoreDir: true,
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
+      const appliedReport = lifecycleResult.maintenanceReport;
+      const appliedArchiveCleanup =
+        mode === "warn"
+          ? { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT }
+          : (appliedReport?.archiveCleanup ??
+            (await cleanupArchivedTranscriptsForSummary({
+              storePath: target.storePath,
+              maintenance,
+              dryRun: false,
+            })));
       const appliedUnreferencedArtifacts =
         mode === "warn"
           ? null
@@ -647,7 +657,6 @@ export async function runSessionsCleanup(params: {
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
-      const appliedReport = lifecycleResult.maintenanceReport;
       const summary: SessionCleanupSummary =
         appliedReport === null
           ? {
@@ -670,11 +679,11 @@ export async function runSessionsCleanup(params: {
               }),
               dryRun: false,
               unreferencedArtifacts,
-              archiveCleanup: preview?.summary.archiveCleanup ?? {
-                ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
-              },
+              archiveCleanup: appliedArchiveCleanup,
               wouldMutate:
-                (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
+                (preview?.summary.wouldMutate ?? false) ||
+                appliedArchiveCleanup.removedFiles > 0 ||
+                unreferencedArtifacts.removedFiles > 0,
               applied: true,
               appliedCount: lifecycleResult.afterCount,
             }
