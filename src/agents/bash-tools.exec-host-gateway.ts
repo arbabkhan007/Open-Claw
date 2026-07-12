@@ -436,6 +436,7 @@ function buildGatewayExecApprovalDeniedToolResult(params: {
       aggregated: text,
       timedOut: params.deniedReason.includes("timeout"),
       failureKind: "approval-denied",
+      failureReason: params.deniedReason,
       cwd: params.cwd,
     },
   };

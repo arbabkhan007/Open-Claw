@@ -249,6 +249,7 @@ function buildExecForegroundResult(params: {
       exitCode: params.outcome.exitCode ?? null,
       exitSignal: params.outcome.exitSignal,
       failureKind: params.outcome.failureKind,
+      failureReason: params.outcome.failureReason,
       exitReason: params.outcome.exitReason,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
