@@ -23,6 +23,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -966,6 +967,26 @@ describe("openclaw agent database", () => {
     expect(fs.statSync(parentDir).mode & 0o777).toBe(0o755);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "defers nested permission repair until the outer transaction commits",
+    () => {
+      const stateDir = createTempStateDir();
+      const options = {
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      };
+      const database = openOpenClawAgentDatabase(options);
+      fs.chmodSync(database.path, 0o644);
+
+      runOpenClawAgentWriteTransaction(() => {
+        runOpenClawAgentWriteTransaction(() => undefined, options);
+        expect(fs.statSync(database.path).mode & 0o777).toBe(0o644);
+      }, options);
+
+      expect(fs.statSync(database.path).mode & 0o777).toBe(0o600);
+    },
+  );
+
   it("configures durable SQLite connection pragmas", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawAgentDatabase({
@@ -1004,6 +1025,82 @@ describe("openclaw agent database", () => {
       schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       agent_id: "worker-1",
     });
+  });
+
+  it("adds transcript mutation watermarks to v4 session tables", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const currentSchema = fs.readFileSync(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    );
+    const previousSchema = currentSchema.replace(
+      [
+        "  transcript_updated_at INTEGER DEFAULT NULL,\n",
+        "  transcript_observed_at INTEGER DEFAULT NULL,\n",
+      ].join(""),
+      "",
+    );
+    expect(previousSchema).not.toBe(currentSchema);
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(previousSchema);
+    db.exec(`
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', 4, 'worker-1', NULL, 1, 1);
+      INSERT INTO sessions
+        (session_id, session_key, created_at, updated_at)
+      VALUES ('session-1', 'agent:worker-1:main', 10, 20);
+      INSERT INTO sessions
+        (session_id, session_key, created_at, updated_at)
+      VALUES ('session-2', 'agent:worker-1:other', 10, 20);
+      INSERT INTO transcript_events
+        (session_id, seq, event_json, created_at)
+      VALUES ('session-1', 0, '{"type":"custom"}', 1);
+      PRAGMA user_version = 4;
+    `);
+    db.close();
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = database.db.prepare("PRAGMA table_info(sessions)").all() as Array<{
+      name?: unknown;
+    }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["transcript_observed_at", "transcript_updated_at"]),
+    );
+    expect(
+      database.db
+        .prepare(
+          "SELECT transcript_observed_at, transcript_updated_at FROM sessions WHERE session_id = ?",
+        )
+        .get("session-1"),
+    ).toEqual({
+      transcript_observed_at: 20,
+      transcript_updated_at: expect.any(Number),
+    });
+    expect(
+      database.db
+        .prepare(
+          "SELECT transcript_observed_at, transcript_updated_at FROM sessions WHERE session_id = ?",
+        )
+        .get("session-2"),
+    ).toEqual({
+      transcript_observed_at: null,
+      transcript_updated_at: null,
+    });
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
   it("inspects registered database ownership without mutating the database", () => {
@@ -1111,7 +1208,7 @@ describe("openclaw agent database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(4);
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     const session = database.db
       .prepare(
         `

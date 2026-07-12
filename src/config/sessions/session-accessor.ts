@@ -71,6 +71,7 @@ import {
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
   withSqliteTranscriptWriteLock,
+  withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
 import {
   formatSqliteSessionFileMarker,
@@ -288,6 +289,8 @@ export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {
   eventCount: number;
+  lastMutationAtMs?: number;
+  lastObservedMutationAtMs?: number;
   maxSeq: number;
   sizeBytes: number;
 };
@@ -347,6 +350,11 @@ export type SessionTranscriptWriteLockAccessorContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
+};
+
+export type SessionTranscriptWriteTransactionContext = {
+  /** Canonical marker for the same agent database owned by the transaction. */
+  sessionFile: string;
 };
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
@@ -2433,6 +2441,14 @@ export async function withTranscriptWriteLock<T>(
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
   return await withSqliteTranscriptWriteLock(scope, run);
+}
+
+/** Runs a synchronous DAG batch under one transcript writer queue and transaction. */
+export async function withTranscriptWriteTransaction<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteTransactionContext) => T,
+): Promise<T> {
+  return await withSqliteTranscriptWriteTransaction(scope, run);
 }
 
 /**
