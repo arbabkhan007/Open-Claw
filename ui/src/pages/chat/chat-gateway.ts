@@ -24,6 +24,9 @@ import {
 
 export type { ChatEventPayload, ChatState } from "./chat-history.ts";
 
+const CHAT_EVENT_DEDUPE_RUN_LIMIT = 200;
+const acceptedChatEventSeqByRunState = new WeakMap<object, Map<string, Map<string, number>>>();
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -152,10 +155,71 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (!payload) {
+function chatEventDedupeRunKey(payload: ChatEventPayload): string | null {
+  if (typeof payload.runId !== "string" || !payload.runId.trim()) {
     return null;
   }
+  if (typeof payload.seq !== "number" || !Number.isFinite(payload.seq)) {
+    return null;
+  }
+  // Gateway chat frames are ordered per run; use stable frame identity so a
+  // consumed frame stays consumed when the selected surface or active run changes.
+  return [
+    payload.sessionKey,
+    typeof payload.agentId === "string" ? payload.agentId : "",
+    payload.runId,
+  ].join("\0");
+}
+
+function shouldConsumeChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
+  const sessionMatches = chatEventSessionMatches(state, payload);
+  const activeRunMatches =
+    state.chatRunId !== null &&
+    typeof payload.runId === "string" &&
+    payload.runId === state.chatRunId;
+  if (!sessionMatches && !activeRunMatches) {
+    // Inactive finals are still consumed into the per-session cache.
+    return payload.state === "final";
+  }
+  if (state.chatRunId && payload.runId !== state.chatRunId) {
+    // Another run's final is rendered in the active transcript; its other
+    // frames remain eligible for replay after the blocking run finishes.
+    return payload.state === "final";
+  }
+  return true;
+}
+
+function acceptChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
+  const runKey = chatEventDedupeRunKey(payload);
+  if (!runKey || typeof payload.seq !== "number") {
+    return true;
+  }
+  const stateKey = state as object;
+  let accepted = acceptedChatEventSeqByRunState.get(stateKey);
+  if (!accepted) {
+    accepted = new Map();
+    acceptedChatEventSeqByRunState.set(stateKey, accepted);
+  }
+  const acceptedSeqByState = accepted.get(runKey) ?? new Map<string, number>();
+  const lastAcceptedSeq = acceptedSeqByState.get(payload.state);
+  if (lastAcceptedSeq !== undefined && payload.seq <= lastAcceptedSeq) {
+    return false;
+  }
+  acceptedSeqByState.set(payload.state, payload.seq);
+  accepted.delete(runKey);
+  accepted.set(runKey, acceptedSeqByState);
+  if (accepted.size > CHAT_EVENT_DEDUPE_RUN_LIMIT) {
+    for (const staleKey of accepted.keys()) {
+      accepted.delete(staleKey);
+      if (accepted.size <= CHAT_EVENT_DEDUPE_RUN_LIMIT) {
+        break;
+      }
+    }
+  }
+  return true;
+}
+
+function handleChatEventInner(state: ChatState, payload: ChatEventPayload) {
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
@@ -277,6 +341,16 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
+}
+
+export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (!payload) {
+    return null;
+  }
+  if (shouldConsumeChatEventFrame(state, payload) && !acceptChatEventFrame(state, payload)) {
+    return null;
+  }
+  return handleChatEventInner(state, payload);
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {

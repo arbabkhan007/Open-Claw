@@ -497,6 +497,7 @@ export type ChatMetadataResult = CommandsListResult & {
 
 export type ChatEventPayload = {
   runId?: string;
+  seq?: number;
   sessionKey: string;
   agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
