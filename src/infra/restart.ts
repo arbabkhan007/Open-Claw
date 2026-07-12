@@ -697,32 +697,33 @@ export function deferGatewayRestartUntilIdle(opts: {
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
       : undefined;
 
-  let pending: number;
+  // Inspection failure means active-work state is unknown; fail closed by
+  // entering the deferred poll instead of emitting a restart (#104064).
+  let pending: number | undefined;
   try {
     pending = opts.getPendingCount();
   } catch (err) {
     opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return;
   }
-  if (pending <= 0) {
+  if (pending !== undefined && pending <= 0) {
     opts.hooks?.onReady?.();
     void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
     return;
   }
 
-  opts.hooks?.onDeferring?.(pending);
+  // When the initial inspection throws, we enter deferral with unknown count
+  // so the poll retries on the next interval.
+  opts.hooks?.onDeferring?.(pending ?? 0);
   const startedAt = Date.now();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
   const poll = setInterval(() => {
-    let current: number;
+    let current: number | undefined;
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      clearInterval(poll);
-      activeDeferralPolls.delete(poll);
       opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+      // Preserve the active poll and retry on the next interval — an
+      // inspection exception is not a confirmed-zero result (#104064).
       return;
     }
     if (current <= 0) {
