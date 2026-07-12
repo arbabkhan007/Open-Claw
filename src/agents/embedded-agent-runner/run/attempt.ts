@@ -851,6 +851,15 @@ function shouldPreservePromptErrorAfterCleanupError(params: {
   );
 }
 
+export class PluginBlockedError extends Error {
+  readonly blockReason: string;
+  constructor(reason: string) {
+    super(`LLM call blocked by plugin: ${reason}`);
+    this.name = "PluginBlockedError";
+    this.blockReason = reason;
+  }
+}
+
 class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
   readonly promptError: unknown;
   readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
@@ -4851,7 +4860,7 @@ export async function runEmbeddedAttempt(
                 prompt: promptSubmission.prompt,
               })
             : promptSubmission.prompt;
-          const promptForModel = isRuntimeOnlyTurn
+          let promptForModel = isRuntimeOnlyTurn
             ? buildCurrentInboundPrompt({
                 context: params.currentInboundContext,
                 prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
@@ -4907,7 +4916,7 @@ export async function runEmbeddedAttempt(
               modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),
             };
           }
-          const systemPromptForHook = systemPromptText;
+          let systemPromptForHook = systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
             message: string;
@@ -5176,7 +5185,7 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+          let llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
             prompt: promptForModel,
             ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
             ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
@@ -5186,8 +5195,8 @@ export async function runEmbeddedAttempt(
           });
 
           if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
+            try {
+              const llmInputResult = await hookRunner.runLlmInput(
                 {
                   runId: params.runId,
                   sessionId: params.sessionId,
@@ -5215,10 +5224,39 @@ export async function runEmbeddedAttempt(
                     channelContext: params.channelContext,
                   }),
                 },
-              )
-              .catch((err: unknown) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
+              );
+
+              if (llmInputResult?.block) {
+                const reason = llmInputResult.blockReason ?? "Blocked by llm_input plugin hook";
+                log.warn(`llm_input hook blocked LLM call: ${reason}`);
+                throw new PluginBlockedError(reason);
+              }
+
+              if (llmInputResult?.prompt !== undefined) {
+                promptForModel = llmInputResult.prompt;
+                // Recompute the boundary precheck prompt so preemptive
+                // compaction uses the post-hook prompt length, not stale.
+                llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+                  prompt: promptForModel,
+                  ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+                  ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+                  ...(typeof preparedUserTurnMessage?.timestamp === "number"
+                    ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+                    : {}),
+                });
+              }
+              if (llmInputResult?.systemPrompt !== undefined) {
+                systemPromptForHook = llmInputResult.systemPrompt;
+                // Apply the override to the active model session so
+                // activeSession.prompt() picks up the new system prompt.
+                setActiveSessionSystemPrompt(llmInputResult.systemPrompt);
+              }
+            } catch (err) {
+              if (err instanceof PluginBlockedError) {
+                throw err;
+              }
+              log.warn(`llm_input hook failed: ${String(err)}`);
+            }
           }
 
           const llmBoundaryOptionsForPrecheck =
@@ -6083,12 +6121,13 @@ export async function runEmbeddedAttempt(
         }
       }
 
+      let llmOutputAssistantTextsOverride: string[] | undefined;
       if (
         hookRunner?.hasHooks("llm_output") &&
         shouldRunLlmOutputHooksForAttempt({ promptErrorSource })
       ) {
-        hookRunner
-          .runLlmOutput(
+        try {
+          const llmOutputResult = await hookRunner.runLlmOutput(
             {
               runId: params.runId,
               sessionId: params.sessionId,
@@ -6110,7 +6149,7 @@ export async function runEmbeddedAttempt(
                 ? { harnessId: params.runtimePlan.observability.harnessId }
                 : {}),
               assistantTexts,
-              lastAssistant,
+              lastAssistant: lastAssistant ? structuredClone(lastAssistant) : lastAssistant,
               usage: attemptUsage,
             },
             {
@@ -6138,10 +6177,14 @@ export async function runEmbeddedAttempt(
                 channelContext: params.channelContext,
               }),
             },
-          )
-          .catch((err: unknown) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+          );
+
+          if (llmOutputResult?.assistantTexts !== undefined) {
+            llmOutputAssistantTextsOverride = llmOutputResult.assistantTexts;
+          }
+        } catch (err) {
+          log.warn(`llm_output hook failed: ${String(err)}`);
+        }
       }
 
       const acceptedSessionSpawns = getAcceptedSessionSpawns();
@@ -6367,7 +6410,7 @@ export async function runEmbeddedAttempt(
         finalPromptText,
         messagesSnapshot,
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
-        assistantTexts,
+        assistantTexts: llmOutputAssistantTextsOverride ?? assistantTexts,
         lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
         toolMetas: toolMetasNormalized,
         acceptedSessionSpawns,
