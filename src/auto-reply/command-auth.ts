@@ -51,10 +51,10 @@ type ProviderAllowFromResolution = {
 type OwnerAuthorizationState = {
   allowAll: boolean;
   ownerAllowAll: boolean;
-  ownerCandidatesForCommands: string[];
+  ownerCandidatesForCommands: readonly string[];
   ownerCandidatesForCommandsSet: ReadonlySet<string>;
-  explicitOwners: string[];
-  ownerList: string[];
+  explicitOwners: readonly string[];
+  ownerList: readonly string[];
   ownerSet: ReadonlySet<string>;
 };
 
@@ -191,11 +191,11 @@ function stripWildcardAllowFrom(list: string[]): string[] {
  * shared across messages — treat them as immutable.
  */
 type PreparedAllowFromList = {
-  list: string[];
+  list: readonly string[];
   set: ReadonlySet<string>;
   hasWildcard: boolean;
   /** Wildcards dropped and duplicates collapsed once at prepare time. */
-  stripped: string[];
+  stripped: readonly string[];
   strippedSet: ReadonlySet<string>;
 };
 
@@ -213,10 +213,10 @@ const compiledAllowFromSources = new WeakMap<Array<string | number>, CompiledAll
 // Frozen so an accidental downstream mutation of a shared prepared list throws
 // instead of silently corrupting every config/message that shares the singleton.
 const EMPTY_PREPARED_ALLOW_FROM: PreparedAllowFromList = Object.freeze({
-  list: Object.freeze([]) as string[],
+  list: Object.freeze<string[]>([]),
   set: new Set<string>(),
   hasWildcard: false,
-  stripped: Object.freeze([]) as string[],
+  stripped: Object.freeze<string[]>([]),
   strippedSet: new Set<string>(),
 });
 
@@ -464,7 +464,7 @@ function resolveOwnerCandidatesForCommands(params: {
   to?: string;
   allowAll: boolean;
   allowFromPrepared: PreparedAllowFromList;
-}): { list: string[]; set: ReadonlySet<string> } {
+}): { list: readonly string[]; set: ReadonlySet<string> } {
   if (params.allowAll) {
     return EMPTY_PREPARED_ALLOW_FROM;
   }
@@ -811,7 +811,7 @@ export function resolveCommandAuthorization(params: {
 
   return {
     providerId,
-    ownerList: ownerState.ownerList,
+    ownerList: [...ownerState.ownerList],
     senderId: senderId || undefined,
     senderIsOwner,
     isAuthorizedSender,
