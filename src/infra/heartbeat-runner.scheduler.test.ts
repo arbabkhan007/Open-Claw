@@ -698,6 +698,40 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("recomputes next due from current time after slow runOnce to prevent cadence decay (#104951)", async () => {
+    useFakeHeartbeatTime();
+
+    const intervalMs = 30 * 60_000;
+    const slowRunDurationMs = 20_000; // runOnce takes 20 seconds of wall-clock time
+    let callCount = 0;
+
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      // Simulate wall-clock time passing during runOnce execution
+      vi.setSystemTime(Date.now() + slowRunDurationMs);
+      return { status: "ran", durationMs: slowRunDurationMs };
+    });
+
+    const runner = startDefaultRunner(runSpy);
+    const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
+
+    // First heartbeat fires at the scheduled slot
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Advance by a small amount (< interval) — should NOT trigger a second run.
+    // If the stale-now bug were present, advanceAgentSchedule would compute a
+    // nextDueMs that's already in the past, causing immediate re-arm (0 ms timer).
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Advance to the next full interval — now it should fire again
+    await vi.advanceTimersByTimeAsync(intervalMs);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
