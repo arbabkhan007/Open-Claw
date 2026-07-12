@@ -1,7 +1,7 @@
 // Moonshot tests cover kimi web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type { SearchConfigRecord } from "openclaw/plugin-sdk/provider-web-search";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
@@ -9,29 +9,6 @@ import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
 const kimiSecretRefApiKeyEnv = ["KIMI_WEB_SEARCH_REF", "KEY"].join("_");
-
-function withEnv(overrides: Record<string, string | undefined>, run: () => void): void {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(overrides)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
