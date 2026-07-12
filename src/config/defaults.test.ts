@@ -11,6 +11,7 @@ import {
   applyContextPruningDefaults,
   applyCronDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
   resolveNormalizedProviderModelMaxTokens,
 } from "./defaults.js";
 
@@ -146,6 +147,54 @@ describe("config defaults", () => {
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 
+  it("caps known Mistral model maxTokens at the safe maximum during config loading", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          mistral: {
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0.05, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 17_000,
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
+  });
+
+  it("preserves custom Mistral model maxTokens during config loading", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          mistral: {
+            models: [
+              {
+                id: "custom-mistral-model",
+                name: "Custom Mistral",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 32_000,
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(32_000);
+  });
+
   describe("resolveNormalizedProviderModelMaxTokens", () => {
     it("leaves non-Mistral providers unchanged", () => {
       expect(
@@ -191,7 +240,7 @@ describe("config defaults", () => {
       ).toBe(8_192);
     });
 
-    it("falls back to the default safe cap for unknown Mistral models", () => {
+    it("preserves maxTokens for unknown Mistral models", () => {
       expect(
         resolveNormalizedProviderModelMaxTokens({
           providerId: "mistral",
@@ -199,7 +248,7 @@ describe("config defaults", () => {
           contextWindow: 32_768,
           rawMaxTokens: 20_000,
         }),
-      ).toBe(8_192);
+      ).toBe(20_000);
     });
   });
 });

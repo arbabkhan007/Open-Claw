@@ -98,7 +98,10 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   const safeMaxTokens =
     MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
       params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
-    ] ?? DEFAULT_MODEL_MAX_TOKENS;
+    ];
+  if (safeMaxTokens === undefined) {
+    return clamped;
+  }
   return Math.min(clamped, safeMaxTokens);
 }
 
