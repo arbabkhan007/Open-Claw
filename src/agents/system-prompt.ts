@@ -1413,7 +1413,8 @@ export function buildRuntimeLine(
     runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
   const identityName = runtimeInfo?.identityName?.trim();
   const agentId = runtimeInfo?.agentId;
-  const agentNameLabel = agentId && identityName && identityName !== agentId ? identityName : undefined;
+  const agentNameLabel =
+    agentId && identityName && identityName !== agentId ? identityName : undefined;
   return `Runtime: ${[
     agentId ? `agent=${sanitizeForPromptLiteral(agentId)}` : "",
     agentNameLabel ? `agentName=${sanitizeForPromptLiteral(agentNameLabel)}` : "",
