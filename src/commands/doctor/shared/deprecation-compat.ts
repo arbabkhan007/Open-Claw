@@ -131,7 +131,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
     code: "doctor-diagnostics-otel-grpc-protocol",
     owner: "config",
-    introduced: "2026-06-15",
+    introduced: "2026-01-20",
     deprecated: "2026-06-15",
     warningStarts: "2026-06-15",
     removeAfter: "2026-09-15",
