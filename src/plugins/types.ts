@@ -22,6 +22,7 @@ import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+import type { CommandEffectProfile, CommandExposure } from "../cli/catalog-metadata.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
@@ -2291,6 +2292,12 @@ export type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  /** Optional advisory read/mutation, confirmation, and risk metadata. */
+  effectProfile?: CommandEffectProfile;
+  /** Catalog exposure; omitted descriptors default to public inventory. */
+  commandExposure?: CommandExposure;
+  /** Hide the command from public inventory while preserving CLI ownership and registration. */
+  hidden?: boolean;
 };
 
 export type OpenClawPluginNodeCliFeatureOptions = {
