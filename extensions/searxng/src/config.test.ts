@@ -33,6 +33,46 @@ describe("resolveSearxngBaseUrl", () => {
     ).toBe("https://ambient.search");
   });
 
+  it("uses ambient env fallback when webSearch config omits baseUrl", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {},
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search///",
+      }),
+    ).toBe("https://ambient.search");
+  });
+
+  it("uses ambient env fallback when programmatic config leaves baseUrl undefined", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: { baseUrl: undefined },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search///",
+      }),
+    ).toBe("https://ambient.search");
+  });
+
   it("resolves configured env SecretRefs before ambient env fallback", () => {
     const config = {
       plugins: {
@@ -112,7 +152,29 @@ describe("resolveSearxngBaseUrl", () => {
     ).toBeUndefined();
   });
 
-  it("treats malformed baseUrl config as missing instead of throwing", () => {
+  it("does not fall back to ambient env when baseUrl config is blank", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: "   ",
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not fall back to ambient env when baseUrl config is malformed", () => {
     const config = {
       plugins: {
         entries: {
@@ -131,6 +193,6 @@ describe("resolveSearxngBaseUrl", () => {
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBe("https://ambient.search");
+    ).toBeUndefined();
   });
 });
