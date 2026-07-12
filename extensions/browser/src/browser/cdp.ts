@@ -263,7 +263,11 @@ export async function createTargetViaCdp(opts: {
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
-          const created = (await send("Target.createTarget", { url: opts.url })) as {
+          const created = (await send("Target.createTarget", {
+            url: opts.url,
+            // Agent selection is target-id based; tab creation must not activate browser UI.
+            background: true,
+          })) as {
             targetId?: string;
           };
           const targetId = created?.targetId?.trim() ?? "";
