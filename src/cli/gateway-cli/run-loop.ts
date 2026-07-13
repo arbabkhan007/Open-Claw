@@ -324,10 +324,31 @@ export async function runGatewayLoop(params: {
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
       if (supervisorMode === "launchd") {
         // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
-        // tripping launchd crash-loop throttling before KeepAlive relaunches.
-        await new Promise((resolve) => {
+        // tripping launchd crash-loop throttling. The same window confirms the
+        // detached kickstart handoff actually spawned: an OS-level spawn error
+        // arrives asynchronously after scheduling, and exiting without a live
+        // handoff would strand the gateway in KeepAlive-inert domains.
+        const delay = new Promise<void>((resolve) => {
           setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
         });
+        const handoffSpawned = await Promise.race([
+          respawn.handoffSettled ?? Promise.resolve(true),
+          delay.then(() => true),
+        ]);
+        await delay;
+        if (!handoffSpawned) {
+          await writeStabilityBundle("gateway.restart_handoff_spawn_failed");
+          gatewayLog.warn(
+            "launchd kickstart handoff failed to spawn; falling back to in-process restart",
+          );
+          if (!(await reacquireLockForInProcessRestart())) {
+            return;
+          }
+          activeRestartRequest = null;
+          shuttingDown = false;
+          restartResolver?.();
+          return;
+        }
       }
       exitProcess(0);
       return;

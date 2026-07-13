@@ -10,12 +10,19 @@ import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
-type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
+type LaunchdRestartHandoffMode = "kickstart" | "kickstart-if-dead" | "reload" | "start-after-exit";
 
 type LaunchdRestartHandoffResult = {
   ok: boolean;
   pid?: number;
   detail?: string;
+  /**
+   * Resolves once the detached helper either spawned ("spawn" event) or failed
+   * at the OS level ("error" event, reported asynchronously after spawn()
+   * returns). Callers about to exit the process should confirm this resolved
+   * true before trusting the handoff to relaunch the service.
+   */
+  settled?: Promise<boolean>;
 };
 
 type LaunchdRestartTarget = {
@@ -139,6 +146,48 @@ exit "$status"
 `;
   }
 
+  if (mode === "kickstart-if-dead") {
+    // Routine supervised restarts (#104538): if launchd's own KeepAlive already
+    // relaunched the service, leave the healthy replacement alone — a second
+    // `kickstart -k` here would kill it and cause an avoidable interruption.
+    // A loaded-but-stopped job prints pid = 0, so the poll requires a non-zero
+    // pid. Only when no running pid appears does the kickstart/bootstrap chain run
+    // (the KeepAlive-inert domains the issue reports).
+    return `service_target="$1"
+domain="$2"
+plist_path="$3"
+${waitForCallerPid}
+pid_retry_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
+while [ "$pid_retry_count" -gt 0 ]; do
+  if launchctl print "$service_target" 2>/dev/null | grep -Eq 'pid = [1-9][0-9]*'; then
+    printf '[%s] openclaw restart done source=launchd-handoff mode=${mode} reason=keepalive-relaunch\n' "$(date -u +%FT%TZ)" >&2
+    exit 0
+  fi
+  pid_retry_count=$((pid_retry_count - 1))
+  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+done
+status=0
+launchctl enable "$service_target"
+if launchctl kickstart -k "$service_target"; then
+  status=0
+else
+  status=$?
+  if launchctl bootstrap "$domain" "$plist_path"; then
+    status=0
+  else
+    launchctl kickstart -k "$service_target"
+    status=$?
+  fi
+fi
+if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\n' "$(date -u +%FT%TZ)" >&2
+else
+  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\n' "$(date -u +%FT%TZ)" "$status" >&2
+fi
+exit "$status"
+`;
+  }
+
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
     // launchd's already-loaded stdout/stderr/stdin paths.
@@ -248,8 +297,16 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: restartEnv,
       },
     );
+    // OS-level spawn failures arrive asynchronously after spawn() returns; the
+    // listener keeps them from becoming unhandled process errors during the
+    // caller's pre-exit window, and `settled` lets the caller confirm the
+    // helper actually exists before exiting the gateway.
+    const settled = new Promise<boolean>((resolve) => {
+      child.once("spawn", () => resolve(true));
+      child.once("error", () => resolve(false));
+    });
     child.unref();
-    return { ok: true, pid: child.pid ?? undefined };
+    return { ok: true, pid: child.pid ?? undefined, settled };
   } catch (err) {
     return {
       ok: false,
