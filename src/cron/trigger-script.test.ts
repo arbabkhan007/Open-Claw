@@ -1,12 +1,17 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   testing as beforeToolCallTesting,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
+import { testing as subagentSpawnTesting } from "../agents/subagent-spawn.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCronTriggerEvaluator } from "./trigger-script.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
+import { createCronTriggerEvaluator, testing } from "./trigger-script.js";
 
 type EvaluatorDeps = Parameters<typeof createCronTriggerEvaluator>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
@@ -270,6 +275,67 @@ describe("cron trigger script evaluator", () => {
       ["probe"],
       ["exec"],
     ]);
+  });
+
+  it("persists cron toolsAllow restrictions onto spawned children", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-trigger-tools-"));
+    const storePath = path.join(root, "sessions.json");
+    const config = {
+      session: { store: storePath, mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          workspace: root,
+          subagents: { maxSpawnDepth: 2, maxChildrenPerAgent: 10 },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const gatewayMethods: string[] = [];
+    subagentSpawnTesting.setDepsForTest({
+      getRuntimeConfig: () => config,
+      getGlobalHookRunner: () => null,
+      hasInProcessGatewayContext: () => false,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions): Promise<T> => {
+        gatewayMethods.push(request.method);
+        if (request.method === "agent") {
+          return { runId: "cron-trigger-proof-run", status: "accepted" } as T;
+        }
+        return { ok: true } as T;
+      },
+      ensureContextEnginesInitialized: () => undefined,
+      resolveContextEngine: async () =>
+        ({
+          prepareSubagentSpawn: async () => ({ status: "ok" }),
+        }) as never,
+    });
+    try {
+      const runtime = await testing.prepareTriggerRuntime({
+        runtimeConfig: config,
+        jobId: "job-restricted-spawn",
+        toolsAllow: ["sessions_spawn", "read"],
+      });
+      const spawnTool = runtime.tools.find((tool) => tool.name === "sessions_spawn");
+      if (!spawnTool?.execute) {
+        throw new Error("expected sessions_spawn tool");
+      }
+
+      await spawnTool.execute("cron-spawn", {
+        task: "verify inherited tools",
+        mode: "run",
+        cleanup: "keep",
+        lightContext: true,
+      });
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        { inheritedToolAllow?: string[] }
+      >;
+      const childEntry = Object.values(store)[0];
+      expect(gatewayMethods).toEqual(["agent"]);
+      expect(childEntry?.inheritedToolAllow).toEqual(["read", "sessions_spawn"]);
+    } finally {
+      subagentSpawnTesting.setDepsForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it.each([

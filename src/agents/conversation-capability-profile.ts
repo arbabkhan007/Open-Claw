@@ -78,6 +78,12 @@ export type ConversationCapabilityProfileParams = {
   skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
+  /**
+   * Runtime allowlists are local tool-surface materialization hints by default.
+   * Set this only when the allowlist represents the parent's real spawnable
+   * capability and should be persisted onto child sessions.
+   */
+  inheritRuntimeToolAllowlist?: boolean;
 };
 
 export type ResolvedConversationCapabilityProfile = {
@@ -166,6 +172,7 @@ export type ResolvedConversationCapabilityProfile = {
     sandboxPolicy?: SandboxToolPolicy;
     subagentPolicy?: SandboxToolPolicy;
     inheritedToolPolicy?: SandboxToolPolicy;
+    runtimeToolPolicyForInheritance?: ToolPolicyLike;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
     /** Explicit config/runtime grants only; excludes built-in profile expansion. */
@@ -260,13 +267,22 @@ export function resolveConversationCapabilityProfile(
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
     : undefined;
+  const runtimeToolPolicyForInheritance =
+    params.inheritRuntimeToolAllowlist === true ? runtimeToolPolicy : undefined;
   const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
-  const inheritancePolicies = [
+  const explicitToolAllowlistPolicies = [
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
     inheritedToolPolicy,
     runtimeToolPolicy,
+  ];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
+    inheritedToolPolicy,
+    runtimeToolPolicyForInheritance,
   ];
 
   return {
@@ -361,10 +377,11 @@ export function resolveConversationCapabilityProfile(
       sandboxPolicy: params.sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
+      runtimeToolPolicyForInheritance,
       inheritancePolicies,
-      explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
+      explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
       explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
-      explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
+      explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
     },
   };
 }

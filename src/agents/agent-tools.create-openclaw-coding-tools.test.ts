@@ -26,6 +26,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -460,6 +461,61 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const options = latestCreateOpenClawToolsOptions();
     expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
+  });
+
+  it("does not inherit native-harness bridge runtime allowlists", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(latestCreateOpenClawToolsOptions().inheritedToolAllowlist).toEqual([]);
+  });
+
+  it("inherits embedded runtime toolsAllow when explicitly marked as parent capability", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const runtimeToolAllowlist = ["sessions_spawn", "memory_search"];
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config: testConfig,
+        runtimeToolAllowlist,
+        inheritRuntimeToolAllowlist: true,
+      }),
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["sessions_spawn"]);
+    expect(inheritedAllow?.includes("read")).toBe(false);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+  });
+
+  it("lets direct restricted callers inherit runtime toolsAllow into subagent spawns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["sessions_spawn", "read"],
+      inheritRuntimeToolAllowlist: true,
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["sessions_spawn", "read"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
   it("preserves runtime-allowed message through restrictive profiles", () => {
