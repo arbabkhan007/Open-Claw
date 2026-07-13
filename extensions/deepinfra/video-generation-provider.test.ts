@@ -166,6 +166,8 @@ describe("deepinfra video generation provider", () => {
         models: {
           providers: {
             deepinfra: {
+              baseUrl: "https://api.deepinfra.com/v1/inference",
+              models: [],
               request: requestPolicy,
             },
           },
