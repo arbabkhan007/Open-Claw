@@ -2352,7 +2352,9 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       description: "Search the effective Tool Search catalog.",
       parameters: Type.Object({
         query: Type.String({ description: "Search query." }),
-        limit: Type.Optional(Type.Integer({ description: "Maximum number of results." })),
+        limit: Type.Optional(
+          Type.Integer({ minimum: 1, description: "Maximum number of results." }),
+        ),
       }),
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const search = readSearchArgs(args, config);
