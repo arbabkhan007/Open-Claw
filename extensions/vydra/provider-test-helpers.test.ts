@@ -60,24 +60,26 @@ export async function startLocalVydraHttpServer(handler: LocalVydraRouteHandler)
   close: () => Promise<void>;
 }> {
   const requests: RecordedVydraRequest[] = [];
-  const server = createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    }
-    const request = {
-      method: req.method ?? "",
-      url: req.url ?? "",
-      headers: req.headers,
-      body: Buffer.concat(chunks).toString("utf8"),
-    };
-    requests.push(request);
-    try {
-      await handler(req, res, request);
-    } catch (error) {
-      res.statusCode = 500;
-      res.end(error instanceof Error ? error.message : String(error));
-    }
+  const server = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      }
+      const request = {
+        method: req.method ?? "",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      };
+      requests.push(request);
+      try {
+        await handler(req, res, request);
+      } catch (error) {
+        res.statusCode = 500;
+        res.end(error instanceof Error ? error.message : String(error));
+      }
+    })();
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
