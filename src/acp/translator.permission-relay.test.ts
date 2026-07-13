@@ -279,7 +279,15 @@ describe("ACP translator permission relay", () => {
       },
       hasExecApprovalClients: () => true,
     };
-    const gatewayRequestPromise = gatewayHandlers["exec.approval.request"]({
+    const gatewayRequestHandler = expectDefined(
+      gatewayHandlers["exec.approval.request"],
+      "exec.approval.request handler",
+    );
+    const gatewayResolveHandler = expectDefined(
+      gatewayHandlers["exec.approval.resolve"],
+      "exec.approval.resolve handler",
+    );
+    const gatewayRequestPromise = gatewayRequestHandler({
       params: {
         id: "approval-gateway-raw",
         twoPhase: true,
@@ -308,7 +316,7 @@ describe("ACP translator permission relay", () => {
       resolveApproval: async (requestParams) =>
         await new Promise((resolve, reject) => {
           void Promise.resolve(
-            gatewayHandlers["exec.approval.resolve"]({
+            gatewayResolveHandler({
               params: requestParams as never,
               respond: ((ok: boolean, result: unknown, error: unknown) => {
                 if (!ok) {
