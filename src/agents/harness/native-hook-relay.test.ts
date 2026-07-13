@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -26,13 +26,70 @@ import {
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
 
+const relayLog = {
+  info: vi.fn(),
+  warn: vi.fn(),
+};
+
+beforeEach(() => {
+  testing.setNativeHookRelayMetricsLoggerForTests(relayLog);
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
   testing.clearNativeHookRelaysForTests();
+  for (const method of ["info", "warn"] as const) {
+    relayLog[method].mockClear();
+  }
 });
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function relayLogEntries(method: "info" | "warn", message: string): Record<string, unknown>[] {
+  return relayLog[method].mock.calls
+    .filter((call) => call[0] === message)
+    .map((call) => requireRecord(call[1], `${message} metadata`));
+}
+
+function permissionRequestInvocation(relayId: string, toolUseId: string) {
+  return invokeNativeHookRelay({
+    provider: "codex",
+    relayId,
+    event: "permission_request",
+    rawPayload: {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_use_id: toolUseId,
+      tool_input: { command: "git status" },
+    },
+  });
+}
+
+function expectCompletePermissionSummary(
+  summary: Record<string, unknown>,
+  expected: { runId: string; durationMs: number; slowCount?: number },
+) {
+  expect(summary.runId).toBe(expected.runId);
+  expect(readRecordField(summary, "invocations", "summary invocations").permission_request).toEqual(
+    {
+      count: 1,
+      totalDurationMs: expected.durationMs,
+      maxDurationMs: expected.durationMs,
+      slowCount: expected.slowCount ?? 0,
+    },
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -718,6 +775,369 @@ describe("native hook relay registry", () => {
 
     second.unregister();
     expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
+  });
+
+  it("counts execution attempts instead of relay command construction", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-command-attempts",
+      allowedEvents: ["post_tool_use"],
+    });
+    relay.commandForEvent("post_tool_use");
+    relay.commandForEvent("post_tool_use");
+    relay.commandForEvent("post_tool_use");
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: vi.fn() }]),
+    );
+    const rawPayload = {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "git status" },
+      tool_response: { output: "ok" },
+    };
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload,
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload,
+    });
+    relay.unregister();
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expect(readRecordField(summaries[0]!, "commandRequests", "summary command requests")).toEqual({
+      pre_tool_use: 0,
+      post_tool_use: 2,
+      permission_request: 0,
+      before_agent_finalize: 0,
+    });
+    expect(
+      readRecordField(
+        summaries[0]!,
+        "noLocalWorkCommandRequests",
+        "summary no-local-work command requests",
+      ),
+    ).toEqual({
+      pre_tool_use: 0,
+      post_tool_use: 0,
+      permission_request: 0,
+      before_agent_finalize: 0,
+    });
+    expect(
+      readRecordField(summaries[0]!, "invocations", "summary invocations").post_tool_use,
+    ).toMatchObject({ count: 2 });
+  });
+
+  it("counts no-local-work attempts at execution time", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-no-local-work-attempts",
+      allowedEvents: ["post_tool_use"],
+    });
+    const rawPayload = {
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_response: { output: "ok" },
+    };
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload,
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload,
+    });
+    relay.unregister();
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expect(
+      readRecordField(summaries[0]!, "commandRequests", "summary command requests").post_tool_use,
+    ).toBe(2);
+    expect(
+      readRecordField(
+        summaries[0]!,
+        "noLocalWorkCommandRequests",
+        "summary no-local-work command requests",
+      ).post_tool_use,
+    ).toBe(2);
+    expect(
+      readRecordField(summaries[0]!, "invocations", "summary invocations").post_tool_use,
+    ).toMatchObject({ count: 2 });
+  });
+
+  it("counts a validated attempt that fails during payload normalization", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-malformed-attempt",
+      allowedEvents: ["post_tool_use"],
+    });
+    let eventNameReads = 0;
+    const rawPayload = Object.defineProperty({}, "hook_event_name", {
+      enumerable: true,
+      get() {
+        eventNameReads += 1;
+        if (eventNameReads > 1) {
+          throw new Error("malformed payload");
+        }
+        return "PostToolUse";
+      },
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload,
+      }),
+    ).rejects.toThrow("malformed payload");
+    relay.unregister();
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expect(
+      readRecordField(summaries[0]!, "commandRequests", "summary command requests").post_tool_use,
+    ).toBe(1);
+    expect(
+      readRecordField(summaries[0]!, "invocations", "summary invocations").post_tool_use,
+    ).toMatchObject({ count: 0 });
+  });
+
+  it("does not attribute stale generation attempts to a replacement registration", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stale-attempt",
+      sessionId: "session-1",
+      runId: "run-old",
+      allowedEvents: ["post_tool_use"],
+    });
+    const replacement = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-new",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        generation: first.generation,
+        requireGeneration: true,
+        event: "post_tool_use",
+        rawPayload: { hook_event_name: "PostToolUse" },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: replacement.relayId,
+      generation: replacement.generation,
+      requireGeneration: true,
+      event: "post_tool_use",
+      rawPayload: { hook_event_name: "PostToolUse" },
+    });
+    replacement.unregister();
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.runId).toBe("run-new");
+    expect(
+      readRecordField(summaries[0]!, "commandRequests", "summary command requests").post_tool_use,
+    ).toBe(1);
+    expect(
+      readRecordField(summaries[0]!, "invocations", "summary invocations").post_tool_use,
+    ).toMatchObject({ count: 1 });
+  });
+
+  it("defers an unregister summary until a pending invocation settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_000));
+    const approval = createDeferred<"allow">();
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(() => approval.promise);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-pending-unregister",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["permission_request"],
+    });
+
+    const invocation = permissionRequestInvocation(relay.relayId, "pending-unregister-call");
+    await Promise.resolve();
+    relay.unregister();
+
+    expect(relayLogEntries("info", "native hook relay summary")).toHaveLength(0);
+
+    vi.setSystemTime(new Date(1_075));
+    approval.resolve("allow");
+    await invocation;
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expectCompletePermissionSummary(summaries[0]!, { runId: "run-1", durationMs: 75 });
+    relay.unregister();
+    expect(relayLogEntries("info", "native hook relay summary")).toHaveLength(1);
+  });
+
+  it("keeps replacement registration metrics isolated while the old invocation settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2_000));
+    const approval = createDeferred<"allow">();
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(() => approval.promise);
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-pending-replacement",
+      sessionId: "session-1",
+      runId: "run-old",
+      allowedEvents: ["permission_request"],
+    });
+    const invocation = permissionRequestInvocation(first.relayId, "pending-replacement-call");
+    await Promise.resolve();
+
+    const replacement = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-new",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    expect(relayLogEntries("info", "native hook relay summary")).toHaveLength(0);
+    expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toMatchObject({
+      runId: "run-new",
+    });
+
+    vi.setSystemTime(new Date(2_035));
+    approval.resolve("allow");
+    await invocation;
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expectCompletePermissionSummary(summaries[0]!, { runId: "run-old", durationMs: 35 });
+    expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toMatchObject({
+      runId: "run-new",
+    });
+    replacement.unregister();
+    expect(relayLogEntries("info", "native hook relay summary")).toHaveLength(1);
+  });
+
+  it("defers an expiry-prune summary until a pending invocation settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(3_000));
+    const approval = createDeferred<"allow">();
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(() => approval.promise);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-pending-expiry",
+      sessionId: "session-1",
+      runId: "run-expired",
+      allowedEvents: ["permission_request"],
+      ttlMs: 100,
+    });
+    const invocation = permissionRequestInvocation(relay.relayId, "pending-expiry-call");
+    await Promise.resolve();
+
+    vi.setSystemTime(new Date(3_101));
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: "missing-relay-triggers-prune",
+        event: "pre_tool_use",
+        rawPayload: {},
+      }),
+    ).rejects.toThrow("not found");
+
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(relayLogEntries("info", "native hook relay summary")).toHaveLength(0);
+
+    vi.setSystemTime(new Date(3_125));
+    approval.resolve("allow");
+    await invocation;
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expectCompletePermissionSummary(summaries[0]!, { runId: "run-expired", durationMs: 125 });
+  });
+
+  it("finalizes metrics exactly once when invocation work fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(4_000));
+    const approval = createDeferred<"allow">();
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(() => approval.promise);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-failed-invocation",
+      sessionId: "session-1",
+      runId: "run-failed",
+      allowedEvents: ["permission_request"],
+    });
+    const invocation = permissionRequestInvocation(relay.relayId, "failed-invocation-call");
+    await Promise.resolve();
+
+    vi.setSystemTime(new Date(4_040));
+    approval.reject(new Error("approval transport failed"));
+    await invocation;
+    relay.unregister();
+    relay.unregister();
+
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expectCompletePermissionSummary(summaries[0]!, { runId: "run-failed", durationMs: 40 });
+  });
+
+  it("reports consistent slow-invocation and final aggregate metrics", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(5_000));
+    const approval = createDeferred<"allow">();
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(() => approval.promise);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-slow-invocation",
+      sessionId: "session-1",
+      runId: "run-slow",
+      allowedEvents: ["permission_request"],
+    });
+    const invocation = permissionRequestInvocation(relay.relayId, "slow-invocation-call");
+    await Promise.resolve();
+
+    vi.setSystemTime(new Date(5_275));
+    approval.resolve("allow");
+    await invocation;
+    relay.unregister();
+
+    const warnings = relayLogEntries("warn", "native hook relay invocation was slow");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      relayId: relay.relayId,
+      event: "permission_request",
+      runId: "run-slow",
+      durationMs: 275,
+      thresholdMs: 250,
+    });
+    const summaries = relayLogEntries("info", "native hook relay summary");
+    expect(summaries).toHaveLength(1);
+    expectCompletePermissionSummary(summaries[0]!, {
+      runId: "run-slow",
+      durationMs: 275,
+      slowCount: 1,
+    });
   });
 
   it("exposes registered relays through the direct hook bridge", async () => {
