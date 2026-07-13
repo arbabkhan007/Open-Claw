@@ -102,6 +102,8 @@ export type GatewayRequestContext = {
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   getMcpAppSandboxPort?: () => number | undefined;
+  configSnapshot?: ConfigFileSnapshot;
+  configReadOnlyReason?: string;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;

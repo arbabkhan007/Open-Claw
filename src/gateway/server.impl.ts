@@ -567,6 +567,8 @@ export type GatewayServerOptions = {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
+  /** Keep CLI-composed configuration stable and read-only for this server lifetime. */
+  configLayersReadOnly?: boolean;
 };
 
 export async function startGatewayServer(
@@ -1835,6 +1837,13 @@ export async function startGatewayServer(
           runtimeState,
           getRuntimeConfig,
           getMcpAppSandboxPort,
+          ...(opts.configLayersReadOnly
+            ? {
+                configSnapshot,
+                configReadOnlyReason:
+                  "configuration writes are unavailable while --config-layer is active",
+              }
+            : {}),
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
@@ -2155,7 +2164,8 @@ export async function startGatewayServer(
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
-    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+    if (!opts.configLayersReadOnly) {
+      const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,
@@ -2241,6 +2251,7 @@ export async function startGatewayServer(
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
+    }
     if (!minimalTestGateway) {
       const gatewayRuntimeServices = await loadScheduledServicesModule();
       postReadyMaintenanceTimer = gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({

@@ -1035,8 +1035,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       beginBoot,
       completeBoot,
       start: async ({ startupStartedAt, requestHotReloadRecovery } = {}) => {
-        const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
-        startupConfigSnapshotReadForNextStart = undefined;
+        const startupConfigSnapshotReadForThisStart = configLayersReadOnly
+          ? startupConfigSnapshotRead
+          : startupConfigSnapshotReadForNextStart;
+        if (!configLayersReadOnly) {
+          startupConfigSnapshotReadForNextStart = undefined;
+        }
         return await startGatewayServer(port, {
           bind,
           auth: authOverride,

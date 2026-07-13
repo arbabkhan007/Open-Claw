@@ -17,6 +17,8 @@ type GatewayRequestContextParams = {
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
+  configSnapshot?: GatewayRequestContext["configSnapshot"];
+  configReadOnlyReason?: GatewayRequestContext["configReadOnlyReason"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
@@ -108,6 +110,8 @@ export function createGatewayRequestContext(
     },
     getRuntimeConfig: params.getRuntimeConfig,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
+    ...(params.configSnapshot ? { configSnapshot: params.configSnapshot } : {}),
+    ...(params.configReadOnlyReason ? { configReadOnlyReason: params.configReadOnlyReason } : {}),
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
