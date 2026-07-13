@@ -1530,12 +1530,12 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage });
     Object.assign(bot.api.raw, { sendRichMessage });
 
-    const messageId = await sendTelegramText(bot, "123", "#", runtime, {
+    const result = await sendTelegramText(bot, "123", "#", runtime, {
       richMessages: true,
       textMode: "markdown",
     });
 
-    expect(messageId).toBe(16);
+    expect(result).toEqual({ messageId: 16, deliveredText: "#" });
     expect(sendRichMessage).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
@@ -2205,5 +2205,29 @@ describe("deliverReplies", () => {
     await promptContextSequence.finish();
 
     expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
+  });
+
+  it("records the source text after rich parse fallback sends a plain reply", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 305, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createHtmlParseError("sendRichMessage"));
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    const text = "**hi**";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstSendText(sendMessage)).toBe(text);
+    expect(observer).toHaveBeenCalledWith({ messageId: 305, text });
   });
 });

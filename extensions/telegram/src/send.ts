@@ -924,6 +924,7 @@ async function sendMessageTelegramWithContext(
   type TelegramTextChunk = {
     plainText: string;
     htmlText?: string;
+    sourcePlainText?: string;
   };
 
   const sendTelegramTextChunk = async (
@@ -956,7 +957,7 @@ async function sendMessageTelegramWithContext(
           ),
       });
     const requestPlain = (label: string) =>
-      requestSendMessage(label, chunk.plainText, plainParams ?? {});
+      requestSendMessage(label, chunk.sourcePlainText ?? chunk.plainText, plainParams ?? {});
     const result = !chunk.htmlText
       ? await requestPlain("message")
       : await withTelegramHtmlParseFallback({
@@ -972,6 +973,7 @@ async function sendMessageTelegramWithContext(
     return {
       result: result.result,
       acceptedParams: toAcceptedThreadScopedParams(result.acceptedParams),
+      deliveredText: chunk.htmlText ? chunk.plainText : (chunk.sourcePlainText ?? chunk.plainText),
     };
   };
 
@@ -1034,7 +1036,11 @@ async function sendMessageTelegramWithContext(
       if (!chunk) {
         continue;
       }
-      const { result: res, acceptedParams } = await sendTelegramTextChunk(
+      const {
+        result: res,
+        acceptedParams,
+        deliveredText,
+      } = await sendTelegramTextChunk(
         chunk,
         buildTextParams(
           index,
@@ -1050,7 +1056,7 @@ async function sendMessageTelegramWithContext(
         {
           message: res,
           messageId,
-          text: chunk.plainText,
+          text: deliveredText,
           ...(acceptedParams?.message_thread_id !== undefined
             ? { messageThreadId: acceptedParams.message_thread_id }
             : {}),
@@ -1113,8 +1119,8 @@ async function sendMessageTelegramWithContext(
     }
     return htmlChunks.map((htmlTextLocal) => ({
       htmlText: htmlTextLocal,
-      plainText:
-        htmlChunks.length === 1 ? fallbackText : telegramHtmlToPlainTextFallback(htmlTextLocal),
+      plainText: telegramHtmlToPlainTextFallback(htmlTextLocal),
+      ...(htmlChunks.length === 1 ? { sourcePlainText: fallbackText } : {}),
     }));
   };
 

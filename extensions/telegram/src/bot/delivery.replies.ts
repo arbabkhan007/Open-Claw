@@ -238,7 +238,7 @@ async function deliverTextReply(params: {
     markDelivered,
     sendChunk: async ({ chunk, isFirstChunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
       const includeQuoteMetadata = params.quoteOnlyOnFirstChunk !== true || isFirstChunk;
-      const messageId = await sendTelegramText(
+      const { messageId, deliveredText } = await sendTelegramText(
         params.bot,
         params.chatId,
         chunk.text,
@@ -263,7 +263,7 @@ async function deliverTextReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
-      await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
+      await params.progress.promptContext?.accept({ messageId, text: deliveredText });
     },
   });
   return firstDeliveredMessageId;

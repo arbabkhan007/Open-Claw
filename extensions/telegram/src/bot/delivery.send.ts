@@ -107,7 +107,7 @@ export async function sendTelegramText(
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<{ messageId: number; deliveredText: string }> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteMessageId: opts?.replyQuoteMessageId,
@@ -139,7 +139,7 @@ export async function sendTelegramText(
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
-    return res.message_id;
+    return { messageId: res.message_id, deliveredText: plainText };
   };
 
   if (opts?.richMessages === true) {
@@ -177,7 +177,7 @@ export async function sendTelegramText(
           }),
       });
       runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-      return res.message_id;
+      return { messageId: res.message_id, deliveredText: fallbackText };
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
         html: richPlan.richMessage.html,
@@ -219,7 +219,7 @@ export async function sendTelegramText(
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
+    return { messageId: res.message_id, deliveredText: fallbackText };
   } catch (err) {
     const errText = formatErrorMessage(err);
     if (isTelegramHtmlParseError(err) || EMPTY_TEXT_ERR_RE.test(errText)) {

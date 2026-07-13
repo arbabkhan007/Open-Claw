@@ -1777,6 +1777,33 @@ describe("sendMessageTelegram", () => {
     ]);
   });
 
+  it("keeps successful single-chunk markdown cache text plain instead of raw source", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-markdown-visible-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-markdown-visible",
+    });
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 256, date: 4, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "**hi**", {
+      cfg,
+      token: "tok",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "256",
+    });
+
+    expect(firstMockCallArg(botApi.sendMessage, 1)).toBe("<b>hi</b>");
+    expect(node?.body).toBe("hi");
+  });
+
   it("does not consume a projection part for a rejected HTML attempt", async () => {
     const storePath = `/tmp/openclaw-telegram-projection-html-fallback-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };
