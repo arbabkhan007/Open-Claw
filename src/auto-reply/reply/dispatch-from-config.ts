@@ -322,6 +322,7 @@ const runtimePluginsLoader = createLazyImportLoader(
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
 );
+const dispatchAcpRuntimeLoader = createLazyImportLoader(() => import("./dispatch-acp.runtime.js"));
 
 function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
@@ -345,6 +346,10 @@ function loadRuntimePlugins() {
 
 function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
+}
+
+function loadDispatchAcpRuntime() {
+  return dispatchAcpRuntimeLoader.load();
 }
 
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
@@ -3336,6 +3341,27 @@ async function dispatchReplyFromConfigInner(
       }
     }
 
+    const replyDispatchEvent = createReplyDispatchEvent({
+      ctx,
+      runId: params.replyOptions?.runId,
+      sessionKey: acpDispatchSessionKey,
+      toolsAllow: params.replyOptions?.toolsAllow,
+      images: params.replyOptions?.images,
+      inboundAudio,
+      sessionTtsAuto,
+      ttsChannel: deliveryChannel,
+      suppressUserDelivery: suppressHookUserDelivery,
+      suppressReplyLifecycle: suppressHookReplyLifecycle,
+      sourceReplyDeliveryMode,
+      shouldRouteToOriginating,
+      originatingChannel: routeReplyChannel,
+      originatingTo: routeReplyTo,
+      originatingAccountId: replyContextAccountId,
+      originatingThreadId: routeReplyThreadId,
+      originatingChatType: replyRoute.chatType,
+      shouldSendToolSummaries,
+      sendPolicy,
+    });
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
         runWithDispatchLifecycleAdmission(
@@ -3343,13 +3369,47 @@ async function dispatchReplyFromConfigInner(
             await runWithDispatchAbortSignal(
               getPreDispatchAbortSignal(),
               () =>
-                hookRunner.runReplyDispatch(
-                  createReplyDispatchEvent({
+                hookRunner.runReplyDispatch(replyDispatchEvent, {
+                  cfg,
+                  dispatcher: dispatchHookDispatcher,
+                  abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
+                  onReplyStart: params.replyOptions?.onReplyStart,
+                  recordProcessed,
+                  markIdle,
+                }),
+              trackDispatchLifecycleWork,
+            ),
+        ),
+      );
+      if (replyDispatchResult?.handled) {
+        commitInboundDedupeIfClaimed();
+        completeDispatchReplyOperation();
+        return attachSourceReplyDeliveryMode({
+          queuedFinal: replyDispatchResult.queuedFinal,
+          counts: replyDispatchResult.counts,
+        });
+      }
+    }
+    if (isAcpSessionKey(acpDispatchSessionKey)) {
+      const dispatchAcpRuntime = await loadDispatchAcpRuntime();
+      const bypassForCommand = await dispatchAcpRuntime.shouldBypassAcpDispatchForCommand(ctx, cfg);
+      const directAcpDispatchResult = await traceReplyPhase(
+        "reply.acp_direct_dispatch_fallback",
+        () =>
+          runWithDispatchLifecycleAdmission(
+            async () =>
+              await runWithDispatchAbortSignal(
+                getPreDispatchAbortSignal(),
+                () =>
+                  dispatchAcpRuntime.tryDispatchAcpReply({
                     ctx,
+                    cfg,
+                    dispatcher: dispatchHookDispatcher,
                     runId: params.replyOptions?.runId,
                     sessionKey: acpDispatchSessionKey,
                     toolsAllow: params.replyOptions?.toolsAllow,
                     images: params.replyOptions?.images,
+                    abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                     inboundAudio,
                     sessionTtsAuto,
                     ttsChannel: deliveryChannel,
@@ -3362,28 +3422,23 @@ async function dispatchReplyFromConfigInner(
                     originatingAccountId: replyContextAccountId,
                     originatingThreadId: routeReplyThreadId,
                     originatingChatType: replyRoute.chatType,
-                    shouldSendToolSummaries,
-                    sendPolicy,
-                  }),
-                  {
-                    cfg,
-                    dispatcher: dispatchHookDispatcher,
-                    abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
+                    shouldSendToolSummaries: shouldSendToolSummaries(),
+                    shouldSendToolSummariesNow: shouldSendToolSummaries,
+                    bypassForCommand,
                     onReplyStart: params.replyOptions?.onReplyStart,
                     recordProcessed,
                     markIdle,
-                  },
-                ),
-              trackDispatchLifecycleWork,
-            ),
-        ),
+                  }),
+                trackDispatchLifecycleWork,
+              ),
+          ),
       );
-      if (replyDispatchResult?.handled) {
+      if (directAcpDispatchResult) {
         commitInboundDedupeIfClaimed();
         completeDispatchReplyOperation();
         return attachSourceReplyDeliveryMode({
-          queuedFinal: replyDispatchResult.queuedFinal,
-          counts: replyDispatchResult.counts,
+          queuedFinal: directAcpDispatchResult.queuedFinal,
+          counts: directAcpDispatchResult.counts,
         });
       }
     }
