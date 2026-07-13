@@ -38,4 +38,18 @@ describe("zalo outbound sanitizeText", () => {
     const text = "The group has 5 active members.";
     expect(sanitizeOutboundText(text)).toBe(text);
   });
+
+  it("preserves literal tool-call examples inside fenced code", () => {
+    const text = [
+      "```xml",
+      '<tool_call>{"name":"exec"}</tool_call>',
+      "```",
+      "Use this only as an example.",
+    ].join("\n");
+    expect(sanitizeOutboundText(text)).toBe(text);
+  });
+
+  it("returns empty text when the payload contains only an internal trace", () => {
+    expect(sanitizeOutboundText("⚠️ 🛠️ `search repos (agent)` failed")).toBe("");
+  });
 });
