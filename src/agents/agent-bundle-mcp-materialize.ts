@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
@@ -12,6 +13,7 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
+import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
@@ -523,6 +525,9 @@ export async function materializeBundleMcpToolsForRun(params: {
       }
       disposed = true;
       releaseLease?.();
+      await completeDeferredSessionMcpRuntimeRetirement(params.runtime).catch((error: unknown) => {
+        logWarn(`bundle-mcp: deferred runtime retirement failed: ${formatErrorMessage(error)}`);
+      });
       await params.disposeRuntime?.();
     },
   };

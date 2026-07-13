@@ -988,6 +988,7 @@ export function createSubagentRegistryLifecycleController(params: {
         await retireSessionMcpRuntimeForSessionKey({
           sessionKey: cleanupParams.entry.childSessionKey,
           reason: "subagent-run-cleanup",
+          preserveActiveLeases: true,
           onError: (error, sessionId) => {
             params.warn("failed to retire subagent bundle MCP runtime", {
               error: buildSafeLifecycleErrorMeta(error),
@@ -1056,6 +1057,7 @@ export function createSubagentRegistryLifecycleController(params: {
     await retireSessionMcpRuntimeForSessionKey({
       sessionKey: cleanupParams.entry.childSessionKey,
       reason: cleanupParams.reason,
+      preserveActiveLeases: true,
       onError: (error, sessionId) => {
         params.warn("failed to retire subagent bundle MCP runtime", {
           error: buildSafeLifecycleErrorMeta(error),

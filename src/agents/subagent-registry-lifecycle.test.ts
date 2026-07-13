@@ -2597,6 +2597,7 @@ describe("subagent registry lifecycle hardening", () => {
     expectFields(retireArg, {
       sessionKey: entry.childSessionKey,
       reason: "subagent-run-cleanup",
+      preserveActiveLeases: true,
     });
     expect(retireArg.onError).toBeTypeOf("function");
   });
