@@ -439,6 +439,101 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(32768);
   });
 
+  it("falls back to provider-level contextWindow and maxTokens when a model omits them", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextWindow: 50_000,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as never;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(50_000);
+    expect(model?.maxTokens).toBe(4_096);
+  });
+
+  it("lets per-model contextWindow and maxTokens override provider-level defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextWindow: 50_000,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 10_000,
+                maxTokens: 2_048,
+              },
+            ],
+          },
+        },
+      },
+    } as never;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(10_000);
+    expect(model?.maxTokens).toBe(2_048);
+  });
+
+  it("clamps provider-level maxTokens to provider-level contextWindow", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextWindow: 4_096,
+            maxTokens: 8_192,
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as never;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(4_096);
+    expect(model?.maxTokens).toBe(4_096);
+  });
+
   it("normalizes stale mistral maxTokens that matched the full context window", () => {
     const cfg = buildMistralProviderConfig();
 
