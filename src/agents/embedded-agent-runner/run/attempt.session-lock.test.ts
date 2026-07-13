@@ -1445,11 +1445,10 @@ describe("embedded attempt session lock lifecycle", () => {
     });
 
     await controller.releaseForPrompt();
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        withSessionWriteLock: (run, options) => controller.withSessionWriteLock(run, options),
-      },
+    // A steering write made through the controller's write lock is owned, so
+    // publishing it advances the fence and reacquire must trust it. Contrast the
+    // sibling test above, where a raw unlocked append is foreign and takes over.
+    await controller.withSessionWriteLock(
       async () => {
         await appendSessionTranscriptMessage({
           transcriptPath: sessionFile,
@@ -1459,6 +1458,7 @@ describe("embedded attempt session lock lifecycle", () => {
           },
         });
       },
+      { publishOwnedWrite: true },
     );
 
     await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
