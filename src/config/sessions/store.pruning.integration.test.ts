@@ -15,6 +15,7 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
 } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
@@ -1393,7 +1394,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const agentDir = path.join(testDir, "agents", "main");
     const archiveDir = path.join(agentDir, "sessions");
-    const sqlitePath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
+    const sqlitePath = path.join(agentDir, "agent", "custom.sqlite");
     await fs.mkdir(archiveDir, { recursive: true });
     await seedSqliteSessionStore(sqlitePath, {
       fresh: { sessionId: "fresh-session", updatedAt: Date.now() },
@@ -1436,13 +1437,14 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(staleArchive, "stale", "utf-8");
 
-    const dryRun = await runSessionsCleanup({
-      cfg: {
-        session: { store: sharedStorePath },
-        agents: {
-          list: [{ id: "main", default: true }, { id: "work" }],
-        },
+    const cfg = {
+      session: { store: sharedStorePath },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
       },
+    } satisfies OpenClawConfig;
+    const dryRun = await runSessionsCleanup({
+      cfg,
       opts: { allAgents: true, dryRun: true, enforce: true },
     });
 
@@ -1458,6 +1460,20 @@ describe("Integration: saveSessionStore with pruning", () => {
       ),
     ).toBe(0);
     await expectPathExists(staleArchive);
+
+    const applied = await runSessionsCleanup({
+      cfg,
+      opts: { allAgents: true, enforce: true },
+    });
+
+    expect(applied.appliedSummaries.map((summary) => summary.agentId)).toEqual(["main", "work"]);
+    expect(
+      applied.appliedSummaries.reduce(
+        (total, summary) => total + summary.archiveCleanup.removedFiles,
+        0,
+      ),
+    ).toBe(1);
+    await expectPathMissing(staleArchive);
   });
 
   it("sessions cleanup keeps deleted and reset archives when retention is disabled", async () => {
