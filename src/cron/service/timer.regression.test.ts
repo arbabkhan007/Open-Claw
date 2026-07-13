@@ -45,6 +45,7 @@ import { run as runManualCronJob, stop } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
 import {
   applyJobResult,
+  applyTriggerNoFireResult,
   executeJobCoreWithTimeout,
   isRunnableJob,
   runMissedJobs,
@@ -701,11 +702,16 @@ describe("cron service timer regressions", () => {
       jobs: [cronJob],
     });
 
-    applyJobResult(state, cronJob, {
-      status: "ok",
-      startedAt: retryStartedAt,
-      endedAt: retryStartedAt,
-    });
+    applyJobResult(
+      state,
+      cronJob,
+      {
+        status: "ok",
+        startedAt: retryStartedAt,
+        endedAt: retryStartedAt,
+      },
+      { origin: "timer" },
+    );
 
     expect(cronJob.state.lastStatus).toBe("ok");
     expect(cronJob.state.nextRunAtMs).toBe(scheduledAt + everyTwelveHoursMs);
@@ -3904,12 +3910,17 @@ describe("cron service timer regressions", () => {
       state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
     });
 
-    const shouldDelete = applyJobResult(state, job, {
-      status: "ok",
-      delivered: true,
-      startedAt,
-      endedAt,
-    });
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      {
+        status: "ok",
+        delivered: true,
+        startedAt,
+        endedAt,
+      },
+      { origin: "timer" },
+    );
 
     expect(shouldDelete).toBe(false);
     expect(job.state.runningAtMs).toBeUndefined();
@@ -3942,12 +3953,17 @@ describe("cron service timer regressions", () => {
       state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
     });
 
-    const shouldDelete = applyJobResult(state, job, {
-      status: "error",
-      error: "synthetic failure",
-      startedAt,
-      endedAt,
-    });
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "synthetic failure",
+        startedAt,
+        endedAt,
+      },
+      { origin: "timer" },
+    );
 
     expect(shouldDelete).toBe(false);
     expect(job.state.runningAtMs).toBeUndefined();
@@ -3983,12 +3999,17 @@ describe("cron service timer regressions", () => {
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
 
     try {
-      const shouldDelete = applyJobResult(state, job, {
-        status: "ok",
-        delivered: true,
-        startedAt,
-        endedAt,
-      });
+      const shouldDelete = applyJobResult(
+        state,
+        job,
+        {
+          status: "ok",
+          delivered: true,
+          startedAt,
+          endedAt,
+        },
+        { origin: "timer" },
+      );
 
       expect(shouldDelete).toBe(false);
       expect(job.state.runningAtMs).toBeUndefined();
@@ -4024,12 +4045,17 @@ describe("cron service timer regressions", () => {
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
 
     try {
-      const shouldDelete = applyJobResult(state, job, {
-        status: "error",
-        error: "429 rate limit exceeded",
-        startedAt,
-        endedAt,
-      });
+      const shouldDelete = applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "429 rate limit exceeded",
+          startedAt,
+          endedAt,
+        },
+        { origin: "timer" },
+      );
 
       expect(shouldDelete).toBe(false);
       expect(job.state.runningAtMs).toBeUndefined();
@@ -4078,7 +4104,7 @@ describe("cron service timer regressions", () => {
     const startedAt = nowMs;
     const endedAt = nowMs + 2_000;
 
-    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { preserveSchedule: true });
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { origin: "operator" });
 
     expect(job.state.lastRunAtMs).toBe(startedAt);
     expect(job.state.nextRunAtMs).toBe(expectedNextMs);
@@ -4123,7 +4149,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "429 rate limit exceeded", startedAt, endedAt },
-      { preserveSchedule: true },
+      { origin: "operator" },
     );
 
     expect(job.state.lastRunAtMs).toBe(startedAt);
@@ -4153,24 +4179,29 @@ describe("cron service timer regressions", () => {
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
 
-    applyJobResult(state, job, {
-      status: "error",
-      error: "failed",
-      diagnostics: {
-        summary: "exec stderr tail",
-        entries: [
-          {
-            ts: startedAt,
-            source: "exec",
-            severity: "error",
-            message: "exec stderr tail",
-            exitCode: 1,
-          },
-        ],
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "failed",
+        diagnostics: {
+          summary: "exec stderr tail",
+          entries: [
+            {
+              ts: startedAt,
+              source: "exec",
+              severity: "error",
+              message: "exec stderr tail",
+              exitCode: 1,
+            },
+          ],
+        },
+        startedAt,
+        endedAt,
       },
-      startedAt,
-      endedAt,
-    });
+      { origin: "timer" },
+    );
 
     expect(job.state.lastDiagnostics?.summary).toBe("exec stderr tail");
     expect(job.state.lastDiagnostics?.entries).toEqual([
@@ -4226,7 +4257,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "ok", delivered: true, startedAt, endedAt },
-      { isManual: true },
+      { origin: "operator" },
     );
 
     expect(shouldDelete).toBe(false);
@@ -4261,12 +4292,17 @@ describe("cron service timer regressions", () => {
     });
     job.deleteAfterRun = true;
 
-    const shouldDelete = applyJobResult(state, job, {
-      status: "ok",
-      delivered: true,
-      startedAt,
-      endedAt,
-    });
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      {
+        status: "ok",
+        delivered: true,
+        startedAt,
+        endedAt,
+      },
+      { origin: "timer" },
+    );
 
     expect(shouldDelete).toBe(true);
   });
@@ -4297,7 +4333,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "timeout", startedAt, endedAt },
-      { isManual: true },
+      { origin: "operator" },
     );
 
     expect(shouldDelete).toBe(false);
@@ -4332,7 +4368,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "ok", delivered: true, startedAt, endedAt },
-      { isManual: true },
+      { origin: "operator" },
     );
 
     expect(shouldDelete).toBe(false);
@@ -4370,7 +4406,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "ok", delivered: true, startedAt, endedAt },
-      { isManual: true },
+      { origin: "operator" },
     );
 
     expect(shouldDelete).toBe(false);
@@ -4405,7 +4441,7 @@ describe("cron service timer regressions", () => {
       state,
       job,
       { status: "error", error: "manual failure", startedAt, endedAt },
-      { isManual: true },
+      { origin: "operator" },
     );
 
     expect(job.state.consecutiveErrors).toBe(3);
@@ -4432,7 +4468,7 @@ describe("cron service timer regressions", () => {
       state: { runningAtMs: startedAt, consecutiveErrors: 3 },
     });
 
-    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { isManual: true });
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { origin: "operator" });
 
     expect(job.state.consecutiveErrors).toBe(3);
   });
@@ -4464,7 +4500,7 @@ describe("cron service timer regressions", () => {
       state: { nextRunAtMs },
     };
 
-    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { isManual: true });
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { origin: "operator" });
 
     expect(job.state.lastRunWasManual).toBe(true);
     expect(job.enabled).toBe(true);
@@ -4520,19 +4556,24 @@ it("#83933: manual error run does NOT trigger failure alert", () => {
     state,
     job,
     { status: "error", error: "test error", startedAt, endedAt },
-    { isManual: true },
+    { origin: "operator" },
   );
 
   expect(sendCronFailureAlert).not.toHaveBeenCalled();
   expect(job.state.consecutiveErrors ?? 0).toBe(0);
 
   // Scheduled error run — SHOULD trigger alert (after: 1)
-  applyJobResult(state, job, {
-    status: "error",
-    error: "test error",
-    startedAt,
-    endedAt,
-  });
+  applyJobResult(
+    state,
+    job,
+    {
+      status: "error",
+      error: "test error",
+      startedAt,
+      endedAt,
+    },
+    { origin: "timer" },
+  );
 
   expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
   expect(job.state.consecutiveErrors).toBe(1);
@@ -4572,17 +4613,13 @@ it("#83933: manual at-job error does NOT disable job or clear nextRunAtMs", () =
     state,
     job,
     { status: "error", error: "temporary timeout", startedAt, endedAt },
-    { isManual: true },
+    { origin: "operator" },
   );
 
   expect(shouldDelete).toBe(false);
   expect(job.enabled).toBe(true);
   expect(job.state.nextRunAtMs).toBe(scheduledAt);
   expect(job.state.consecutiveErrors ?? 0).toBe(0);
-  expect((log as { info: ReturnType<typeof vi.fn> }).info).toHaveBeenCalledWith(
-    { jobId: "manual-atjob-error", jobName: "one-shot reminder" },
-    "cron: skipping at-job error handling for manual run — job preserved for scheduled execution",
-  );
 });
 
 it("#83933: manual success does NOT clear lastFailureAlertAtMs cooldown", () => {
@@ -4622,7 +4659,7 @@ it("#83933: manual success does NOT clear lastFailureAlertAtMs cooldown", () => 
     state,
     job,
     { status: "ok", delivered: true, startedAt, endedAt },
-    { isManual: true },
+    { origin: "operator" },
   );
 
   expect(job.state.consecutiveErrors).toBe(3);
@@ -4662,12 +4699,17 @@ it("#83933: scheduled success DOES clear lastFailureAlertAtMs (control)", () => 
   });
 
   // Scheduled success — SHOULD clear lastFailureAlertAtMs and reset counters
-  applyJobResult(state, job, {
-    status: "ok",
-    delivered: true,
-    startedAt,
-    endedAt,
-  });
+  applyJobResult(
+    state,
+    job,
+    {
+      status: "ok",
+      delivered: true,
+      startedAt,
+      endedAt,
+    },
+    { origin: "timer" },
+  );
 
   expect(job.state.consecutiveErrors).toBe(0);
   expect(job.state.lastFailureAlertAtMs).toBeUndefined();
@@ -4705,16 +4747,12 @@ it("#83933: manual error on every-job does NOT rewrite nextRunAtMs", () => {
     state,
     job,
     { status: "error", error: "timeout", startedAt, endedAt },
-    { isManual: true },
+    { origin: "operator" },
   );
 
   expect(job.state.nextRunAtMs).toBe(originalNextRun);
   expect(job.state.consecutiveErrors).toBe(2);
   expect(job.enabled).toBe(true);
-  expect((log as { info: ReturnType<typeof vi.fn> }).info).toHaveBeenCalledWith(
-    { jobId: "manual-every-error", jobName: "recurring report" },
-    "cron: skipping recurring-job error backoff for manual run — nextRunAtMs preserved",
-  );
 });
 
 it("#83933: scheduled error on every-job DOES apply backoff (control)", () => {
@@ -4745,12 +4783,17 @@ it("#83933: scheduled error on every-job DOES apply backoff (control)", () => {
     state: { nextRunAtMs: originalNextRun, consecutiveErrors: 2 },
   });
 
-  applyJobResult(state, job, {
-    status: "error",
-    error: "timeout",
-    startedAt,
-    endedAt,
-  });
+  applyJobResult(
+    state,
+    job,
+    {
+      status: "error",
+      error: "timeout",
+      startedAt,
+      endedAt,
+    },
+    { origin: "timer" },
+  );
 
   // Scheduled error should apply backoff — nextRunAtMs should change
   expect(job.state.nextRunAtMs).not.toBe(originalNextRun);
@@ -4788,7 +4831,7 @@ it("#83933: manual error on recurring job does not block scheduled fire via back
     state,
     manualJob,
     { status: "error", error: "boom", startedAt, endedAt },
-    { isManual: true },
+    { origin: "operator" },
   );
 
   expect(manualJob.state.lastRunWasManual).toBe(true);
@@ -4813,7 +4856,12 @@ it("#83933: manual error on recurring job does not block scheduled fire via back
   expect(manualJob.state.nextRunAtMs).toBe(naturalNextMs);
 
   // Control: a timer-triggered error on the same schedule still backs off.
-  applyJobResult(state, scheduledJob, { status: "error", error: "boom", startedAt, endedAt });
+  applyJobResult(
+    state,
+    scheduledJob,
+    { status: "error", error: "boom", startedAt, endedAt },
+    { origin: "timer" },
+  );
 
   expect(scheduledJob.state.lastRunWasManual).toBe(false);
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(scheduledJob);
@@ -4821,4 +4869,48 @@ it("#83933: manual error on recurring job does not block scheduled fire via back
   expect(scheduledJob.state.nextRunAtMs).toBe(backoffUntilMs);
   expect(scheduledJob.state.nextRunAtMs!).toBeGreaterThan(naturalNextMs);
 });
+
+it("#83933: quiet trigger tick perturbs scheduler state for timer but not operator", () => {
+  const startedAt = Date.parse("2026-06-02T09:00:30.000Z");
+  const endedAt = startedAt + 100;
+  const triggerEval = { fired: false, stateChanged: false } as const;
+
+  const makeTriggerJob = (id: string): CronJob => {
+    const job = createIsolatedRegressionJob({
+      id,
+      name: id,
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "watcher" },
+      state: { nextRunAtMs: startedAt, consecutiveErrors: 2, scheduleErrorCount: 1 },
+    });
+    job.trigger = { script: "return false;" };
+    return job;
+  };
+
+  const timerJob = makeTriggerJob("trigger-quiet-timer");
+  const operatorJob = makeTriggerJob("trigger-quiet-operator");
+  const state = createRunningCronServiceState({
+    storePath: "/tmp/cron-trigger-nofire-origin.json",
+    log: noopLogger,
+    nowMs: () => endedAt,
+    jobs: [timerJob, operatorJob],
+  });
+
+  // Timer quiet tick: a non-firing evaluation is successful scheduler work, so
+  // it resets error counters and advances the next evaluation slot.
+  applyTriggerNoFireResult(state, timerJob, { startedAt, endedAt, triggerEval }, "timer");
+  expect(timerJob.state.consecutiveErrors).toBe(0);
+  expect(timerJob.state.scheduleErrorCount).toBe(0);
+  expect(timerJob.state.nextRunAtMs).not.toBe(startedAt);
+
+  // Operator due-check records observability only; scheduler-owned counters and
+  // the pending slot stay untouched so the scheduled evaluation still fires (#83538).
+  applyTriggerNoFireResult(state, operatorJob, { startedAt, endedAt, triggerEval }, "operator");
+  expect(operatorJob.state.consecutiveErrors).toBe(2);
+  expect(operatorJob.state.scheduleErrorCount).toBe(1);
+  expect(operatorJob.state.nextRunAtMs).toBe(startedAt);
+  expect(operatorJob.state.triggerEvalCount).toBe(1);
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
