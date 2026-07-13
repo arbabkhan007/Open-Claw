@@ -9,6 +9,7 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
@@ -117,11 +118,11 @@ export async function resolveVydraRequestContext(params: {
     throw new Error("Vydra API key missing");
   }
   const fetchFn = fetch;
+  const providerConfig = params.cfg.models?.providers?.vydra;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: resolveVydraBaseUrlFromConfig(params.cfg),
       defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-      allowPrivateNetwork: false,
       defaultHeaders: {
         Authorization: `Bearer ${auth.apiKey}`,
         "Content-Type": "application/json",
@@ -129,6 +130,7 @@ export async function resolveVydraRequestContext(params: {
       provider: "vydra",
       capability: params.capability,
       transport: "http",
+      request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
     });
   return {
     fetchFn,

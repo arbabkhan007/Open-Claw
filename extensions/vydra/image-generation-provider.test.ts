@@ -149,6 +149,44 @@ describe("vydra image-generation provider", () => {
     expect(createCall[1].method).toBe("POST");
   });
 
+  it("applies configured request policy to the image creation request", async () => {
+    stubVydraApiKey();
+    const fetchMock = stubFetch(
+      jsonResponse({
+        jobId: "job-policy",
+        status: "completed",
+        imageUrl: "https://cdn.vydra.ai/generated/policy.png",
+      }),
+      binaryResponse("png-data", "image/png"),
+    );
+
+    const provider = buildVydraImageGenerationProvider();
+    await provider.generateImage({
+      provider: "vydra",
+      model: "grok-imagine",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            vydra: {
+              baseUrl: "http://127.0.0.1:11434/api/v1",
+              models: [],
+              request: {
+                allowPrivateNetwork: true,
+                headers: { "X-Vydra-Policy": "image" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const createCall = fetchCall(fetchMock);
+    expect(createCall[0]).toBe("http://127.0.0.1:11434/api/v1/models/grok-imagine");
+    const headers = new Headers(createCall[1].headers);
+    expect(headers.get("x-vydra-policy")).toBe("image");
+  });
+
   it("polls jobs when the create response is not completed yet", async () => {
     stubVydraApiKey();
     const fetchMock = stubFetch(

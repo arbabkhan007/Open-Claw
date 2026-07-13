@@ -80,6 +80,45 @@ describe("vydra video-generation provider", () => {
     });
   });
 
+  it("applies configured request policy to the video creation request", async () => {
+    stubVydraApiKey();
+    const fetchMock = stubFetch(
+      jsonResponse({
+        jobId: "job-policy",
+        status: "completed",
+        videoUrl: "https://cdn.vydra.ai/generated/policy.mp4",
+      }),
+      binaryResponse("mp4-data", "video/mp4"),
+    );
+
+    const provider = buildVydraVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "vydra",
+      model: "veo3",
+      prompt: "tiny city at sunrise",
+      cfg: {
+        models: {
+          providers: {
+            vydra: {
+              baseUrl: "http://127.0.0.1:11434/api/v1",
+              models: [],
+              request: {
+                allowPrivateNetwork: true,
+                headers: { "X-Vydra-Policy": "video" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const createCall = fetchCall(fetchMock, 0);
+    expect(createCall[0]).toBe("http://127.0.0.1:11434/api/v1/models/veo3");
+    const createInit = createCall[1] as { headers?: HeadersInit } | undefined;
+    const headers = new Headers(createInit?.headers);
+    expect(headers.get("x-vydra-policy")).toBe("video");
+  });
+
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     stubVydraApiKey();
     stubFetch(
