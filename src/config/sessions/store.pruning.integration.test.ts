@@ -1379,6 +1379,44 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshReset);
   });
 
+  it("sessions cleanup scans the sibling archive directory for a direct SQLite target", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const agentDir = path.join(testDir, "agents", "main");
+    const archiveDir = path.join(agentDir, "sessions");
+    const sqlitePath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(archiveDir, { recursive: true });
+    await seedSqliteSessionStore(sqlitePath, {
+      fresh: { sessionId: "fresh-session", updatedAt: Date.now() },
+    });
+    const staleArchive = path.join(
+      archiveDir,
+      `stale.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "stale", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: sqlitePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath: sqlitePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 1,
+      removedFiles: 1,
+    });
+    await expectPathExists(staleArchive);
+  });
+
   it("sessions cleanup keeps deleted and reset archives when retention is disabled", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

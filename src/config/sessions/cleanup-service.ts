@@ -24,7 +24,10 @@ import {
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  resolveSessionTranscriptArchiveDirectoryFromStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
 import {
   EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
@@ -133,6 +136,7 @@ function loadCleanupSessionStore(
 }
 
 async function cleanupArchivedTranscriptsForSummary(params: {
+  agentId?: string;
   storePath: string;
   maintenance: ResolvedSessionMaintenanceConfig;
   dryRun: boolean;
@@ -140,7 +144,11 @@ async function cleanupArchivedTranscriptsForSummary(params: {
   onRemoveFile?: (canonicalPath: string) => void;
 }): Promise<SessionArchiveCleanupReport> {
   const result = await cleanupSessionArchivedTranscriptFiles({
-    directories: [path.dirname(path.resolve(params.storePath))],
+    directories: [
+      resolveSessionTranscriptArchiveDirectoryFromStorePath(params.storePath, {
+        agentId: params.agentId,
+      }),
+    ],
     rules: resolveSessionArchiveCleanupRules(params.maintenance),
     dryRun: params.dryRun,
     excludeCanonicalPaths: params.excludeCanonicalPaths,
@@ -463,6 +471,7 @@ async function previewStoreCleanup(params: {
   });
   const archiveCleanupFilePaths = new Set<string>();
   const archiveCleanup = await cleanupArchivedTranscriptsForSummary({
+    agentId: params.target.agentId,
     storePath: params.target.storePath,
     maintenance: params.maintenance,
     dryRun: true,
@@ -619,6 +628,7 @@ export async function runSessionsCleanup(params: {
           ? { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT }
           : (appliedReport?.archiveCleanup ??
             (await cleanupArchivedTranscriptsForSummary({
+              agentId: target.agentId,
               storePath: target.storePath,
               maintenance,
               dryRun: false,
