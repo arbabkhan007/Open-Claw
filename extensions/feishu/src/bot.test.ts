@@ -11,6 +11,7 @@ import { handleFeishuMessage } from "./bot.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 
 type ConfiguredBindingRoute = ReturnType<typeof ConversationRuntime.resolveConfiguredBindingRoute>;
 type BoundConversation = ReturnType<
@@ -166,6 +167,25 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
 }
 let currentRuntimeConfig = {} as ClawdbotConfig;
 
+function createRuntimeContexts(): PluginRuntime["channel"]["runtimeContexts"] {
+  const contexts = new Map<string, unknown>();
+  const keyFor = (params: { channelId: string; accountId?: string | null; capability: string }) =>
+    `${params.channelId.trim()}\0${params.accountId?.trim() ?? ""}\0${params.capability.trim()}`;
+  return {
+    register: (params) => {
+      const key = keyFor(params);
+      contexts.set(key, params.context);
+      return {
+        dispose: () => {
+          contexts.delete(key);
+        },
+      };
+    },
+    get: (params) => contexts.get(keyFor(params)) as never,
+    watch: () => () => {},
+  };
+}
+
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   return {
     config: {
@@ -195,6 +215,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         shouldComputeCommandAuthorized: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
       },
+      runtimeContexts: createRuntimeContexts(),
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
         upsertPairingRequest: vi.fn(),
@@ -298,12 +319,14 @@ const {
   mockTranscribeFirstAudio,
   mockMaybeCreateDynamicAgent,
 } = vi.hoisted(() => ({
-  mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcher: createReplyDispatcher(),
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-    ensureNoVisibleReplyFallback: vi.fn(),
-  })),
+  mockCreateFeishuReplyDispatcher: vi.fn(
+    (_params: { onTypingTargetMissing?: (messageId: string) => void }) => ({
+      dispatcher: createReplyDispatcher(),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    }),
+  ),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
   mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
   mockListFeishuThreadMessages: vi.fn().mockResolvedValue([]),
@@ -488,6 +511,36 @@ describe("handleFeishuMessage ACP routing", () => {
     });
 
     setFeishuRuntime(createFeishuBotRuntime());
+  });
+
+  it("skips agent dispatch when the source Feishu message was recalled first", async () => {
+    const pluginRuntime = createFeishuBotRuntime();
+    setFeishuRuntime(pluginRuntime);
+    recallFeishuSourceMessage({
+      channelRuntime: pluginRuntime.channel,
+      accountId: "default",
+      messageId: "msg-recalled-before-dispatch",
+    });
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { enabled: true, dmPolicy: "open" } },
+      } as ClawdbotConfig,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-recalled-before-dispatch",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: pluginRuntime.channel,
+    });
+
+    expect(mockResolveAgentRoute).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
   });
 
   it("ensures configured ACP routes for Feishu DMs", async () => {
@@ -1032,6 +1085,7 @@ describe("handleFeishuMessage command authorization", () => {
     size: Buffer.byteLength("video"),
     contentType: "video/mp4",
   });
+  let commandRuntime: PluginRuntime;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1067,38 +1121,188 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     mockEnqueueSystemEvent.mockReset();
-    setFeishuRuntime(
-      createFeishuBotRuntime({
-        system: {
-          enqueueSystemEvent: mockEnqueueSystemEvent,
+    commandRuntime = createFeishuBotRuntime({
+      system: {
+        enqueueSystemEvent: mockEnqueueSystemEvent,
+      },
+      channel: {
+        reply: {
+          resolveEnvelopeFormatOptions:
+            resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+          finalizeInboundContext: mockFinalizeInboundContext as never,
+          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+          withReplyDispatcher: mockWithReplyDispatcher as never,
         },
-        channel: {
-          reply: {
-            resolveEnvelopeFormatOptions:
-              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: mockFinalizeInboundContext as never,
-            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-            withReplyDispatcher: mockWithReplyDispatcher as never,
-          },
-          commands: {
-            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
-          },
-          pairing: {
-            readAllowFromStore: mockReadAllowFromStore,
-            upsertPairingRequest: mockUpsertPairingRequest,
-            buildPairingReply: mockBuildPairingReply,
-          },
-          media: {
-            saveMediaBuffer: mockSaveMediaBuffer,
-          },
+        commands: {
+          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+        },
+        pairing: {
+          readAllowFromStore: mockReadAllowFromStore,
+          upsertPairingRequest: mockUpsertPairingRequest,
+          buildPairingReply: mockBuildPairingReply,
         },
         media: {
-          detectMime: vi.fn(async () => "application/octet-stream"),
+          saveMediaBuffer: mockSaveMediaBuffer,
         },
-      }),
+      },
+      media: {
+        detectMime: vi.fn(async () => "application/octet-stream"),
+      },
+    });
+    setFeishuRuntime(commandRuntime);
+  });
+
+  it("aborts an in-flight agent dispatch when the source Feishu message is recalled", async () => {
+    let observedAbortSignal: AbortSignal | undefined;
+    mockDispatchReplyFromConfig.mockImplementationOnce(
+      async (params: {
+        replyOptions?: {
+          abortSignal?: AbortSignal;
+        };
+      }) => {
+        observedAbortSignal = params.replyOptions?.abortSignal;
+        recallFeishuSourceMessage({
+          channelRuntime: commandRuntime.channel,
+          accountId: "default",
+          messageId: "msg-recalled-during-run",
+        });
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
     );
+
+    await dispatchMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-command-user",
+          },
+        },
+        message: {
+          message_id: "msg-recalled-during-run",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: commandRuntime.channel,
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(observedAbortSignal?.aborted).toBe(true);
+  });
+
+  it("aborts an in-flight agent dispatch when the source typing target is missing", async () => {
+    let observedAbortSignal: AbortSignal | undefined;
+    mockDispatchReplyFromConfig.mockImplementationOnce(
+      async (params: {
+        replyOptions?: {
+          abortSignal?: AbortSignal;
+        };
+      }) => {
+        observedAbortSignal = params.replyOptions?.abortSignal;
+        const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+          | { onTypingTargetMissing?: (messageId: string) => void }
+          | undefined;
+        dispatcherParams?.onTypingTargetMissing?.("msg-missing-during-typing");
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    );
+
+    await dispatchMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-command-user",
+          },
+        },
+        message: {
+          message_id: "msg-missing-during-typing",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: commandRuntime.channel,
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(observedAbortSignal?.aborted).toBe(true);
+  });
+
+  it("suppresses late reply delivery after the source typing target is missing", async () => {
+    let beforeDeliver:
+      | ((payload: { text: string }) => { text: string } | null | Promise<{ text: string } | null>)
+      | undefined;
+    const dispatcher = {
+      ...createReplyDispatcher(),
+      appendBeforeDeliver: vi.fn((callback) => {
+        beforeDeliver = callback;
+      }),
+    } as ReturnType<typeof createReplyDispatcher> & {
+      appendBeforeDeliver: ReturnType<typeof vi.fn>;
+    };
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher,
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
+
+    let lateDeliveryResult: { text: string } | null | undefined;
+    mockDispatchReplyFromConfig.mockImplementationOnce(async () => {
+      const dispatcherParams = mockCreateFeishuReplyDispatcher.mock.calls[0]?.[0] as
+        | { onTypingTargetMissing?: (messageId: string) => void }
+        | undefined;
+      dispatcherParams?.onTypingTargetMissing?.("msg-missing-before-final");
+      lateDeliveryResult = await beforeDeliver?.({ text: "late final" });
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+
+    await dispatchMessage({
+      cfg: {
+        channels: {
+          feishu: {
+            dmPolicy: "open",
+          },
+        },
+      } as ClawdbotConfig,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-command-user",
+          },
+        },
+        message: {
+          message_id: "msg-missing-before-final",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+      channelRuntime: commandRuntime.channel,
+    });
+
+    expect(dispatcher.appendBeforeDeliver).toHaveBeenCalledTimes(1);
+    expect(lateDeliveryResult).toBeNull();
   });
 
   it("routes /compact through the standard reply dispatch path (#90185)", async () => {

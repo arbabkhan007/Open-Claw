@@ -30,6 +30,7 @@ import {
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -68,6 +69,11 @@ import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+import {
+  bindFeishuSourceMessageRun,
+  isFeishuSourceMessageRecalled,
+  recallFeishuSourceMessage,
+} from "./source-message-recall.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -88,6 +94,103 @@ const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
+
+type FeishuDispatchReplyOptions = Parameters<
+  PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]
+>[0]["replyOptions"];
+type FeishuDispatchReplyDispatcher = Parameters<
+  PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]
+>[0]["dispatcher"];
+
+function bindFeishuRecallAwareDispatch(params: {
+  channelRuntime: PluginRuntime["channel"];
+  accountId: string;
+  messageId: string;
+  dispatcher: FeishuDispatchReplyDispatcher;
+  replyOptions?: FeishuDispatchReplyOptions;
+  log: (...args: unknown[]) => void;
+}): { replyOptions?: FeishuDispatchReplyOptions; aborted: boolean; dispose: () => void } {
+  const binding = bindFeishuSourceMessageRun({
+    channelRuntime: params.channelRuntime,
+    accountId: params.accountId,
+    messageId: params.messageId,
+  });
+  if (!binding) {
+    return { replyOptions: params.replyOptions, aborted: false, dispose: () => {} };
+  }
+
+  let loggedDeliverySuppression = false;
+  params.dispatcher.appendBeforeDeliver?.((payload) => {
+    if (
+      binding.abortSignal.aborted ||
+      isFeishuSourceMessageRecalled({
+        channelRuntime: params.channelRuntime,
+        accountId: params.accountId,
+        messageId: params.messageId,
+      })
+    ) {
+      if (!loggedDeliverySuppression) {
+        loggedDeliverySuppression = true;
+        params.log(
+          `feishu[${params.accountId}]: suppressing reply for recalled source message ${params.messageId}`,
+        );
+      }
+      return null;
+    }
+    return payload;
+  });
+
+  return {
+    aborted: binding.abortSignal.aborted,
+    dispose: binding.dispose,
+    replyOptions: {
+      ...params.replyOptions,
+      abortSignal: params.replyOptions?.abortSignal
+        ? AbortSignal.any([params.replyOptions.abortSignal, binding.abortSignal])
+        : binding.abortSignal,
+    },
+  };
+}
+
+function createFeishuTypingTargetMissingHandler(params: {
+  channelRuntime: PluginRuntime["channel"];
+  accountId: string;
+  sourceMessageId: string;
+  typingTargetMessageId?: string;
+  log: (...args: unknown[]) => void;
+}): ((messageId: string) => void) | undefined {
+  if (params.typingTargetMessageId !== params.sourceMessageId) {
+    return undefined;
+  }
+
+  let logged = false;
+  return (messageId: string) => {
+    if (messageId !== params.sourceMessageId) {
+      return;
+    }
+    const result = recallFeishuSourceMessage({
+      channelRuntime: params.channelRuntime,
+      accountId: params.accountId,
+      messageId,
+    });
+    if (!result.recorded) {
+      if (!logged) {
+        logged = true;
+        params.log(
+          `feishu[${params.accountId}]: source message missing during typing ${messageId} ignored without runtime context`,
+        );
+      }
+      return;
+    }
+    if (!logged) {
+      logged = true;
+      params.log(
+        `feishu[${params.accountId}]: source message missing during typing ${messageId} ` +
+          `(abortedRuns=${result.abortedRuns}, alreadyRecalled=${result.alreadyRecalled})`,
+      );
+    }
+  };
+}
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
@@ -724,6 +827,16 @@ export async function handleFeishuMessage(params: {
     const core = {
       channel: channelRuntime?.inbound ? channelRuntime : getFeishuRuntime().channel,
     } as ReturnType<typeof getFeishuRuntime>;
+    if (
+      isFeishuSourceMessageRecalled({
+        channelRuntime: core.channel,
+        accountId: account.accountId,
+        messageId: ctx.messageId,
+      })
+    ) {
+      log(`feishu[${account.accountId}]: skipping recalled message ${ctx.messageId}`);
+      return;
+    }
     const pairing = createChannelPairingController({
       core,
       channel: "feishu",
@@ -1614,52 +1727,76 @@ export async function handleFeishuMessage(params: {
               mentionTargets: ctx.mentionTargets,
               messageCreateTimeMs,
               sessionKey: agentSessionKey,
+              onTypingTargetMissing: createFeishuTypingTargetMissingHandler({
+                channelRuntime: core.channel,
+                accountId: account.accountId,
+                sourceMessageId: ctx.messageId,
+                typingTargetMessageId,
+                log,
+              }),
             });
 
           log(
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          const turnResult = await core.channel.inbound.run({
-            channel: "feishu",
-            accountId: route.accountId,
-            raw: ctx,
-            adapter: {
-              ingest: () => ({
-                id: ctx.messageId,
-                timestamp: messageCreateTimeMs,
-                rawText: ctx.content,
-                textForAgent: agentCtx.BodyForAgent,
-                textForCommands: agentCtx.CommandBody,
-                raw: ctx,
-              }),
-              resolveTurn: () => ({
-                channel: "feishu",
-                accountId: route.accountId,
-                routeSessionKey: agentSessionKey,
-                storePath: agentStorePath,
-                ctxPayload: agentCtx,
-                recordInboundSession: core.channel.session.recordInboundSession,
-                record: agentRecord,
-                onPreDispatchFailure: () =>
-                  core.channel.reply.settleReplyDispatcher({
-                    dispatcher,
-                    onSettled: () => markDispatchIdle(),
-                  }),
-                runDispatch: () =>
-                  core.channel.reply.withReplyDispatcher({
-                    dispatcher,
-                    onSettled: () => markDispatchIdle(),
-                    run: () =>
-                      core.channel.reply.dispatchReplyFromConfig({
-                        ctx: agentCtx,
-                        cfg,
-                        dispatcher,
-                        replyOptions,
-                      }),
-                  }),
-              }),
-            },
+          const recallAwareDispatch = bindFeishuRecallAwareDispatch({
+            channelRuntime: core.channel,
+            accountId: account.accountId,
+            messageId: ctx.messageId,
+            dispatcher,
+            replyOptions,
+            log,
           });
+          if (recallAwareDispatch.aborted) {
+            recallAwareDispatch.dispose();
+            log(
+              `feishu[${account.accountId}]: skipping recalled broadcast dispatch message=${ctx.messageId} agent=${agentId}`,
+            );
+            return;
+          }
+          const turnResult = await core.channel.inbound
+            .run({
+              channel: "feishu",
+              accountId: route.accountId,
+              raw: ctx,
+              adapter: {
+                ingest: () => ({
+                  id: ctx.messageId,
+                  timestamp: messageCreateTimeMs,
+                  rawText: ctx.content,
+                  textForAgent: agentCtx.BodyForAgent,
+                  textForCommands: agentCtx.CommandBody,
+                  raw: ctx,
+                }),
+                resolveTurn: () => ({
+                  channel: "feishu",
+                  accountId: route.accountId,
+                  routeSessionKey: agentSessionKey,
+                  storePath: agentStorePath,
+                  ctxPayload: agentCtx,
+                  recordInboundSession: core.channel.session.recordInboundSession,
+                  record: agentRecord,
+                  onPreDispatchFailure: () =>
+                    core.channel.reply.settleReplyDispatcher({
+                      dispatcher,
+                      onSettled: () => markDispatchIdle(),
+                    }),
+                  runDispatch: () =>
+                    core.channel.reply.withReplyDispatcher({
+                      dispatcher,
+                      onSettled: () => markDispatchIdle(),
+                      run: () =>
+                        core.channel.reply.dispatchReplyFromConfig({
+                          ctx: agentCtx,
+                          cfg,
+                          dispatcher,
+                          replyOptions: recallAwareDispatch.replyOptions,
+                        }),
+                    }),
+                }),
+              },
+            })
+            .finally(recallAwareDispatch.dispose);
           if (
             turnResult.dispatched &&
             shouldSendNoVisibleReplyFallback({
@@ -1687,40 +1824,57 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.inbound.run({
-            channel: "feishu",
-            accountId: route.accountId,
-            raw: ctx,
-            adapter: {
-              ingest: () => ({
-                id: ctx.messageId,
-                timestamp: messageCreateTimeMs,
-                rawText: ctx.content,
-                textForAgent: agentCtx.BodyForAgent,
-                textForCommands: agentCtx.CommandBody,
-                raw: ctx,
-              }),
-              resolveTurn: () => ({
-                channel: "feishu",
-                accountId: route.accountId,
-                routeSessionKey: agentSessionKey,
-                storePath: agentStorePath,
-                ctxPayload: agentCtx,
-                recordInboundSession: core.channel.session.recordInboundSession,
-                record: agentRecord,
-                runDispatch: () =>
-                  core.channel.reply.withReplyDispatcher({
-                    dispatcher: noopDispatcher,
-                    run: () =>
-                      core.channel.reply.dispatchReplyFromConfig({
-                        ctx: agentCtx,
-                        cfg,
-                        dispatcher: noopDispatcher,
-                      }),
-                  }),
-              }),
-            },
+          const recallAwareDispatch = bindFeishuRecallAwareDispatch({
+            channelRuntime: core.channel,
+            accountId: account.accountId,
+            messageId: ctx.messageId,
+            dispatcher: noopDispatcher,
+            log,
           });
+          if (recallAwareDispatch.aborted) {
+            recallAwareDispatch.dispose();
+            log(
+              `feishu[${account.accountId}]: skipping recalled broadcast observer message=${ctx.messageId} agent=${agentId}`,
+            );
+            return;
+          }
+          await core.channel.inbound
+            .run({
+              channel: "feishu",
+              accountId: route.accountId,
+              raw: ctx,
+              adapter: {
+                ingest: () => ({
+                  id: ctx.messageId,
+                  timestamp: messageCreateTimeMs,
+                  rawText: ctx.content,
+                  textForAgent: agentCtx.BodyForAgent,
+                  textForCommands: agentCtx.CommandBody,
+                  raw: ctx,
+                }),
+                resolveTurn: () => ({
+                  channel: "feishu",
+                  accountId: route.accountId,
+                  routeSessionKey: agentSessionKey,
+                  storePath: agentStorePath,
+                  ctxPayload: agentCtx,
+                  recordInboundSession: core.channel.session.recordInboundSession,
+                  record: agentRecord,
+                  runDispatch: () =>
+                    core.channel.reply.withReplyDispatcher({
+                      dispatcher: noopDispatcher,
+                      run: () =>
+                        core.channel.reply.dispatchReplyFromConfig({
+                          ctx: agentCtx,
+                          cfg,
+                          dispatcher: noopDispatcher,
+                          replyOptions: recallAwareDispatch.replyOptions,
+                        }),
+                    }),
+                }),
+              },
+            })
+            .finally(recallAwareDispatch.dispose);
         }
       };
 
@@ -1797,68 +1951,90 @@ export async function handleFeishuMessage(params: {
           mentionTargets: ctx.mentionTargets,
           messageCreateTimeMs,
           sessionKey: route.sessionKey,
+          onTypingTargetMissing: createFeishuTypingTargetMissingHandler({
+            channelRuntime: core.channel,
+            accountId: account.accountId,
+            sourceMessageId: ctx.messageId,
+            typingTargetMessageId,
+            log,
+          }),
         });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.inbound.run({
-        channel: "feishu",
-        accountId: route.accountId,
-        raw: ctx,
-        adapter: {
-          ingest: () => ({
-            id: ctx.messageId,
-            timestamp: messageCreateTimeMs,
-            rawText: ctx.content,
-            textForAgent: ctxPayload.BodyForAgent,
-            textForCommands: ctxPayload.CommandBody,
-            raw: ctx,
-          }),
-          resolveTurn: () => ({
-            channel: "feishu",
-            accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
-            ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
-            record: {
-              updateLastRoute: buildFeishuInboundLastRouteUpdate({
-                sessionKey: route.sessionKey,
-                accountId: route.accountId,
-              }),
-              onRecordError: (err) => {
-                log(
-                  `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
-                );
-              },
-            },
-            history: {
-              isGroup,
-              historyKey,
-              historyMap: chatHistories,
-              limit: historyLimit,
-            },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-              }),
-            runDispatch: () =>
-              core.channel.reply.withReplyDispatcher({
-                dispatcher,
-                onSettled: () => {
-                  markDispatchIdle();
-                },
-                run: () =>
-                  core.channel.reply.dispatchReplyFromConfig({
-                    ctx: ctxPayload,
-                    cfg: effectiveCfg,
-                    dispatcher,
-                    replyOptions,
-                  }),
-              }),
-          }),
-        },
+      const recallAwareDispatch = bindFeishuRecallAwareDispatch({
+        channelRuntime: core.channel,
+        accountId: account.accountId,
+        messageId: ctx.messageId,
+        dispatcher,
+        replyOptions,
+        log,
       });
+      if (recallAwareDispatch.aborted) {
+        recallAwareDispatch.dispose();
+        log(`feishu[${account.accountId}]: skipping recalled message ${ctx.messageId}`);
+        return;
+      }
+      const turnResult = await core.channel.inbound
+        .run({
+          channel: "feishu",
+          accountId: route.accountId,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctx.messageId,
+              timestamp: messageCreateTimeMs,
+              rawText: ctx.content,
+              textForAgent: ctxPayload.BodyForAgent,
+              textForCommands: ctxPayload.CommandBody,
+              raw: ctx,
+            }),
+            resolveTurn: () => ({
+              channel: "feishu",
+              accountId: route.accountId,
+              routeSessionKey: route.sessionKey,
+              storePath,
+              ctxPayload,
+              recordInboundSession: core.channel.session.recordInboundSession,
+              record: {
+                updateLastRoute: buildFeishuInboundLastRouteUpdate({
+                  sessionKey: route.sessionKey,
+                  accountId: route.accountId,
+                }),
+                onRecordError: (err) => {
+                  log(
+                    `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
+                  );
+                },
+              },
+              history: {
+                isGroup,
+                historyKey,
+                historyMap: chatHistories,
+                limit: historyLimit,
+              },
+              onPreDispatchFailure: () =>
+                core.channel.reply.settleReplyDispatcher({
+                  dispatcher,
+                  onSettled: () => markDispatchIdle(),
+                }),
+              runDispatch: () =>
+                core.channel.reply.withReplyDispatcher({
+                  dispatcher,
+                  onSettled: () => {
+                    markDispatchIdle();
+                  },
+                  run: () =>
+                    core.channel.reply.dispatchReplyFromConfig({
+                      ctx: ctxPayload,
+                      cfg: effectiveCfg,
+                      dispatcher,
+                      replyOptions: recallAwareDispatch.replyOptions,
+                    }),
+                }),
+            }),
+          },
+        })
+        .finally(recallAwareDispatch.dispose);
       if (!turnResult.dispatched) {
         return;
       }
