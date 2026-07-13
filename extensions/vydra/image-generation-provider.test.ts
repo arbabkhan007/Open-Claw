@@ -5,8 +5,11 @@ import { buildVydraImageGenerationProvider } from "./image-generation-provider.j
 import {
   binaryResponse,
   jsonResponse,
+  startLocalVydraHttpServer,
   stubFetch,
   stubVydraApiKey,
+  writeBinaryResponse,
+  writeJsonResponse,
 } from "./provider-test-helpers.test.js";
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, RequestInit] {
@@ -185,6 +188,74 @@ describe("vydra image-generation provider", () => {
     expect(createCall[0]).toBe("http://127.0.0.1:11434/api/v1/models/grok-imagine");
     const headers = new Headers(createCall[1].headers);
     expect(headers.get("x-vydra-policy")).toBe("image");
+  });
+
+  it("uses configured request policy through a local Vydra-compatible image flow", async () => {
+    stubVydraApiKey();
+    let assetUrl = "";
+    const server = await startLocalVydraHttpServer((_req, res, request) => {
+      if (request.method === "POST" && request.url === "/api/v1/models/grok-imagine") {
+        writeJsonResponse(res, { jobId: "job-local-image", status: "queued" });
+        return;
+      }
+      if (request.method === "GET" && request.url === "/api/v1/jobs/job-local-image") {
+        writeJsonResponse(res, {
+          jobId: "job-local-image",
+          status: "completed",
+          imageUrl: assetUrl,
+        });
+        return;
+      }
+      if (request.method === "GET" && request.url === "/generated/local-image.png") {
+        writeBinaryResponse(res, "local-png", "image/png");
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    assetUrl = `${server.baseUrl.replace(/\/api\/v1$/u, "")}/generated/local-image.png`;
+
+    try {
+      const provider = buildVydraImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "local proof image",
+        cfg: {
+          models: {
+            providers: {
+              vydra: {
+                baseUrl: server.baseUrl,
+                models: [],
+                request: {
+                  allowPrivateNetwork: true,
+                  headers: { "X-Vydra-Policy": "local-image" },
+                },
+              },
+            },
+          },
+        },
+        timeoutMs: 5_000,
+      });
+
+      expect(result.images).toEqual([
+        {
+          buffer: Buffer.from("local-png"),
+          mimeType: "image/png",
+          fileName: "image-1.png",
+        },
+      ]);
+      expect(server.requests.map((request) => `${request.method} ${request.url}`)).toEqual([
+        "POST /api/v1/models/grok-imagine",
+        "GET /api/v1/jobs/job-local-image",
+        "GET /generated/local-image.png",
+      ]);
+      const [createRequest, pollRequest] = server.requests;
+      expect(createRequest?.headers["x-vydra-policy"]).toBe("local-image");
+      expect(pollRequest?.headers["x-vydra-policy"]).toBe("local-image");
+    } finally {
+      await server.close();
+    }
   });
 
   it("polls jobs when the create response is not completed yet", async () => {
