@@ -6,7 +6,12 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
+import { channelDisplayLabel } from "../lib/session-display.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
+import { writeSessionDragData, writeSessionGroupDragData } from "../lib/sessions/drag.ts";
+import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-chip.ts";
@@ -150,7 +155,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     const chipName = chipAgent ? normalizeAgentLabel(chipAgent) : chipAgentId;
     const chipAvatarText =
       (chipAgent ? resolveAgentTextAvatar(chipAgent) : null) ??
-      (chipName || chipAgentId).slice(0, 1).toUpperCase();
+      (deriveAvatarInitial(chipName || chipAgentId) || "?");
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>

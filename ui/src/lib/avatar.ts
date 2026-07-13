@@ -43,6 +43,34 @@ export function resolveChatAvatarRenderUrl(
   return resolveAgentAvatarUrl(agent, agentIdentity);
 }
 
+export function deriveAvatarInitial(value: string | null | undefined): string {
+  const source = value ?? "";
+  if (!source) {
+    return "";
+  }
+
+  if (typeof Intl.Segmenter === "function") {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    const firstSegment = segmenter.segment(source)[Symbol.iterator]().next();
+    if (!firstSegment || !firstSegment.value) {
+      return "";
+    }
+    return firstSegment.value.segment.toUpperCase();
+  }
+
+  const firstCodeUnit = source.charCodeAt(0);
+  const isLeadingSurrogate = firstCodeUnit >= 0xd800 && firstCodeUnit <= 0xdbff;
+  if (isLeadingSurrogate && source.length > 1) {
+    const secondCodeUnit = source.charCodeAt(1);
+    const isTrailingSurrogate = secondCodeUnit >= 0xdc00 && secondCodeUnit <= 0xdfff;
+    if (isTrailingSurrogate) {
+      return source.slice(0, 2).toUpperCase();
+    }
+  }
+
+  return source.slice(0, 1).toUpperCase();
+}
+
 export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
