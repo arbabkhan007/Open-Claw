@@ -3,6 +3,7 @@ import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
+import { CORE_TTS_SECRET_TARGET_REGISTRY } from "./target-registry-tts-data.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -228,54 +229,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
-  {
-    id: "messages.tts.providers.*.apiKey",
-    targetType: "messages.tts.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "messages.tts.providers.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 3,
-  },
-  {
-    id: "messages.tts.personas.*.providers.*.apiKey",
-    targetType: "messages.tts.personas.*.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "messages.tts.personas.*.providers.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: false,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 5,
-  },
-  {
-    id: "agents.list[].tts.providers.*.apiKey",
-    targetType: "agents.list[].tts.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "agents.list[].tts.providers.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: false,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 5,
-  },
-  {
-    id: "agents.list[].tts.personas.*.providers.*.apiKey",
-    targetType: "agents.list[].tts.personas.*.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "agents.list[].tts.personas.*.providers.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: false,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 7,
-  },
+  ...CORE_TTS_SECRET_TARGET_REGISTRY,
   {
     id: "models.providers.*.apiKey",
     targetType: "models.providers.apiKey",

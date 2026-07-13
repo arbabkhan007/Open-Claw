@@ -20,6 +20,7 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { STATIC_TTS_PROVIDER_TARGET_IDS } from "./command-secret-targets-tts.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -41,10 +42,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
-  "agents.list[].tts.providers.*.apiKey",
-  "agents.list[].tts.personas.*.providers.*.apiKey",
-  "messages.tts.providers.*.apiKey",
-  "messages.tts.personas.*.providers.*.apiKey",
+  ...STATIC_TTS_PROVIDER_TARGET_IDS,
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
@@ -56,10 +54,7 @@ const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
 ] as const;
 const STATIC_TTS_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
-  "agents.list[].tts.providers.*.apiKey",
-  "agents.list[].tts.personas.*.providers.*.apiKey",
-  "messages.tts.providers.*.apiKey",
-  "messages.tts.personas.*.providers.*.apiKey",
+  ...STATIC_TTS_PROVIDER_TARGET_IDS,
 ] as const;
 const STATIC_GATEWAY_AUTH_TARGET_IDS = [
   "gateway.auth.token",
