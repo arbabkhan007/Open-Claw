@@ -43,6 +43,53 @@ describe("secret target registry", () => {
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
 
+  it("resolves agent persona TTS provider apiKey with correct providerId", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "agents",
+      "list",
+      "0",
+      "tts",
+      "personas",
+      "narrator",
+      "providers",
+      "elevenlabs",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("agents.list[].tts.personas.*.providers.*.apiKey");
+    expect(target?.providerId).toBe("elevenlabs");
+  });
+
+  it("resolves agent top-level TTS provider apiKey with correct providerId", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "agents",
+      "list",
+      "0",
+      "tts",
+      "providers",
+      "elevenlabs",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("agents.list[].tts.providers.*.apiKey");
+    expect(target?.providerId).toBe("elevenlabs");
+  });
+
+  it("resolves messages persona TTS provider apiKey with correct providerId", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "messages",
+      "tts",
+      "personas",
+      "narrator",
+      "providers",
+      "elevenlabs",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("messages.tts.personas.*.providers.*.apiKey");
+    expect(target?.providerId).toBe("elevenlabs");
+  });
+
   it("resolves talk realtime provider api key targets", () => {
     const target = resolveConfigSecretTargetByPath([
       "talk",
