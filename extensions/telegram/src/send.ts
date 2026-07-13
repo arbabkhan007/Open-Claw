@@ -956,8 +956,11 @@ async function sendMessageTelegramWithContext(
             retryLabel,
           ),
       });
-    const requestPlain = (label: string) =>
-      requestSendMessage(label, chunk.sourcePlainText ?? chunk.plainText, plainParams ?? {});
+    let usedPlainRetry = false;
+    const requestPlain = (label: string) => {
+      usedPlainRetry = true;
+      return requestSendMessage(label, chunk.sourcePlainText ?? chunk.plainText, plainParams ?? {});
+    };
     const result = !chunk.htmlText
       ? await requestPlain("message")
       : await withTelegramHtmlParseFallback({
@@ -973,7 +976,7 @@ async function sendMessageTelegramWithContext(
     return {
       result: result.result,
       acceptedParams: toAcceptedThreadScopedParams(result.acceptedParams),
-      deliveredText: chunk.htmlText ? chunk.plainText : (chunk.sourcePlainText ?? chunk.plainText),
+      deliveredText: usedPlainRetry ? (chunk.sourcePlainText ?? chunk.plainText) : chunk.plainText,
     };
   };
 
@@ -1117,11 +1120,16 @@ async function sendMessageTelegramWithContext(
       );
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
-    return htmlChunks.map((htmlTextLocal) => ({
-      htmlText: htmlTextLocal,
-      plainText: telegramHtmlToPlainTextFallback(htmlTextLocal),
-      ...(htmlChunks.length === 1 ? { sourcePlainText: fallbackText } : {}),
-    }));
+    return htmlChunks.map((htmlTextLocal) => {
+      const chunk: TelegramTextChunk = {
+        htmlText: htmlTextLocal,
+        plainText: telegramHtmlToPlainTextFallback(htmlTextLocal),
+      };
+      if (htmlChunks.length === 1) {
+        chunk.sourcePlainText = fallbackText;
+      }
+      return chunk;
+    });
   };
 
   const sendChunkedText = async (

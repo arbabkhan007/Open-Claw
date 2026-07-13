@@ -1800,7 +1800,7 @@ describe("sendMessageTelegram", () => {
       messageId: "256",
     });
 
-    expect(firstMockCallArg(botApi.sendMessage, 1)).toBe("<b>hi</b>");
+    expect(firstMockCall(botApi.sendMessage, "sendMessage call")[1]).toBe("<b>hi</b>");
     expect(node?.body).toBe("hi");
   });
 
@@ -1825,6 +1825,8 @@ describe("sendMessageTelegram", () => {
     });
     const node = await cache.get({ accountId: "default", chatId: "123", messageId: "156" });
     expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessageTexts(botApi.sendMessage)).toEqual(["<b>hello</b>", "**hello**"]);
+    expect(node?.body).toBe("**hello**");
     expect(node?.promptContextProjectionMarker).toEqual({
       kind: "valid",
       projection: { ...cursor.source, partIndex: 0, finalPart: true },
