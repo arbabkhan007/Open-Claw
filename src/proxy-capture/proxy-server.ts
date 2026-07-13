@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import type { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { ensureDebugProxyCa } from "./ca.js";
@@ -170,36 +171,14 @@ function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
   res.end(BAD_GATEWAY_BODY);
 }
 
-/** Minimal upstream readable surface used by the HTTP body forwarder. */
-type UpstreamBodySource = {
-  destroyed: boolean;
-  destroy(error?: Error): void;
-  on(event: "data", listener: (chunk: Buffer | string) => void): void;
-  on(event: "end", listener: () => void): void;
-  on(event: "error", listener: (error: Error) => void): void;
-  pause(): void;
-  resume(): void;
-};
-
-/** Minimal downstream writable surface used by the HTTP body forwarder. */
-type DownstreamBodyTarget = {
-  destroyed: boolean;
-  writableEnded: boolean;
-  writableFinished: boolean;
-  on(event: "close" | "error", listener: (error?: Error) => void): void;
-  once(event: "drain", listener: () => void): void;
-  write(chunk: Buffer): boolean;
-  end(): void;
-};
-
 /**
- * Forwards an upstream HTTP response body to the proxy client with one lifecycle
- * controller: honor `write()` backpressure via pause/drain, cancel upstream when
- * the client leaves early, and keep capture callbacks independent of socket I/O.
+ * Forwards an upstream HTTP response body with Node's native pipe backpressure.
+ * Preview capture stays a separate `data` observer; client abort cancels upstream;
+ * upstream errors keep the proxy's pre-header 502 / post-header abort hooks.
  */
 export function pipeUpstreamBodyToClient(params: {
-  upstreamRes: UpstreamBodySource;
-  res: DownstreamBodyTarget;
+  upstreamRes: Readable;
+  res: Writable;
   onChunk: (buffer: Buffer) => void;
   onEnd: () => void;
   onUpstreamError: (error: Error) => void;
@@ -208,6 +187,11 @@ export function pipeUpstreamBodyToClient(params: {
   let closed = false;
 
   const cancelUpstream = (): void => {
+    try {
+      upstreamRes.unpipe(res);
+    } catch {
+      // ignore unpipe races after destroy
+    }
     if (!upstreamRes.destroyed) {
       upstreamRes.destroy();
     }
@@ -224,36 +208,21 @@ export function pipeUpstreamBodyToClient(params: {
   };
 
   res.on("close", () => {
-    if (!res.writableFinished) {
+    // writableFinished is ServerResponse-specific; Writable may omit it.
+    const finished = "writableFinished" in res && Boolean((res as ServerResponse).writableFinished);
+    if (!finished) {
       onClientGone();
     }
   });
   res.on("error", onClientGone);
 
-  upstreamRes.on("data", (chunk) => {
-    if (closed || res.destroyed || res.writableEnded) {
-      cancelUpstream();
+  // Independent capture observer. pipe() owns write backpressure and ending res.
+  upstreamRes.on("data", (chunk: Buffer | string) => {
+    if (closed) {
       return;
     }
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    // Capture every byte before write so partial responses still record preview.
     onChunk(buffer);
-    let ok = true;
-    try {
-      ok = res.write(buffer);
-    } catch {
-      onClientGone();
-      return;
-    }
-    if (!ok) {
-      // Pause until drain so slow clients cannot inflate proxy memory unboundedly.
-      upstreamRes.pause();
-      res.once("drain", () => {
-        if (!closed && !upstreamRes.destroyed) {
-          upstreamRes.resume();
-        }
-      });
-    }
   });
 
   upstreamRes.on("end", () => {
@@ -261,17 +230,24 @@ export function pipeUpstreamBodyToClient(params: {
       return;
     }
     onEnd();
-    if (!res.destroyed && !res.writableEnded) {
-      res.end();
-    }
   });
 
-  upstreamRes.on("error", (error) => {
+  upstreamRes.on("error", (error: Error) => {
     if (closed) {
       return;
     }
+    closed = true;
+    try {
+      upstreamRes.unpipe(res);
+    } catch {
+      // ignore
+    }
     onUpstreamError(error);
   });
+
+  // Native contract: Readable.pipe pauses the source when the destination
+  // applies backpressure and resumes on drain; ends res when upstream ends.
+  upstreamRes.pipe(res);
 }
 
 export async function startDebugProxyServer(params: {
@@ -351,6 +327,8 @@ export async function startDebugProxyServer(params: {
         },
         (upstreamRes) => {
           const responseCapture = createBodyPreviewCapture();
+          // Headers before pipe so the first body chunk cannot race an implicit writeHead.
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
           pipeUpstreamBodyToClient({
             upstreamRes,
             res,
@@ -375,7 +353,6 @@ export async function startDebugProxyServer(params: {
               finishProxyResponseAfterUpstreamError(res);
             },
           });
-          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         },
       );
       req.on("data", (chunk) => {

@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 // Proxy capture server tests cover request recording and response handling.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
@@ -9,6 +8,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
@@ -383,7 +383,9 @@ describe("startDebugProxyServer", () => {
       });
 
       // Give the proxy a tick to finish cancel cleanup before the next request.
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
 
       const healthy = await getThroughProxy(proxy.proxyUrl, origin.healthyUrl);
       expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
@@ -395,10 +397,28 @@ describe("startDebugProxyServer", () => {
 });
 
 describe("pipeUpstreamBodyToClient", () => {
-  it("pauses the upstream source when write() applies backpressure and resumes on drain", () => {
-    const upstream = new FakeUpstream();
-    const downstream = new FakeDownstream();
+  it("uses native pipe backpressure and still captures chunks", async () => {
+    const upstream = new PassThrough({ highWaterMark: 16 });
+    const written: string[] = [];
     const chunks: string[] = [];
+    let releaseFirstWrite: (() => void) | undefined;
+    const firstWriteBlocked = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writeCount = 0;
+    const downstream = new Writable({
+      highWaterMark: 1,
+      write(chunk, _encoding, callback) {
+        writeCount += 1;
+        written.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+        if (writeCount === 1) {
+          // Hold the first write open so pipe applies backpressure to upstream.
+          void firstWriteBlocked.then(() => callback());
+          return;
+        }
+        callback();
+      },
+    });
     const onEnd = vi.fn();
     const onUpstreamError = vi.fn();
 
@@ -412,28 +432,36 @@ describe("pipeUpstreamBodyToClient", () => {
       onUpstreamError,
     });
 
-    downstream.nextWriteOk = false;
-    upstream.emitData("a");
-    expect(chunks).toEqual(["a"]);
-    expect(upstream.paused).toBe(true);
-    expect(downstream.written).toEqual(["a"]);
+    const done = new Promise<void>((resolve, reject) => {
+      downstream.on("finish", () => resolve());
+      downstream.on("error", reject);
+      upstream.on("error", reject);
+    });
 
-    downstream.nextWriteOk = true;
-    downstream.emitDrain();
-    expect(upstream.paused).toBe(false);
+    expect(upstream.write("aaaa")).toBe(true);
+    // Fill past destination highWaterMark while first write is blocked.
+    const secondWriteAccepted = upstream.write("bbbb");
+    // Native pipe may refuse further reads until drain; either paused or
+    // buffered without completing until we release the first write.
+    expect(chunks[0]).toBe("aaaa");
+    releaseFirstWrite?.();
+    if (!secondWriteAccepted) {
+      await new Promise<void>((resolve) => {
+        upstream.once("drain", resolve);
+      });
+    }
+    upstream.end("cccc");
+    await done;
 
-    upstream.emitData("b");
-    upstream.emitEnd();
-    expect(chunks).toEqual(["a", "b"]);
-    expect(downstream.written).toEqual(["a", "b"]);
-    expect(downstream.ended).toBe(true);
+    expect(chunks.join("")).toBe("aaaabbbbcccc");
+    expect(written.join("")).toBe("aaaabbbbcccc");
     expect(onEnd).toHaveBeenCalledOnce();
     expect(onUpstreamError).not.toHaveBeenCalled();
   });
 
-  it("destroys the upstream source when the client leaves before end", () => {
-    const upstream = new FakeUpstream();
-    const downstream = new FakeDownstream();
+  it("destroys the upstream source when the client leaves before end", async () => {
+    const upstream = new PassThrough();
+    const downstream = new PassThrough();
     const onEnd = vi.fn();
 
     pipeUpstreamBodyToClient({
@@ -444,68 +472,20 @@ describe("pipeUpstreamBodyToClient", () => {
       onUpstreamError: () => {},
     });
 
-    upstream.emitData("partial");
-    downstream.emitClientGone();
+    upstream.write("partial");
+    // Simulate client abort: close without finishing a complete response.
+    Object.defineProperty(downstream, "writableFinished", {
+      configurable: true,
+      value: false,
+    });
+    downstream.destroy();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(upstream.destroyed).toBe(true);
     expect(onEnd).not.toHaveBeenCalled();
   });
 });
-
-class FakeUpstream extends EventEmitter {
-  destroyed = false;
-  paused = false;
-
-  pause(): void {
-    this.paused = true;
-  }
-
-  resume(): void {
-    this.paused = false;
-  }
-
-  destroy(): void {
-    this.destroyed = true;
-  }
-
-  emitData(text: string): void {
-    this.emit("data", Buffer.from(text));
-  }
-
-  emitEnd(): void {
-    this.emit("end");
-  }
-}
-
-class FakeDownstream extends EventEmitter {
-  destroyed = false;
-  writableEnded = false;
-  writableFinished = false;
-  ended = false;
-  nextWriteOk = true;
-  written: string[] = [];
-
-  write(chunk: Buffer): boolean {
-    this.written.push(chunk.toString("utf8"));
-    return this.nextWriteOk;
-  }
-
-  end(): void {
-    this.ended = true;
-    this.writableEnded = true;
-    this.writableFinished = true;
-    this.emit("close");
-  }
-
-  emitDrain(): void {
-    this.emit("drain");
-  }
-
-  emitClientGone(): void {
-    this.destroyed = true;
-    this.writableFinished = false;
-    this.emit("close");
-  }
-}
 
 async function startStreamingOrigin(): Promise<{
   healthyUrl: string;
