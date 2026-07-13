@@ -1357,9 +1357,11 @@ function isReplyOperationStalled(replyOperation?: ReplyOperation): boolean {
   return replyOperation?.result?.kind === "failed" && replyOperation.result.code === "run_stalled";
 }
 
-function buildStalledRunReplyPayload(): ReplyPayload {
+function buildStalledRunReplyPayload(isHeartbeat: boolean): ReplyPayload {
   return markAgentRunFailureReplyPayload({
-    text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+    text: isHeartbeat
+      ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+      : "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
   });
 }
 
@@ -2906,9 +2908,13 @@ async function runAgentTurnWithFallbackInternal(
           "error",
           new Error("Reply operation expired after making no progress"),
         );
+        await drainPendingToolTasks({
+          tasks: params.pendingToolTasks,
+          onTimeout: logVerbose,
+        });
         return {
           kind: "final",
-          payload: buildStalledRunReplyPayload(),
+          payload: buildStalledRunReplyPayload(params.isHeartbeat),
         };
       }
       if (isReplyOperationUserAbort(params.replyOperation)) {
@@ -3146,9 +3152,13 @@ async function runAgentTurnWithFallbackInternal(
       // See the settled path: stale recovery aborts after recording run_stalled.
       if (isReplyOperationStalled(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("error", err);
+        await drainPendingToolTasks({
+          tasks: params.pendingToolTasks,
+          onTimeout: logVerbose,
+        });
         return {
           kind: "final",
-          payload: buildStalledRunReplyPayload(),
+          payload: buildStalledRunReplyPayload(params.isHeartbeat),
         };
       }
 

@@ -1587,15 +1587,28 @@ describe("runAgentTurnWithFallback", () => {
       expect(replyOperation.abortSignal.aborted).toBe(true);
       return { payloads: [], meta: {} };
     });
+    let releaseToolTask: () => void = () => undefined;
+    const pendingToolTask = new Promise<void>((resolve) => {
+      releaseToolTask = resolve;
+    });
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pending = runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+      pendingToolTasks: new Set([pendingToolTask]),
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    releaseToolTask();
 
-    await expect(
-      runAgentTurnWithFallback({
-        ...createMinimalRunAgentTurnParams(),
-        replyOperation,
-      }),
-    ).resolves.toEqual({
+    await expect(pending).resolves.toEqual({
       kind: "final",
       payload: {
         text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
@@ -1616,18 +1629,59 @@ describe("runAgentTurnWithFallback", () => {
       expect(replyOperation.abortSignal.aborted).toBe(true);
       throw new Error("embedded run aborted after stale recovery");
     });
+    let releaseToolTask: () => void = () => undefined;
+    const pendingToolTask = new Promise<void>((resolve) => {
+      releaseToolTask = resolve;
+    });
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pending = runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+      pendingToolTasks: new Set([pendingToolTask]),
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    releaseToolTask();
 
-    await expect(
-      runAgentTurnWithFallback({
-        ...createMinimalRunAgentTurnParams(),
-        replyOperation,
-      }),
-    ).resolves.toEqual({
+    await expect(pending).resolves.toEqual({
       kind: "final",
       payload: {
         text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+        isError: true,
+      },
+    });
+  });
+
+  it("uses heartbeat failure copy for a stalled heartbeat operation", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:stalled-heartbeat",
+      sessionId: "stalled-heartbeat",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      expect(expireStaleReplyOperation(replyOperation, "no_activity")).toBe(true);
+      return { payloads: [], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+      isHeartbeat: true,
+    });
+
+    expect(result).toEqual({
+      kind: "final",
+      payload: {
+        text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
         isError: true,
       },
     });
