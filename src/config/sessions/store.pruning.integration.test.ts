@@ -1476,6 +1476,85 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathMissing(staleArchive);
   });
 
+  it("does not clean a shared archive directory when only one agent is selected", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const sharedStorePath = path.join(testDir, "shared-sessions.json");
+    const staleArchive = path.join(
+      testDir,
+      `work-session.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "work", "utf-8");
+
+    const cfg = {
+      session: { store: sharedStorePath },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const result = await runSessionsCleanup({
+      cfg,
+      opts: { agent: "main", enforce: true },
+    });
+
+    expect(result.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+    });
+    expect(result.appliedSummaries).toHaveLength(1);
+    expect(result.appliedSummaries[0]?.archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+    });
+    await expectPathExists(staleArchive);
+  });
+
+  it("cleans a shared archive directory selected explicitly with --store", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const sharedStorePath = path.join(testDir, "shared-sessions.json");
+    const staleArchive = path.join(
+      testDir,
+      `stale.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "stale", "utf-8");
+
+    const cfg = {
+      session: { store: sharedStorePath },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const result = await runSessionsCleanup({
+      cfg,
+      opts: { store: sharedStorePath, enforce: true },
+    });
+
+    expect(result.appliedSummaries[0]?.archiveCleanup).toEqual({
+      scannedFiles: 1,
+      removedFiles: 1,
+    });
+    await expectPathMissing(staleArchive);
+  });
+
   it("sessions cleanup keeps deleted and reset archives when retention is disabled", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
