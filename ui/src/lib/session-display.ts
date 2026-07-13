@@ -14,6 +14,8 @@ const CHANNEL_LABELS: Record<string, string> = {
   sms: "SMS",
 };
 
+const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
+
 /** Human channel label for group headers and name fallbacks. */
 export function channelDisplayLabel(channel: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(channel);
@@ -83,8 +85,6 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
-
 /** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
   /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
@@ -130,6 +130,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   if (directMatch) {
     const channel = directMatch[1];
     const identifier = directMatch[2];
+    if (!channel || !identifier) {
+      return { prefix: "", fallbackName: key };
+    }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}` };
   }
@@ -138,11 +141,15 @@ function parseSessionKey(key: string): SessionKeyInfo {
   const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
   if (groupMatch) {
     const channel = groupMatch[1];
+    if (!channel) {
+      return { prefix: "", fallbackName: key };
+    }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
-  // Channel-prefixed legacy keys, for example "imessage:g-...".
+  // Channel-prefixed keys like "telegram:123": durable session rows written by
+  // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
       return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
@@ -159,8 +166,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // drop the agent:<id>: routing boilerplate and shorten opaque id runs so the
   // slug reads as a name instead of a raw key.
   const agentKeyMatch = key.match(/^agent:[^:]+:(?:explicit:)?(.+)$/);
-  if (agentKeyMatch) {
-    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyMatch[1]) };
+  const agentKeyName = agentKeyMatch?.[1];
+  if (agentKeyName) {
+    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyName) };
   }
 
   // Unknown: return key as-is.
