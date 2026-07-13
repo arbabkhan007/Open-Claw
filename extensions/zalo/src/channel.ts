@@ -292,6 +292,8 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       chunker: chunkTextForOutbound,
       chunkerMode: "text",
       textChunkLimit: zaloTextChunkLimit,
+      // Core strips only conservative runtime markers. This delivery profile also
+      // removes model/tool XML and failed-tool traces before Zalo chunking.
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
