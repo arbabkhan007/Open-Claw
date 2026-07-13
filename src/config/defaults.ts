@@ -184,6 +184,9 @@ export function applyModelDefaults(
       const providerContextWindow = isPositiveNumber(normalizedProvider.contextWindow)
         ? normalizedProvider.contextWindow
         : undefined;
+      const providerContextTokens = isPositiveNumber(normalizedProvider.contextTokens)
+        ? normalizedProvider.contextTokens
+        : undefined;
       const providerMaxTokens = isPositiveNumber(normalizedProvider.maxTokens)
         ? normalizedProvider.maxTokens
         : undefined;
@@ -232,6 +235,13 @@ export function applyModelDefaults(
           modelMutated = true;
         }
 
+        const contextTokens = isPositiveNumber(raw.contextTokens)
+          ? raw.contextTokens
+          : providerContextTokens;
+        if (raw.contextTokens !== contextTokens) {
+          modelMutated = true;
+        }
+
         const defaultMaxTokens = Math.min(
           providerMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
           contextWindow,
@@ -261,6 +271,7 @@ export function applyModelDefaults(
           input,
           cost,
           contextWindow,
+          contextTokens,
           maxTokens,
           api,
         }) as ModelDefinitionConfig;
