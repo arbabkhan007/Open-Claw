@@ -200,8 +200,8 @@ without exceptions outside doctor/import/export/debug boundaries.
 No follow-up product decisions are blocking this plan. The implementation should
 proceed with these assumptions:
 
-- Use `node:sqlite` directly and require the Node 22+ runtime for this storage
-  path.
+- Use `node:sqlite` directly and require a WAL-reset-safe Node runtime
+  (22.22.3+, 24.15+, or 25.9+) for this storage path.
 - Keep exactly one normal configuration file. Do not move config, plugin
   manifests, or Git workspaces into SQLite in this refactor.
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
@@ -283,9 +283,9 @@ No additional product questions are blocking implementation.
 
 The branch already has a real shared SQLite base:
 
-- The runtime floor is now Node 22+: `package.json`, the CLI runtime guard,
-  installer defaults, macOS runtime locator, CI, and public install docs all
-  agree. The old Node 22 compatibility lane is removed.
+- The runtime floor now requires a WAL-reset-safe Node build: 22.22.3+,
+  24.15+, or 25.9+. `package.json`, the CLI runtime guard, installer defaults,
+  macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
   `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
   the generated schema module derived from
@@ -536,11 +536,13 @@ The branch already has a real shared SQLite base:
 - Matrix named-account credential upgrade no longer happens during runtime
   reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
   rename when a single/default Matrix account can be resolved.
-- Core pairing and cron runtime modules no longer export legacy JSON path
-  builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,
-  `bootstrap.json`, and `cron/jobs.json` source paths for import tests and
-  migration only. Legacy cron job-shape normalization and cron run-log import
-  live under `src/commands/doctor/legacy/cron*.ts`.
+- Core pairing and cron runtime modules no longer use legacy JSON path builders.
+  The deprecated pairing-path SDK helper remains migration-only compatibility;
+  doctor state migration owns its file reads and imports. Doctor-owned legacy
+  modules construct `pending.json`, `paired.json`, `bootstrap.json`, and
+  `cron/jobs.json` source paths for import tests and migration only. Legacy cron
+  job-shape normalization and cron run-log import live under
+  `src/commands/doctor/legacy/cron*.ts`.
 - `src/commands/doctor/legacy/runtime-state.ts` imports legacy JSON state
   files, including node host config, into SQLite from doctor. New legacy file
   importers stay under `src/commands/doctor/legacy/`.
@@ -1346,8 +1348,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
-  sidecars, records snapshot metadata in the archive manifest, and records
+  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
   explicit fast path.
@@ -1383,8 +1385,8 @@ create` validates the written archive by default; `--no-verify` is the
   SQLite `command_log_entries` table instead of appending
   `logs/commands.log`.
 - Channel pairing allowlists now expose only SQLite-backed read/write helpers at
-  runtime and in the plugin SDK. The old `*-allowFrom.json` path resolver and
-  file reader live only under doctor legacy import code.
+  runtime. The deprecated plugin SDK path resolver remains for migration
+  compatibility; file readers live only in doctor state migration code.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,
@@ -1864,12 +1866,14 @@ SQLite-native:
 
 1. Stop long-running write activity or enter a short backup barrier.
 2. For every global and agent database, run a checkpoint.
-3. Snapshot each database using SQLite backup semantics or `VACUUM INTO` into a
-   temporary backup directory.
-4. Archive the compacted database snapshots, config file, credentials directory,
-   selected workspaces, and a manifest.
-5. Verify the archive by opening every included SQLite snapshot and running
-   `PRAGMA integrity_check`.
+3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+   Plugin schemas that require owner-defined SQLite capabilities fail closed
+   until the owner provides a safe snapshot contract.
+4. Archive the database snapshots, config file, credentials directory, selected
+   workspaces, and a manifest.
+5. Verify every SQLite snapshot's file shape, then open canonical OpenClaw
+   databases and run `PRAGMA integrity_check` plus role validation. Dedicated
+   plugin schemas remain opaque unless their owner supplies a verifier.
    `openclaw backup create` does this by default; `--no-verify` is only for
    intentionally skipping the post-write archive pass.
 
@@ -1985,10 +1989,12 @@ payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global and agent databases via SQLite backup or
-     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset.
-   - Add backup verification for SQLite integrity and schema version. Done for
-     backup creation and default archive verification integrity checks.
+   - Teach backup to snapshot global, agent, and plugin databases with
+     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+     plugin schemas requiring unavailable owner capabilities fail closed.
+   - Add backup verification for canonical SQLite integrity and schema identity,
+     plus generic file-shape validation for dedicated plugin snapshots. Done for
+     backup creation and default archive verification.
    - Record backup run metadata in SQLite. Done via the shared `backup_runs`
      table with archive path, status, and manifest JSON.
    - Add restore from verified archive snapshots. Done: `openclaw backup

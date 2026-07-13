@@ -20,15 +20,6 @@ import {
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
 
-export type {
-  QaEvidenceArtifactView,
-  QaEvidenceGalleryEntryView,
-  QaEvidenceGalleryModel,
-  QaEvidenceMatrixCellView,
-  QaEvidenceProducerContext,
-  QaEvidenceProducerContextFile,
-} from "../shared/evidence-gallery-types.js";
-
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
 const REPO_ROOT_ARTIFACT_PATH_PREFIX = "<repo-root>/";
@@ -148,7 +139,7 @@ async function resolveContainedFileIfExists(
   return stats?.isFile() ? realFile : null;
 }
 
-export async function resolveQaEvidenceFile(params: {
+async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
 }): Promise<string> {
@@ -621,13 +612,17 @@ function uxMatrixEntryKey(
   entry: QaEvidenceSummaryEntry,
 ): { stage: string; surface: string } | null {
   const idMatch = /^ux-matrix\.([a-z0-9-]+)\.([a-z0-9-]+)$/u.exec(entry.test.id);
-  if (idMatch) {
-    return { surface: idMatch[1], stage: idMatch[2] };
+  const idSurface = idMatch?.[1];
+  const idStage = idMatch?.[2];
+  if (idSurface && idStage) {
+    return { surface: idSurface, stage: idStage };
   }
   for (const artifact of entry.execution?.artifacts ?? []) {
     const sourceMatch = /^ux-matrix:([a-z0-9-]+):([a-z0-9-]+)$/u.exec(artifact.source);
-    if (sourceMatch) {
-      return { surface: sourceMatch[1], stage: sourceMatch[2] };
+    const sourceSurface = sourceMatch?.[1];
+    const sourceStage = sourceMatch?.[2];
+    if (sourceSurface && sourceStage) {
+      return { surface: sourceSurface, stage: sourceStage };
     }
   }
   return null;

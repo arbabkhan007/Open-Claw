@@ -119,11 +119,11 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBeUndefined();
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 
   it("does not fall back to ambient env when a configured env SecretRef is missing", () => {
@@ -145,11 +145,11 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBeUndefined();
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 
   it("does not fall back to ambient env when baseUrl config is blank", () => {
@@ -167,11 +167,33 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBeUndefined();
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
+  });
+
+  it("does not fall back to ambient env when baseUrl config is null", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: null,
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() =>
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 
   it("does not fall back to ambient env when baseUrl config is malformed", () => {
@@ -189,10 +211,10 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBeUndefined();
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 });

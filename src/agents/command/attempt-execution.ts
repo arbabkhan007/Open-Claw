@@ -480,8 +480,6 @@ export function runAgentAttempt(params: {
     sessionKey?: string;
   }) => void;
   deferTerminalLifecycle?: boolean;
-  /** @deprecated Use deferTerminalLifecycle. */
-  deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -935,6 +933,7 @@ export function runAgentAttempt(params: {
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     disableMessageTool: params.opts.disableMessageTool,
+    forceRestartSafeTools: params.opts.forceRestartSafeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
@@ -946,7 +945,6 @@ export function runAgentAttempt(params: {
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
-    deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     onUserMessagePersisted: params.onUserMessagePersisted,

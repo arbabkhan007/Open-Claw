@@ -88,7 +88,11 @@ export function resolveSearxngBaseUrl(
     return configured.value;
   }
   if (configured.status === "blocked") {
-    return undefined;
+    // Explicit invalid/unavailable config is authoritative, so search execution must not route
+    // through an unrelated ambient endpoint. Provider detection uses contract metadata instead.
+    throw new Error(
+      "Configured SearXNG base URL is unavailable or invalid. Fix plugins.entries.searxng.config.webSearch.baseUrl or remove it to use SEARXNG_BASE_URL.",
+    );
   }
   return normalizeBaseUrl(normalizeSecretInput(env.SEARXNG_BASE_URL));
 }

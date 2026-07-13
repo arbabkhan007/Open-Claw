@@ -1,4 +1,5 @@
 // Searxng tests cover searxng client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -93,7 +94,7 @@ describe("searxng client", () => {
           } as never,
           query: "openclaw",
         }),
-      ).rejects.toThrow("SearXNG base URL is not configured.");
+      ).rejects.toThrow("Configured SearXNG base URL is unavailable or invalid.");
       expect(endpointMockState.calls).toHaveLength(0);
     } finally {
       if (originalBaseUrl === undefined) {
@@ -129,8 +130,10 @@ describe("searxng client", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(2);
-    expect(new URL(endpointMockState.calls[0].url).searchParams.get("categories")).toBe("weather");
-    expect(new URL(endpointMockState.calls[1].url).searchParams.get("categories")).toBe("general");
+    const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
+    const secondCall = expectDefined(endpointMockState.calls[1], "second SearXNG endpoint call");
+    expect(new URL(firstCall.url).searchParams.get("categories")).toBe("weather");
+    expect(new URL(secondCall.url).searchParams.get("categories")).toBe("general");
     expect(result.provider).toBe("searxng");
     expect(result.query).toBe("beijing hourly weather");
     expect(result.count).toBe(1);

@@ -530,6 +530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Text formatting
   - H2: Context fields
+  - H2: Outbound payloads
   - H2: Channel notes
   - H2: Related
 
@@ -783,6 +784,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install
   - H2: Setup
   - H2: Configure
+  - H3: Streaming
   - H3: Access policy
   - H3: Multi-account setup
   - H3: Group chats
@@ -1263,6 +1265,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw backup
   - H2: Notes
+  - H2: SQLite snapshots
+  - H3: Verify and restore
   - H2: What gets backed up
   - H2: Invalid config behavior
   - H2: Size and performance
@@ -1491,6 +1495,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Structured health checks
   - H2: Check selection
   - H2: Post-upgrade mode
+  - H2: Shared state SQLite compaction
   - H2: Session SQLite migration
   - H3: Downgrading After Session SQLite Migration
   - H2: Notes
@@ -1506,6 +1511,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tenant IDs
   - H2: fleet create
   - H3: Create options
+  - H3: Pinning by digest
   - H3: Disk limits
   - H3: Egress policy
   - H2: fleet list
@@ -1650,6 +1656,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: OAuth workflow
   - H3: Streamable HTTP transport
   - H2: Control UI
+  - H2: MCP Apps
   - H2: Current limits
   - H2: Related
 
@@ -2855,6 +2862,26 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Further reading
   - H2: Related
 
+## concepts/session-search.md
+
+- Route: /concepts/session-search
+- Headings:
+  - H1: Session search
+  - H2: Visibility and output
+  - H2: Index lifecycle
+  - H2: Session search vs. memory search
+
+## concepts/session-state.md
+
+- Route: /concepts/session-state
+- Headings:
+  - H2: The signal log
+  - H2: Watchers
+  - H2: Notices: one, not many
+  - H2: Reconciling
+  - H2: Storage and limits
+  - H2: Related
+
 ## concepts/session-tool.md
 
 - Route: /concepts/session-tool
@@ -3031,6 +3058,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Extract logs
   - H2: Notes
   - H2: Related
+
+## gateway/1password.md
+
+- Route: /gateway/1password
+- Headings:
+  - H2: Requirements
+  - H2: Resolve config secrets with op
+  - H2: Service account setup for headless Gateways
+  - H2: The 1password skill for agents
+  - H2: Security notes
+  - H2: Troubleshooting
 
 ## gateway/audit.md
 
@@ -4859,6 +4897,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## nodes/presence.md
+
+- Route: /nodes/presence
+- Headings:
+  - H2: Requirements
+  - H2: Check the active computer
+  - H2: How activity becomes presence
+  - H2: Privacy and model context
+  - H2: How connection alerts are routed
+  - H2: Troubleshooting
+  - H2: Related
+
 ## nodes/talk.md
 
 - Route: /nodes/talk
@@ -5024,6 +5074,25 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway service install (CLI)
   - H2: Related
 
+## platforms/ios-healthkit.md
+
+- Route: /platforms/ios-healthkit
+- Headings:
+  - H1: HealthKit summaries
+  - H2: Requirements
+  - H2: Enable access
+  - H3: 1. Authorize the Gateway command
+  - H3: 2. Enable sharing on the iPhone
+  - H2: Request today's summary
+  - H2: Privacy behavior
+  - H2: Troubleshooting
+  - H3: Command is not declared by the node
+  - H3: Command requires explicit opt-in
+  - H3: HEALTHACCESSDISABLED
+  - H3: Summary succeeds but metrics are missing
+  - H3: Older ranges fail
+  - H2: Related
+
 ## platforms/ios.md
 
 - Route: /platforms/ios
@@ -5031,6 +5100,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Health summaries
   - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
@@ -6569,6 +6639,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/mxc.md
+
+- Route: /plugins/reference/mxc
+- Headings:
+  - H1: Mxc plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/nextcloud-talk.md
 
@@ -8303,7 +8381,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Multi-surface operator approvals
   - H2: Goals
   - H2: Non-goals
-  - H2: Existing system and evidence map
+  - H2: Pre-rollout baseline and evidence map
   - H2: Prior art
   - H2: Architecture and ownership
   - H2: Persistent record
@@ -8321,7 +8399,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: PR 2: typed actions and channel callbacks
   - H3: PR 3: Control UI deep link
   - H3: PR 4: native clients
-  - H3: PR 5: propagation and fail-closed behavior
+  - H3: PR 5: ancestor lifecycle propagation
+  - H3: PR 6: fail-closed behavior
+  - H3: Follow-up: durable remote-message cleanup
   - H2: Tests
   - H2: Observability
   - H2: Open decisions
@@ -9498,7 +9578,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/firecrawl
 - Headings:
   - H2: Install plugin
-  - H2: Keyless webfetch and API keys
+  - H2: Keyless access and API keys
   - H2: Configure Firecrawl search
   - H2: Configure Firecrawl webfetch fallback
   - H3: Self-hosted Firecrawl
@@ -9795,6 +9875,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Environment variable
   - H2: Plugin config reference
   - H2: Notes
+  - H2: Related
+
+## tools/self-learning.md
+
+- Route: /tools/self-learning
+- Headings:
+  - H2: Enable self-learning
+  - H2: What OpenClaw can learn
+  - H2: When experience review runs
+  - H2: What the reviewer receives
+  - H2: Proposal safety
+  - H2: Review learned proposals
+  - H2: Configuration
+  - H2: Troubleshooting
+  - H3: No proposal appears after a long turn
+  - H3: Doctor reports that the Workshop tool is hidden
+  - H3: Too many low-value proposals appear
   - H2: Related
 
 ## tools/show-widget.md

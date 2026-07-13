@@ -154,8 +154,9 @@ actor GatewayConnection {
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
-        case chatAbort = "chat.abort"
         case skillsStatus = "skills.status"
+        case skillsSearch = "skills.search"
+        case skillsDetail = "skills.detail"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
@@ -536,6 +537,25 @@ extension GatewayConnection {
         timeoutMs: Double? = nil) async throws -> T
     {
         let data = try await requestRaw(method: method, params: params, timeoutMs: timeoutMs)
+        do {
+            return try self.decoder.decode(T.self, from: data)
+        } catch {
+            throw GatewayDecodingError(method: method.rawValue, message: error.localizedDescription)
+        }
+    }
+
+    func requestDecoded<T: Decodable>(
+        method: Method,
+        params: [String: AnyCodable]? = nil,
+        timeoutMs: Double? = nil,
+        ifCurrentRoute route: Route) async throws -> T
+    {
+        let data = try await self.request(
+            method: method.rawValue,
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: true)
         do {
             return try self.decoder.decode(T.self, from: data)
         } catch {
@@ -1355,14 +1375,6 @@ extension GatewayConnection {
             idempotencyKey: idempotencyKey))
     }
 
-    func sendSystemEvent(_ params: [String: AnyCodable]) async {
-        do {
-            try await self.requestVoid(method: .systemEvent, params: params)
-        } catch {
-            // Best-effort only.
-        }
-    }
-
     // MARK: - Health
 
     func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
@@ -1547,18 +1559,6 @@ extension GatewayConnection {
             method: .chatSend,
             params: params,
             timeoutMs: Double(requestTimeoutMs))
-    }
-
-    func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
-        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        struct AbortResponse: Decodable {
-            let ok: Bool?
-            let aborted: Bool?
-        }
-        let res: AbortResponse = try await requestDecoded(
-            method: .chatAbort,
-            params: ["sessionKey": AnyCodable(resolvedKey), "runId": AnyCodable(runId)])
-        return res.aborted ?? false
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {
