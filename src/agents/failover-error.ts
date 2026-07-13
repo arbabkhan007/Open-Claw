@@ -439,12 +439,7 @@ function hasMissingToolResultFailure(err: unknown): boolean {
   return findErrorProperty(err, readMissingToolResultMarker) === true;
 }
 
-/**
- * True when the error is a local runtime failure rather than a provider/model
- * failure. The model fallback chain must abort instead of consuming candidate
- * slots because another model would hit the same condition. See #83510,
- * #95474, and #106516.
- */
+/** True for local runtime failures shared by every model candidate. See #83510, #95474, #106516. */
 export function isNonProviderRuntimeError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "non_provider";
 }
@@ -570,12 +565,8 @@ function resolveFailoverClassificationFromErrorInternal(
   depth: number,
   providerHint?: string,
 ): FailoverClassification | null {
-  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
-    return null;
-  }
-  // Provisioning failures may contain provider-like words such as "not found"
-  // but never describe a model/provider response.
-  if (isSandboxProvisioningError(err)) {
+  // Provisioning text can resemble provider errors; keep it out of signal parsing. See #106516.
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH || isSandboxProvisioningError(err)) {
     return null;
   }
   if (err && typeof err === "object") {
