@@ -1,4 +1,5 @@
 // Memory Core plugin module implements hybrid behavior.
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
@@ -32,6 +33,23 @@ type HybridKeywordResult = {
   rankingScore?: number;
   pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
+};
+
+export type ManagerHybridMergeParams = {
+  query: string;
+  vector: Array<MemorySearchResult & { id: string }>;
+  keyword: Array<
+    MemorySearchResult & {
+      id: string;
+      textScore: number;
+      pathScore: number;
+      exactPathSpecificity: ExactPathSpecificity;
+    }
+  >;
+  vectorWeight: number;
+  textWeight: number;
+  mmr?: { enabled: boolean; lambda: number };
+  temporalDecay?: { enabled: boolean; halfLifeDays: number };
 };
 
 export function buildFtsQuery(raw: string): string | null {
