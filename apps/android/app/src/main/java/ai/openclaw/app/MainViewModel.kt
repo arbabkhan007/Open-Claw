@@ -278,6 +278,9 @@ class MainViewModel(
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
   val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = runtimeState(initial = null) { it.gatewayUpdateAvailable }
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.modelCatalog }
+  val providerModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.providerModelCatalog }
+  val providerModelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelCatalogRefreshing }
+  val providerModelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.providerModelCatalogErrorText }
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
@@ -302,6 +305,11 @@ class MainViewModel(
   val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
   val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
   val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
+  val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
+  val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
+    runtimeState(initial = GatewayClawHubSkillSearchState()) { it.clawHubSkillSearchState }
   val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
     runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
   val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
@@ -392,6 +400,7 @@ class MainViewModel(
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
+  val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = runtimeState(initial = null) { it.execApprovalsNotice }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -538,16 +547,6 @@ class MainViewModel(
         }
       }
     }
-  }
-
-  /** Per-gateway proxy credential headers; values are secrets and must never be logged. */
-  fun gatewayCustomHeaders(stableId: String): Map<String, String> = prefs.loadGatewayCustomHeaders(stableId)
-
-  fun setGatewayCustomHeaders(
-    stableId: String,
-    headers: Map<String, String>,
-  ) {
-    prefs.saveGatewayCustomHeaders(stableId, headers)
   }
 
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
@@ -767,12 +766,6 @@ class MainViewModel(
     }
   }
 
-  fun connectInBackground(endpoint: GatewayEndpoint) {
-    viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().connectSwitchingGateway(endpoint)
-    }
-  }
-
   fun connect(
     endpoint: GatewayEndpoint,
     token: String?,
@@ -860,6 +853,10 @@ class MainViewModel(
 
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
+  }
+
+  fun refreshProviderModels() {
+    ensureRuntime().refreshProviderModels()
   }
 
   fun refreshTalkSetupReadiness() {
@@ -960,6 +957,37 @@ class MainViewModel(
     ensureRuntime().clearSkillWorkshopMessage()
   }
 
+  fun setSkillEnabled(
+    skillKey: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setSkillEnabled(skillKey, enabled)
+  }
+
+  fun searchClawHubSkills(query: String) {
+    ensureRuntime().searchClawHubSkills(query)
+  }
+
+  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
+    ensureRuntime().reviewClawHubSkillInstall(skill)
+  }
+
+  fun dismissClawHubSkillInstallReview() {
+    ensureRuntime().dismissClawHubSkillInstallReview()
+  }
+
+  fun installClawHubSkill(
+    slug: String,
+    acknowledgeClawHubRisk: Boolean = false,
+    version: String? = null,
+  ) {
+    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+  }
+
+  fun clearClawHubSkillMessage() {
+    ensureRuntime().clearClawHubSkillMessage()
+  }
+
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
   }
@@ -973,6 +1001,10 @@ class MainViewModel(
     decision: String,
   ) {
     ensureRuntime().resolveExecApproval(id = id, decision = decision)
+  }
+
+  fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice) {
+    ensureRuntime().dismissExecApprovalsNotice(expected)
   }
 
   fun refreshChannels() {
