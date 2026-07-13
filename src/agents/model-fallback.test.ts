@@ -913,21 +913,29 @@ describe("runWithModelFallback", () => {
 
   it("does not consume model fallbacks for sandbox provisioning failures", async () => {
     const cfg = makeCfg();
+    const diagnostics = captureModelFailoverDiagnostics();
     const provisioningError = new SandboxProvisioningError(
       "docker",
       new Error("Sandbox image not found"),
     );
     const run = vi.fn().mockRejectedValue(provisioningError);
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-      }),
-    ).rejects.toBe(provisioningError);
+    try {
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          sessionId: "session:sandbox-provisioning",
+          sessionKey: "agent:test:sandbox-provisioning",
+          run,
+        }),
+      ).rejects.toBe(provisioningError);
+    } finally {
+      diagnostics.stop();
+    }
     expect(run).toHaveBeenCalledTimes(1);
+    expect(diagnostics.events).toEqual([]);
   });
 
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {

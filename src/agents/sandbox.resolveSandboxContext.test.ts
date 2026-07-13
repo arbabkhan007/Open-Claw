@@ -297,6 +297,7 @@ describe("resolveSandboxContext", () => {
 
       await expect(promise).rejects.toMatchObject({
         name: "SandboxProvisioningError",
+        message: 'Sandbox backend "broken-backend" failed to start: runtime image is missing',
         backendId: "broken-backend",
         cause: startupError,
       } satisfies Partial<SandboxProvisioningError>);
