@@ -100,6 +100,7 @@ export async function sendTelegramText(
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
+    sourcePlainText?: string;
     richMessages?: boolean;
     linkPreview?: boolean;
     tableMode?: MarkdownTableMode;
@@ -122,6 +123,7 @@ export async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
+  const sourcePlainText = opts?.sourcePlainText ?? fallbackText;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async (plainText: string = fallbackText) => {
     const res = await sendTelegramWithThreadFallback({
@@ -179,6 +181,7 @@ export async function sendTelegramText(
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
         html: richPlan.richMessage.html,
+        sourcePlainText,
         err,
         context: "sendRichMessage",
         warn: (message) => runtime.log?.(message),

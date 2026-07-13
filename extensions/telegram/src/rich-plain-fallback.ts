@@ -92,6 +92,7 @@ function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit:
 
 export function buildTelegramPlainFallbackPlan(params: {
   html: string;
+  sourcePlainText?: string;
   err: unknown;
   context: string;
   warn: (message: string) => void;
@@ -102,10 +103,17 @@ export function buildTelegramPlainFallbackPlan(params: {
   if (!trigger) {
     return undefined;
   }
-  const plainText = telegramHtmlToPlainTextFallback(params.html);
+  let usesSourcePlainText = false;
+  let plainText: string;
+  if (trigger === "html-parse" && params.sourcePlainText !== undefined) {
+    usesSourcePlainText = true;
+    plainText = params.sourcePlainText;
+  } else {
+    plainText = telegramHtmlToPlainTextFallback(params.html);
+  }
   const limit = params.limit ?? 4000;
   const chunks =
-    params.chunkCount === undefined
+    params.chunkCount === undefined || usesSourcePlainText
       ? splitTelegramPlainTextChunks(plainText, limit)
       : splitTelegramPlainTextFallback(plainText, params.chunkCount, limit);
   params.warn(

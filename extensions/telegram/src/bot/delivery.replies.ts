@@ -91,6 +91,7 @@ type TelegramReplyQuoteForSend = {
 type TelegramDeliveryTextChunk = {
   text: string;
   plainText: string;
+  sourcePlainText?: string;
   textMode: "html";
 };
 
@@ -251,6 +252,7 @@ async function deliverTextReply(params: {
           thread: params.thread,
           textMode: chunk.textMode,
           plainText: chunk.plainText,
+          sourcePlainText: chunk.sourcePlainText,
           richMessages: params.richMessages,
           linkPreview: params.linkPreview,
           tableMode: params.tableMode,

@@ -326,6 +326,7 @@ export function createTelegramDraftStream(params: {
       } catch (err) {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
           html: page.richMessage.html,
+          sourcePlainText: page.text,
           err,
           context: "stream preview",
           warn: (message) => params.warn?.(message),
@@ -386,6 +387,7 @@ export function createTelegramDraftStream(params: {
         } catch (err) {
           const fallbackPlan = buildTelegramPlainFallbackPlan({
             html: page.richMessage.html,
+            sourcePlainText: page.text,
             err,
             context: "stream preview edit",
             warn: (message) => params.warn?.(message),

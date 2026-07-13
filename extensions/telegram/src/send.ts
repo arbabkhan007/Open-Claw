@@ -1113,7 +1113,8 @@ async function sendMessageTelegramWithContext(
     }
     return htmlChunks.map((htmlTextLocal) => ({
       htmlText: htmlTextLocal,
-      plainText: telegramHtmlToPlainTextFallback(htmlTextLocal),
+      plainText:
+        htmlChunks.length === 1 ? fallbackText : telegramHtmlToPlainTextFallback(htmlTextLocal),
     }));
   };
 
@@ -1212,6 +1213,7 @@ async function sendMessageTelegramWithContext(
       } catch (err) {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
           html: chunk.text,
+          sourcePlainText: chunk.sourcePlainText,
           err,
           context: "richMessage",
           warn: (message) => sendLogger.warn(message),
