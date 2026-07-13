@@ -509,10 +509,24 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("gateway.remote.url");
   });
 
-  it("treats secrets config changes as no-op for gateway restart planning", () => {
-    const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
+  it("treats non-provider secrets config changes as no-op for gateway restart planning", () => {
+    // `secrets.defaults.*` is no-op because changing default env namespaces or
+    // similar shared storage does not invalidate any live credential the
+    // runtime is already using.
+    const plan = buildGatewayReloadPlan(["secrets.defaults.env"]);
     expect(plan.restartGateway).toBe(false);
-    expect(plan.noopPaths).toContain("secrets.providers.default.path");
+    expect(plan.noopPaths).toContain("secrets.defaults.env");
+  });
+
+  it("treats secrets.providers rotations as restart-required for gateway restart planning", () => {
+    // Provider SecretRef rotations must stop the runtime from resolving the
+    // old credential. Without restart-required classification, the hot-mode
+    // security carve-out (resolveHotModeRestartDecision) would never fire for
+    // `secrets.providers.*` changes and the runtime would keep accepting
+    // the rotated-away credential until manual restart.
+    const plan = buildGatewayReloadPlan(["secrets.providers.openai.allowlist"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("secrets.providers.openai.allowlist");
   });
 
   it("treats TUI display preferences as no-op for gateway restart planning", () => {
@@ -1755,6 +1769,260 @@ describe("startGatewayConfigReloader", () => {
       "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
     ]);
     expect(plan.noopPaths).toStrictEqual([]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves the shipped hot-mode warn-and-keep contract on non-security restart-required edits", async () => {
+    // Default hot-mode behavior on a routine restart-required change is to
+    // warn and keep running. Existing v2026.5.x deployments that configured
+    // `gateway.reload.mode: "hot"` rely on this. Security-critical changes
+    // (auth/secrets) bypass warn-and-keep -- see separate tests below.
+    const previousConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+        bind: "loopback",
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+        bind: "lan",
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-bind-warn-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      "config reload requires gateway restart; hot mode ignoring (gateway.bind)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("auto-restarts in hot mode for security-critical auth changes", async () => {
+    // Credential-rotation-bypass guard: a `gateway.auth.token` rotation on
+    // disk must propagate without sitting behind the warn-and-keep contract,
+    // because the operator may be rotating in response to a leaked token and
+    // the running runtime would otherwise keep accepting the compromised
+    // value until manual restart.
+    const previousConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+        auth: { mode: "token", token: "old-token" },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+        auth: { mode: "token", token: "new-token" },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-auth-security-restart-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    const [plan, restartedConfig] = getOnlyRestartCall(harness);
+    expect(plan.changedPaths).toEqual(["gateway.auth.token"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["gateway.auth.token"]);
+    expect(restartedConfig).toBe(nextConfig);
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      "config reload requires gateway restart; hot mode scheduling restart for security-critical change (gateway.auth.token)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("auto-restarts in hot mode for top-level secrets.providers credential rotations", async () => {
+    // Same credential-rotation-bypass guard for provider SecretRef storage:
+    // a `secrets.providers.<provider>.apiKey` rotation on disk must propagate
+    // without warn-and-keep, because a leaked provider API key needs to stop
+    // being accepted by the running runtime the moment the operator rotates
+    // it on disk. Provider credentials live at the top-level `secrets`
+    // config root (not `gateway.secrets`); this test pins that prefix.
+    const previousConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+      },
+      secrets: {
+        providers: {
+          openai: { source: "env", allowlist: ["OPENAI_API_KEY_OLD"] },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: {
+        reload: { mode: "hot", debounceMs: 0 },
+      },
+      secrets: {
+        providers: {
+          openai: { source: "env", allowlist: ["OPENAI_API_KEY_NEW"] },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-secrets-provider-rotate-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    const [plan, restartedConfig] = getOnlyRestartCall(harness);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons.some((r) => r.startsWith("secrets.providers"))).toBe(true);
+    expect(restartedConfig).toBe(nextConfig);
+    expect(
+      harness.log.warn.mock.calls.some(
+        ([msg]) =>
+          typeof msg === "string" &&
+          msg.includes("hot mode scheduling restart for security-critical change") &&
+          msg.includes("secrets.providers"),
+      ),
+    ).toBe(true);
+
+    await harness.reloader.stop();
+  });
+
+  it("auto-restarts in hot mode when a doctor batch renames auth profiles and order", async () => {
+    // Regression: `openclaw doctor --fix` rewrites `auth.profiles.*` /
+    // `auth.order.*` (for example renaming stale `openai-codex:*` profiles to
+    // `openai:*`) in one batch with model routes. Those paths are unmatched in
+    // the reload-plan rules and default to restart-required; without the
+    // security-critical carve-out, hot mode would warn-and-keep and the
+    // runtime would keep authenticating through profiles that no longer
+    // exist on disk.
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot", debounceMs: 0 } },
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+        order: { "openai-codex": ["openai-codex:default"] },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot", debounceMs: 0 } },
+      auth: {
+        profiles: {
+          "openai:default": { provider: "openai", mode: "oauth" },
+        },
+        order: { openai: ["openai:default"] },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-auth-profile-doctor-batch-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    const [plan, restartedConfig] = getOnlyRestartCall(harness);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons.some((r) => r.startsWith("auth.profiles."))).toBe(true);
+    expect(plan.restartReasons.some((r) => r.startsWith("auth.order."))).toBe(true);
+    expect(restartedConfig).toBe(nextConfig);
+    expect(
+      harness.log.warn.mock.calls.some(
+        ([msg]) =>
+          typeof msg === "string" &&
+          msg.includes("hot mode scheduling restart for security-critical change") &&
+          msg.includes("auth.profiles"),
+      ),
+    ).toBe(true);
+
+    await harness.reloader.stop();
+  });
+
+  it("hot-reloads doctor-repaired OpenAI model route changes in hot mode", async () => {
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot", debounceMs: 0 } },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5", fallbacks: ["openai-codex/gpt-5.4"] },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { mode: "hot", debounceMs: 0 } },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "hot-model-route-repair-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual([
+      "agents.defaults.model.primary",
+      "agents.defaults.model.fallbacks",
+      "agents.defaults.models",
+    ]);
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

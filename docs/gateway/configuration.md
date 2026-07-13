@@ -548,12 +548,12 @@ for the checklist.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                                |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.           |
-| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed - you handle it. |
-| **`restart`**          | Restarts the Gateway on any config change, safe or not.                                 |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart.                 |
+| Mode                   | Behavior                                                                                                                                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.                                                                                                                                    |
+| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed; you handle it. Security-critical changes (`gateway.auth.*`, `auth.profiles.*`/`auth.order.*`, `secrets.providers.*`) still auto-restart. |
+| **`restart`**          | Restarts the Gateway on any config change, safe or not.                                                                                                                                                          |
+| **`off`**              | Disables file watching. Changes take effect on the next manual restart.                                                                                                                                          |
 
 ```json5
 {
