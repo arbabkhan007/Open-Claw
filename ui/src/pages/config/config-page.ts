@@ -846,11 +846,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       }),
     });
   }
-
   private renderQuickConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const modelsConfig = asConfigRecord(configObject.models);
     const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
@@ -860,7 +858,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
       onLocaleChange: (locale) => this.setLocale(locale),
       currentModel: model,
-      modelCatalogMode: modelsConfig?.mode === "replace" ? "replace" : undefined,
+      modelCatalogMode:
+        asConfigRecord(configObject.models)?.mode === "replace" ? "replace" : undefined,
       thinkingLevel,
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
       channels: quickChannels(configObject),
@@ -951,7 +950,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       basePath: this.context.basePath,
     });
   }
-
   private renderSettingsModeToggle() {
     if (this.pageId !== "config") {
       return nothing;
