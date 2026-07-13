@@ -243,16 +243,22 @@ class MemoryDB {
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
     } else {
-      this.table = await this.db.createTable(TABLE_NAME, [
-        {
-          id: "__schema__",
-          text: "",
-          vector: Array.from({ length: this.vectorDim }).fill(0),
-          importance: 0,
-          category: "other",
-          createdAt: 0,
-        },
-      ]);
+      // The existence check is advisory across processes. LanceDB's existOk mode
+      // makes the create atomic when another initializer wins the race.
+      this.table = await this.db.createTable(
+        TABLE_NAME,
+        [
+          {
+            id: "__schema__",
+            text: "",
+            vector: Array.from({ length: this.vectorDim }).fill(0),
+            importance: 0,
+            category: "other",
+            createdAt: 0,
+          },
+        ],
+        { existOk: true },
+      );
       await this.table.delete('id = "__schema__"');
     }
   }
@@ -518,6 +524,7 @@ class MemoryRecallEmbeddingError extends Error {
 }
 
 export const testing = {
+  createMemoryDb: (dbPath: string, vectorDim: number) => new MemoryDB(dbPath, vectorDim),
   runWithTimeout,
 } as const;
 
