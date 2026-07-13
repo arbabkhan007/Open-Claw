@@ -268,6 +268,31 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
+  it("falls back to the sole pending prompt when a structured approval tool call id is unmatched", async () => {
+    const harness = await createHarness();
+    const approvalId = "approval-unmatched-tool";
+
+    await harness.agent.handleGatewayEvent(
+      createApprovalRequestEvent({
+        approvalId,
+        toolCallId: "tool-not-yet-observed",
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
+      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
+    });
+
+    expect(firstCallArg(harness.requestPermission).sessionId).toBe(SESSION_ID);
+    expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: approvalId,
+      decision: "allow-once",
+    });
+
+    await cleanupHarness(harness);
+  });
+
   it("relays metadata from a Gateway-produced exec approval request event", async () => {
     const gatewayManager = new ExecApprovalManager();
     const gatewayHandlers = createExecApprovalHandlers(gatewayManager);
