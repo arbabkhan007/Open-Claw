@@ -20,9 +20,10 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText" | "sanitizeText"
+  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 
 const activeBuses = new Map<string, NostrBusHandle>();
