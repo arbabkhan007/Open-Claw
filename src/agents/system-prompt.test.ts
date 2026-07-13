@@ -1289,6 +1289,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         agentId: "work",
+        identityName: "Runt",
         sessionKey: "agent:main:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         host: "host",
@@ -1300,6 +1301,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("agentName=Runt");
     expect(prompt).toContain("session=agent:main:main");
     expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
   });
@@ -1319,6 +1321,7 @@ describe("buildAgentSystemPrompt", () => {
     const line = buildRuntimeLine(
       {
         agentId: "work",
+        identityName: "Runt",
         sessionKey: "agent:main:subagent:runtime-check",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         host: "host",
@@ -1336,6 +1339,7 @@ describe("buildAgentSystemPrompt", () => {
     );
 
     expect(line).toContain("agent=work");
+    expect(line).toContain("agentName=Runt");
     expect(line).toContain("session=agent:main:subagent:runtime-check");
     expect(line).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
     expect(line).toContain("host=host");
