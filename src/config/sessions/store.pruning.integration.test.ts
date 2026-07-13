@@ -1417,6 +1417,49 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(staleArchive);
   });
 
+  it("deduplicates archive previews for all agents sharing one store directory", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const sharedStorePath = path.join(testDir, "shared-sessions.json");
+    const staleArchive = path.join(
+      testDir,
+      `stale.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "stale", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {
+        session: { store: sharedStorePath },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      },
+      opts: { allAgents: true, dryRun: true, enforce: true },
+    });
+
+    expect(dryRun.previewResults).toHaveLength(2);
+    expect(dryRun.previewResults.map((result) => result.summary.archiveCleanup)).toEqual([
+      { scannedFiles: 1, removedFiles: 1 },
+      { scannedFiles: 0, removedFiles: 0 },
+    ]);
+    expect(
+      dryRun.previewResults.reduce(
+        (total, result) => total + result.summary.unreferencedArtifacts.removedFiles,
+        0,
+      ),
+    ).toBe(0);
+    await expectPathExists(staleArchive);
+  });
+
   it("sessions cleanup keeps deleted and reset archives when retention is disabled", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
