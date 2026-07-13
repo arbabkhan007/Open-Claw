@@ -693,6 +693,7 @@ function hasMessagingRichContent(record: Record<string, unknown>): boolean {
   };
   try {
     parseJsonMessageParam(payload, "presentation");
+    parseJsonMessageParam(payload, "channelData");
     parseInteractiveParam(payload);
   } catch {
     return false;
