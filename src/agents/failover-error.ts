@@ -16,6 +16,7 @@ import {
 } from "./embedded-agent-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { isSandboxProvisioningError } from "./sandbox/errors.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -439,13 +440,13 @@ function hasMissingToolResultFailure(err: unknown): boolean {
 }
 
 /**
- * True when the error is a local runtime coordination/tool-execution error
- * rather than a provider/model failure. The model fallback chain must abort on
- * these instead of consuming candidate slots — retrying any model would hit the
- * same local condition. See #83510 and #95474.
+ * True when the error is a local runtime failure rather than a provider/model
+ * failure. The model fallback chain must abort instead of consuming candidate
+ * slots because another model would hit the same condition. See #83510,
+ * #95474, and #106516.
  */
-export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  return resolveModelFallbackError(err).kind === "coordination";
+export function isNonProviderRuntimeError(err: unknown): boolean {
+  return resolveModelFallbackError(err).kind === "non_provider";
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -570,6 +571,11 @@ function resolveFailoverClassificationFromErrorInternal(
   providerHint?: string,
 ): FailoverClassification | null {
   if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  // Provisioning failures may contain provider-like words such as "not found"
+  // but never describe a model/provider response.
+  if (isSandboxProvisioningError(err)) {
     return null;
   }
   if (err && typeof err === "object") {
@@ -772,7 +778,7 @@ type FailoverErrorContext = {
 
 type ModelFallbackErrorResolution =
   | { kind: "failover"; error: FailoverError }
-  | { kind: "coordination"; error: unknown }
+  | { kind: "non_provider"; error: unknown }
   | { kind: "unknown"; error: unknown };
 
 /** Convert a classified raw error into a FailoverError with optional request context. */
@@ -842,18 +848,19 @@ export function resolveModelFallbackError(
   // cleanup wrapper owns a preserved prompt error. Its message alone must not
   // reclassify session-state loss as a provider failure.
   if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
-    return { kind: "coordination", error: err };
+    return { kind: "non_provider", error: err };
   }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
     return { kind: "failover", error: failoverError };
   }
   if (
+    findErrorProperty(err, (candidate) => isSandboxProvisioningError(candidate) || undefined) ||
     hasSessionWriteLockContention(err) ||
     hasEmbeddedAttemptSessionTakeover(err) ||
     hasMissingToolResultFailure(err)
   ) {
-    return { kind: "coordination", error: err };
+    return { kind: "non_provider", error: err };
   }
   return { kind: "unknown", error: err };
 }
