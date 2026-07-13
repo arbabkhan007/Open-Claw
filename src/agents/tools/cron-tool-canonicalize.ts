@@ -7,7 +7,13 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
+// "on-exit" is recognized (not synthesized) so an explicit on-exit kind
+// survives canonicalization and reaches the assertNoCronShellExecution
+// rejection instead of being overwritten by another flat schedule field.
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
+// Intentionally excludes "command" (which persisted-shape.ts allows): the agent
+// cron tool blocks command payloads via assertNoCronShellExecution, so they are
+// CLI/Gateway-only and never inferred from flat tool args.
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -33,8 +39,6 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "stagger",
   "staggerMs",
   "exact",
-  "command",
-  "cwd",
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
@@ -184,12 +188,7 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     schedule.kind = "cron";
   }
 
-  const movedCommand = moveDefinedField({ source: value, target: schedule, from: "command" });
-  if (movedCommand && !isCronScheduleKind(schedule.kind)) {
-    schedule.kind = "on-exit";
-  }
-
-  for (const key of ["anchorMs", "tz", "staggerMs", "cwd"] as const) {
+  for (const key of ["anchorMs", "tz", "staggerMs"] as const) {
     hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
   }
   hasSchedule =
@@ -209,8 +208,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = "every";
     } else if (schedule.expr !== undefined) {
       schedule.kind = "cron";
-    } else if (schedule.command !== undefined) {
-      schedule.kind = "on-exit";
     }
   }
 

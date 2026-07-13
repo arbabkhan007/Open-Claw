@@ -135,17 +135,66 @@ describe("cron tool flat-params", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects flat command schedule shorthand for add", async () => {
+  it("rejects loose flat command fields on add instead of silently dropping them", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
+    // Flat command/cwd are never recovered into a schedule, but silently
+    // swallowing a shell-execution field on an otherwise successful call
+    // would mislead the caller, so they are rejected before recovery.
     await expect(
-      tool.execute("call-flat-onexit-infer", {
+      tool.execute("call-flat-command-add", {
         action: "add",
         name: "watch build",
         command: "make",
         message: "done",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a loose flat cwd field on add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-cwd-add", {
+        action: "add",
+        name: "watch build",
+        cwd: "/repo",
+        everyMs: 60000,
+        message: "done",
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stray command key on a nested job object", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-nested-job-command", {
+        action: "add",
+        job: {
+          name: "watch build",
+          schedule: { kind: "every", everyMs: 60000 },
+          command: "make",
+        },
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a command stuffed inside a non-on-exit schedule", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-nested-schedule-command", {
+        action: "add",
+        job: {
+          name: "watch build",
+          schedule: { kind: "every", everyMs: 60000, command: "make" },
+        },
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -164,16 +213,80 @@ describe("cron tool flat-params", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects flat command schedule shorthand for update", async () => {
+  it("rejects loose flat command fields on update instead of silently dropping them", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     await expect(
-      tool.execute("call-flat-onexit-update-infer", {
+      tool.execute("call-flat-command-update", {
         action: "update",
         jobId: "job-infer",
         command: "make",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stray command key on a nested patch object", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-nested-patch-command", {
+        action: "update",
+        jobId: "job-patch-command",
+        patch: { command: "make" },
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a kindless patch schedule command classified as stray shell input", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    // Drift guard: a schedule carrying command but no explicit kind must stay
+    // in the stray command/cwd rejection path. If canonicalization ever infers
+    // kind "on-exit" from schedule.command again, this surfaces as the on-exit
+    // error instead and this test fails.
+    await expect(
+      tool.execute("call-nested-patch-schedule-command", {
+        action: "update",
+        jobId: "job-patch-schedule-command",
+        patch: { schedule: { command: "make" } },
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("routes explicit on-exit intent and stray command fields to distinct rejections", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    // The two rejection paths must not collapse into each other: explicit
+    // on-exit intent gets the on-exit error, loose shell fields get the
+    // command/cwd error.
+    const onExitError = await tool
+      .execute("call-distinct-onexit", {
+        action: "add",
+        job: { name: "explicit on-exit", schedule: { kind: "on-exit", command: "make" } },
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => String(error),
+      );
+    const strayError = await tool
+      .execute("call-distinct-stray", {
+        action: "add",
+        name: "stray command",
+        command: "make",
+        message: "done",
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => String(error),
+      );
+
+    expect(onExitError).toContain("cron on-exit schedules cannot be created or edited");
+    expect(onExitError).not.toContain("command/cwd");
+    expect(strayError).toContain("cron command/cwd fields cannot be set");
+    expect(strayError).not.toContain("on-exit schedules");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 

@@ -403,7 +403,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add job; update jobId+patch; remove jobId\n- run jobId (due only; runMode=\"force\" now); runs jobId history\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"}; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs, and remove current job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
+        "description": "Gateway schedules/wakes: reminders, later checks/follow-ups, recurring work. Never exec sleep/process-poll as timer. Main job => heartbeat system event; isolated => background task in `openclaw tasks`.\n\nACTIONS:\n- status scheduler; list compact summaries (includeDisabled, session agentId auto-filter; get for full); get jobId\n- add job; update jobId+patch; remove jobId. add/update also accept flat job fields.\n- run jobId (due only; runMode=\"force\" now); runs jobId history\n- wake text (+ optional mode). Default caller lane; top-level sessionKey/agentId selects another caller-owned lane.\n\nADD JOB:\n{ \"name\":\"...\", \"schedule\":{...}, \"trigger\":{ \"script\":\"...\", \"once\":false }, \"payload\":{...}, \"delivery\":{...}, \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nRequired: schedule,payload. enabled default true. trigger only every/cron.\n\nFLAT JOB FIELDS (add/update; prefer when nested object args are unreliable):\n{ \"action\":\"add\", \"name\":\"...\", \"at\":\"<ISO-8601>\"|\"everyMs\":<ms>|\"expr\":\"<cron>\", \"tz\":\"<optional-IANA>\", \"message\":\"<agentTurn prompt>\"|\"text\":\"<systemEvent text>\", \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nExactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.\n\nTARGET/PAYLOAD:\n- main => systemEvent {kind:\"systemEvent\",text:\"...\"}; systemEvent defaults main.\n- isolated/current/session:<id> => agentTurn {kind:\"agentTurn\",message:\"...\",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.\n- current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.\n\nSCHEDULE:\n- at: {kind:\"at\",at:\"ISO-8601\"}; timezone-less = UTC.\n- every: {kind:\"every\",everyMs:<ms>,anchorMs?}.\n- cron: {kind:\"cron\",expr:\"...\",tz?:\"IANA\"}. Expr is requested local wall time; never pre-convert to UTC. Missing tz = Gateway host local, not UTC. Shanghai 18:00: {kind:\"cron\",expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n\nTRIGGER SCRIPT:\n- Requires cron.triggers.enabled; if off, explain and never model-poll fallback.\n- Headless owner allowlist; quiet check has no model. Prior trigger.state is frozen JSON. Return/json({fire:boolean,message?:string,state?:JSONValue}); create new state, never mutate prior.\n- fire:false saves state only; no payload/history. fire:true runs payload and appends message; fired state saves only after payload success. Check reads; payload acts.\n- Silent watcher: top-level delivery.mode=\"none\". Omitted delivery on isolated agentTurn announces and missing route may fail.\n- once:true disables after first successful fire. Per check: 30s, 5 tool calls, 16KB state.\n- Hidden Code Mode tools: await tools.call(\"exec\", {command:\"...\"}); unknown id => search/describe.\n\nDELIVERY top-level: {mode:\"none|announce|webhook\",channel?,to?,threadId?,bestEffort?}\n- Isolated agentTurn omitted delivery => announce. announce only isolated/current/session; channel/to optional; threadId chat topic. Specific chat: set channel/to; no messaging tool inside run.\n- webhook posts finished-run event to URL in to.\n\nRestricted isolated runs may only self status/list, current get/runs, and remove current job. wake mode: next-heartbeat default | now. jobId canonical; id compat. contextMessages 0-10 adds prior messages.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -415,10 +415,46 @@
               "description": "List filter for `action: \"list\"`; wake target override for `action: \"wake\"` (defaults to the calling agent when omitted on wake)",
               "type": "string"
             },
+            "anchorMs": {
+              "description": "Flat start anchor ms for a flat everyMs schedule",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "at": {
+              "description": "Flat one-shot ISO-8601 time for action=\"add\" or action=\"update\"",
+              "type": "string"
+            },
             "contextMessages": {
               "maximum": 10,
               "minimum": 0,
               "type": "integer"
+            },
+            "enabled": {
+              "description": "Flat enabled flag for action=\"add\" or action=\"update\"",
+              "type": "boolean"
+            },
+            "everyMs": {
+              "description": "Flat recurring interval ms for action=\"add\" or action=\"update\"",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "expr": {
+              "description": "Flat cron expression for action=\"add\" or action=\"update\"",
+              "type": "string"
+            },
+            "fallbacks": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Flat agentTurn fallback models; implies an agentTurn payload, or null to clear on update"
             },
             "gatewayToken": {
               "type": "string"
@@ -718,8 +754,28 @@
             "jobId": {
               "type": "string"
             },
+            "message": {
+              "description": "Flat agentTurn prompt for action=\"add\" or action=\"update\"; implies an agentTurn payload",
+              "type": "string"
+            },
             "mode": {
+              "description": "Wake timing for action=\"wake\" only; not cron job delivery mode",
               "enum": ["now", "next-heartbeat"],
+              "type": "string"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Flat agentTurn model override; implies an agentTurn payload, or null to clear on update"
+            },
+            "name": {
+              "description": "Flat job name for action=\"add\" or action=\"update\"",
               "type": "string"
             },
             "patch": {
@@ -1083,12 +1139,44 @@
               "description": "Wake target override for `action: \"wake\"`: route the event to another session owned by the calling agent. Defaults to the resolved calling-session key when omitted.",
               "type": "string"
             },
+            "sessionTarget": {
+              "description": "Flat job target for action=\"add\" or action=\"update\": main | isolated | current | session:<id>",
+              "type": "string"
+            },
             "text": {
+              "description": "Wake event text; for action=\"add\" or action=\"update\", flat systemEvent text implies a systemEvent payload",
+              "type": "string"
+            },
+            "thinking": {
+              "description": "Flat agentTurn thinking override; implies an agentTurn payload",
               "type": "string"
             },
             "timeoutMs": {
               "minimum": 1,
               "type": "integer"
+            },
+            "timeoutSeconds": {
+              "description": "Flat agentTurn timeout seconds; implies an agentTurn payload",
+              "minimum": 0,
+              "type": "number"
+            },
+            "toolsAllow": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Flat agentTurn allowed tool ids; implies an agentTurn payload, or null to clear on update"
+            },
+            "tz": {
+              "description": "IANA timezone for a flat cron expression",
+              "type": "string"
             }
           },
           "required": ["action"],
