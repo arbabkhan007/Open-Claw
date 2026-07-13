@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 // Proxy capture server tests cover request recording and response handling.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
@@ -8,10 +9,14 @@ import {
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
-import { parseConnectTarget, startDebugProxyServer } from "./proxy-server.js";
+import {
+  parseConnectTarget,
+  pipeUpstreamBodyToClient,
+  startDebugProxyServer,
+} from "./proxy-server.js";
 import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
@@ -339,4 +344,221 @@ describe("startDebugProxyServer", () => {
       await origin.stop();
     }
   });
+
+  it("survives a mid-response client abort and still serves later requests", async () => {
+    const settings = await makeSettings();
+    const origin = await startStreamingOrigin();
+    const proxy = await startDebugProxyServer({ settings });
+
+    try {
+      const proxyUrl = new URL(proxy.proxyUrl);
+      await new Promise<void>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: proxyUrl.hostname,
+            port: Number(proxyUrl.port),
+            method: "GET",
+            path: origin.url,
+            headers: { connection: "close" },
+          },
+          (res) => {
+            res.once("data", () => {
+              // Abort after the first chunk so the proxy must cancel upstream
+              // without an unhandled write-after-end crash.
+              req.destroy();
+              resolve();
+            });
+            res.on("error", () => {
+              // expected when the client tears down mid-body
+            });
+          },
+        );
+        req.on("error", () => {
+          // destroy can surface as a request error; still treat as success if
+          // the subsequent healthy request works.
+          resolve();
+        });
+        req.setTimeout(5_000, () => reject(new Error("client abort timed out")));
+        req.end();
+      });
+
+      // Give the proxy a tick to finish cancel cleanup before the next request.
+      await new Promise((r) => setTimeout(r, 50));
+
+      const healthy = await getThroughProxy(proxy.proxyUrl, origin.healthyUrl);
+      expect(healthy).toMatchObject({ body: "ok", complete: true, statusCode: 200 });
+    } finally {
+      await proxy.stop();
+      await origin.stop();
+    }
+  });
 });
+
+describe("pipeUpstreamBodyToClient", () => {
+  it("pauses the upstream source when write() applies backpressure and resumes on drain", () => {
+    const upstream = new FakeUpstream();
+    const downstream = new FakeDownstream();
+    const chunks: string[] = [];
+    const onEnd = vi.fn();
+    const onUpstreamError = vi.fn();
+
+    pipeUpstreamBodyToClient({
+      upstreamRes: upstream,
+      res: downstream,
+      onChunk: (buffer) => {
+        chunks.push(buffer.toString("utf8"));
+      },
+      onEnd,
+      onUpstreamError,
+    });
+
+    downstream.nextWriteOk = false;
+    upstream.emitData("a");
+    expect(chunks).toEqual(["a"]);
+    expect(upstream.paused).toBe(true);
+    expect(downstream.written).toEqual(["a"]);
+
+    downstream.nextWriteOk = true;
+    downstream.emitDrain();
+    expect(upstream.paused).toBe(false);
+
+    upstream.emitData("b");
+    upstream.emitEnd();
+    expect(chunks).toEqual(["a", "b"]);
+    expect(downstream.written).toEqual(["a", "b"]);
+    expect(downstream.ended).toBe(true);
+    expect(onEnd).toHaveBeenCalledOnce();
+    expect(onUpstreamError).not.toHaveBeenCalled();
+  });
+
+  it("destroys the upstream source when the client leaves before end", () => {
+    const upstream = new FakeUpstream();
+    const downstream = new FakeDownstream();
+    const onEnd = vi.fn();
+
+    pipeUpstreamBodyToClient({
+      upstreamRes: upstream,
+      res: downstream,
+      onChunk: () => {},
+      onEnd,
+      onUpstreamError: () => {},
+    });
+
+    upstream.emitData("partial");
+    downstream.emitClientGone();
+    expect(upstream.destroyed).toBe(true);
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+});
+
+class FakeUpstream extends EventEmitter {
+  destroyed = false;
+  paused = false;
+
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+  }
+
+  emitData(text: string): void {
+    this.emit("data", Buffer.from(text));
+  }
+
+  emitEnd(): void {
+    this.emit("end");
+  }
+}
+
+class FakeDownstream extends EventEmitter {
+  destroyed = false;
+  writableEnded = false;
+  writableFinished = false;
+  ended = false;
+  nextWriteOk = true;
+  written: string[] = [];
+
+  write(chunk: Buffer): boolean {
+    this.written.push(chunk.toString("utf8"));
+    return this.nextWriteOk;
+  }
+
+  end(): void {
+    this.ended = true;
+    this.writableEnded = true;
+    this.writableFinished = true;
+    this.emit("close");
+  }
+
+  emitDrain(): void {
+    this.emit("drain");
+  }
+
+  emitClientGone(): void {
+    this.destroyed = true;
+    this.writableFinished = false;
+    this.emit("close");
+  }
+}
+
+async function startStreamingOrigin(): Promise<{
+  healthyUrl: string;
+  stop: () => Promise<void>;
+  url: string;
+}> {
+  const server = createHttpServer((req, res) => {
+    if (req.url === "/healthy") {
+      res.writeHead(200, {
+        "content-length": 2,
+        "content-type": "text/plain; charset=utf-8",
+      });
+      res.end("ok");
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    let i = 0;
+    const timer = setInterval(() => {
+      if (res.destroyed || res.writableEnded) {
+        clearInterval(timer);
+        return;
+      }
+      res.write(`chunk-${i++}\n`);
+      if (i > 200) {
+        clearInterval(timer);
+        res.end();
+      }
+    }, 5);
+    res.on("close", () => {
+      clearInterval(timer);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  return {
+    healthyUrl: `${base}/healthy`,
+    url: `${base}/stream`,
+    stop: async () =>
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      }),
+  };
+}
