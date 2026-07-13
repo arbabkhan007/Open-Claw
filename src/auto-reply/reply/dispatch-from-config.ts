@@ -57,7 +57,7 @@ import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/ex
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -155,6 +155,12 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import {
+  applyOperationalReplyPolicy as applyOperationalReplyPolicyFromConfig,
+  isOperationalReplyPayload,
+  markOperationalReplyPolicyDelivered,
+  resolveOperationalReplyPolicy,
+} from "./operational-reply-policy.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   buildPendingFinalDeliveryText,
@@ -1024,22 +1030,36 @@ function shouldBypassPluginOwnedBindingForCommand(
   );
 }
 
-async function clearPendingFinalDeliveryAfterSuccess(params: {
+async function clearPendingFinalDeliveryState(params: {
   identity?: PendingFinalDeliveryIdentity;
   storePath?: string;
   sessionKey?: string;
+  onlyIfText?: string;
+  onlyIfTexts?: readonly string[];
 }): Promise<void> {
   const identity = params.identity;
-  if (!params.storePath || !params.sessionKey || !identity?.present) {
+  if (!params.storePath || !params.sessionKey || (identity && !identity.present)) {
     return;
   }
-  await updateSessionEntry(
+  await patchSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     async (entry) => {
-      if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
+      if (identity && !matchesPendingFinalDeliveryIdentity(entry, identity)) {
         return null;
       }
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+        return null;
+      }
+      if (
+        params.onlyIfText !== undefined &&
+        normalizeOptionalString(entry.pendingFinalDeliveryText) !== params.onlyIfText
+      ) {
+        return null;
+      }
+      if (
+        params.onlyIfTexts !== undefined &&
+        !resolveSuppressedOperationalPendingFinalText(entry, params.onlyIfTexts)
+      ) {
         return null;
       }
       return {
@@ -1182,7 +1202,7 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
   if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
-  await updateSessionEntry(
+  await patchSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     async (entry) => {
       if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
@@ -1241,6 +1261,21 @@ async function reconcilePendingFinalDeliveryAfterSettlement(params: {
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
+}
+
+function resolveSuppressedOperationalPendingFinalText(
+  entry: SessionEntry | undefined,
+  suppressedTexts: readonly string[],
+): string | undefined {
+  const pendingText = normalizeOptionalString(entry?.pendingFinalDeliveryText);
+  if (!pendingText) {
+    return undefined;
+  }
+  if (suppressedTexts.includes(pendingText)) {
+    return pendingText;
+  }
+  const joinedSuppressedText = suppressedTexts.join("\n\n");
+  return joinedSuppressedText && pendingText === joinedSuppressedText ? pendingText : undefined;
 }
 
 async function mirrorDeliveredReplyToTranscript(params: {
@@ -2467,15 +2502,15 @@ async function dispatchReplyFromConfigInner(
     abortSignal?: AbortSignal,
     mirror?: boolean,
     kind: ReplyDispatchKind = "tool",
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
-      return;
+      return false;
     }
     const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
-      return;
+      return false;
     }
     const result = await routeReplyToOriginating(payload, {
       abortSignal: effectiveAbortSignal,
@@ -2485,6 +2520,7 @@ async function dispatchReplyFromConfigInner(
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
+    return result ? isRoutedReplyDelivered(result) : false;
   };
 
   const deliverBindingPayload = async (
@@ -2500,21 +2536,65 @@ async function dispatchReplyFromConfigInner(
           `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
         );
       }
-      return result.ok;
+      return isRoutedReplyDelivered(result);
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"
       ? dispatcher.sendToolResult(payload)
       : dispatcher.sendFinalReply(payload);
   };
+  const resolveDispatchOperationalSourceEventKey = (): string =>
+    normalizeOptionalString(ctx.MessageSidFull) ??
+    normalizeOptionalString(ctx.MessageSid) ??
+    normalizeOptionalString(ctx.AmbientTranscriptMessageId) ??
+    normalizeOptionalString(ctx.MessageSidLast) ??
+    normalizeOptionalString(ctx.MessageSidFirst) ??
+    crypto.randomUUID();
+  const applyBindingNoticeOperationalPolicy = async (
+    payload: ReplyPayload,
+  ): Promise<{
+    payload: ReplyPayload;
+    policyResult: Awaited<ReturnType<typeof applyOperationalReplyPolicyFromConfig>>;
+  }> => {
+    const noticePayload =
+      payload.isError ||
+      payload.isFallbackNotice ||
+      payload.isCompactionNotice ||
+      payload.isStatusNotice
+        ? payload
+        : { ...payload, isStatusNotice: true };
+    const policyResult = await applyOperationalReplyPolicyFromConfig({
+      cfg,
+      payload: noticePayload,
+      explicitCommandTurn: explicitCommandTurnCtx,
+      sendPolicyDenied,
+      sourceSessionKey: acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey,
+      sourceStorePath: sessionStoreEntry.storePath,
+      sourceEventKey: resolveDispatchOperationalSourceEventKey(),
+      sourceChannel: deliveryChannel,
+      provider: ctx.Provider,
+      surface: ctx.Surface,
+      chatType,
+      inboundEventKind: ctx.InboundEventKind,
+      messageKey: ctx.MessageSidFull ?? ctx.MessageSid,
+      logPrefix: "dispatch-from-config",
+    });
+    return { payload: noticePayload, policyResult };
+  };
   const sendBindingNotice = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (suppressAutomaticSourceDelivery) {
+    const notice = await applyBindingNoticeOperationalPolicy(payload);
+    if (!notice.policyResult.shouldDeliver) {
+      return notice.policyResult.redirected === true;
+    }
+    if (suppressAutomaticSourceDelivery && resolveOperationalReplyPolicy(cfg).policy === "always") {
       return false;
     }
-    return await deliverBindingPayload(payload, mode);
+    const delivered = await deliverBindingPayload(notice.payload, mode);
+    await markOperationalReplyPolicyDelivered(notice.policyResult, delivered);
+    return delivered;
   };
 
   const pluginOwnedBindingRecord =
@@ -2677,6 +2757,8 @@ async function dispatchReplyFromConfigInner(
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
+  const suppressUserDeliveryBySourceReplyPolicy =
+    suppressAutomaticSourceDelivery && !sendPolicyDenied && !suppressAcpChildUserDelivery;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
   const commentaryPayloadsEnabled = params.replyOptions?.commentaryPayloadsEnabled === true;
   const attachSourceReplyDeliveryMode = (
@@ -3066,15 +3148,22 @@ async function dispatchReplyFromConfigInner(
       if (!shouldSendToolSummaries() || shouldSuppressProgressDelivery()) {
         return;
       }
-      const payload: ReplyPayload = { text: `💬 ${text}` };
+      const payload: ReplyPayload = { text: `💬 ${text}`, isStatusNotice: true };
       if (shouldSuppressLateTextOnlyToolProgress(payload)) {
         return;
       }
+      const policyResult = await applyOperationalReplyPolicy(payload);
+      if (!policyResult.shouldDeliver) {
+        return;
+      }
       if (shouldRouteToOriginating) {
-        await sendPayloadAsync(payload, undefined, false);
+        const delivered = await sendPayloadAsync(payload, undefined, false);
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
       } else {
         markInboundDedupeReplayUnsafe();
-        dispatcher.sendToolResult(payload);
+        await settleDirectOperationalPolicyAfterDispatch(payload, policyResult, () =>
+          dispatcher.sendToolResult(payload),
+        );
       }
     };
     const flushPendingCommentaryProgress = async () => {
@@ -3117,10 +3206,86 @@ async function dispatchReplyFromConfigInner(
       const reply = resolveSendableOutboundReplyParts(payload);
       return !reply.hasMedia && !hasExecApprovalPayload(payload);
     };
+    const operationalReplyPolicy = resolveOperationalReplyPolicy(cfg);
+    const operationalReplySourceSessionKey =
+      acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
+    const operationalReplySourceEventKey = resolveDispatchOperationalSourceEventKey();
+    let operationalReplyPolicyIntentionalSilence = false;
+    const applyOperationalReplyPolicy = async (reply: ReplyPayload) => {
+      const result = await applyOperationalReplyPolicyFromConfig({
+        cfg,
+        payload: reply,
+        explicitCommandTurn: explicitCommandTurnCtx,
+        sendPolicyDenied,
+        sourceSessionKey: operationalReplySourceSessionKey,
+        sourceStorePath: sessionStoreEntry.storePath,
+        sourceEventKey: operationalReplySourceEventKey,
+        sourceChannel: deliveryChannel,
+        provider: ctx.Provider,
+        surface: ctx.Surface,
+        chatType,
+        inboundEventKind: ctx.InboundEventKind,
+        messageKey: ctx.MessageSidFull ?? ctx.MessageSid,
+        logPrefix: "dispatch-from-config",
+      });
+      if (!result.shouldDeliver) {
+        operationalReplyPolicyIntentionalSilence = true;
+      }
+      return result;
+    };
+    const settleDirectOperationalPolicyAfterDispatch = async (
+      payload: ReplyPayload,
+      policyResult: Awaited<ReturnType<typeof applyOperationalReplyPolicyFromConfig>>,
+      dispatch: () => boolean,
+    ): Promise<boolean> => {
+      const deliveryOutcome = captureReplyDispatchDeliveryOutcome(payload);
+      let delivered: boolean;
+      try {
+        delivered = dispatch();
+      } catch (error) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        throw error;
+      }
+      if (!delivered) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        return false;
+      }
+      if (deliveryOutcome.isTracked()) {
+        const settleOperationalPolicy = deliveryOutcome.promise
+          .then(async (outcome) => {
+            await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+          })
+          .catch((error: unknown) => {
+            logVerbose(
+              `dispatch-from-config: direct operational policy settlement failed: ${formatErrorMessage(error)}`,
+            );
+          });
+        registerReplyDispatcherSettledTask(dispatcher, () => settleOperationalPolicy);
+      } else {
+        await markOperationalReplyPolicyDelivered(policyResult, true);
+      }
+      return true;
+    };
+    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) => {
+      const metadata = getReplyPayloadMetadata(reply);
+      const isOperationalReply = isOperationalReplyPayload({
+        payload: reply,
+        explicitCommandTurn: explicitCommandTurnCtx,
+      });
+      return (
+        suppressAutomaticSourceDelivery &&
+        !sendPolicyDenied &&
+        (metadata?.deliverDespiteSourceReplySuppression === true || isOperationalReply) &&
+        (ctx.InboundEventKind !== "room_event" ||
+          explicitCommandTurnCtx ||
+          (isOperationalReply && operationalReplyPolicy.policy !== "always"))
+      );
+    };
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
     ): Promise<{
+      delivered: boolean;
       queuedFinal: boolean;
       routedFinalCount: number;
       dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
@@ -3190,6 +3355,7 @@ async function dispatchReplyFromConfigInner(
           });
         }
         return {
+          delivered: isRoutedReplyDelivered(result),
           queuedFinal: result.ok,
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
         };
@@ -3265,6 +3431,7 @@ async function dispatchReplyFromConfigInner(
         );
       }
       return {
+        delivered: queuedFinal,
         queuedFinal,
         routedFinalCount: 0,
         ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
@@ -3355,6 +3522,7 @@ async function dispatchReplyFromConfigInner(
                     ttsChannel: deliveryChannel,
                     suppressUserDelivery: suppressHookUserDelivery,
                     suppressReplyLifecycle: suppressHookReplyLifecycle,
+                    suppressUserDeliveryBySourceReplyPolicy,
                     sourceReplyDeliveryMode,
                     shouldRouteToOriginating,
                     originatingChannel: routeReplyChannel,
@@ -3443,13 +3611,21 @@ async function dispatchReplyFromConfigInner(
       toolStartStatusCount += 1;
       const payload: ReplyPayload = {
         text: `Working: ${normalizedLabel}`,
+        isStatusNotice: true,
       };
+      const policyResult = await applyOperationalReplyPolicy(payload);
+      if (!policyResult.shouldDeliver) {
+        return;
+      }
       if (shouldRouteToOriginating) {
-        await sendPayloadAsync(payload, undefined, false);
+        const delivered = await sendPayloadAsync(payload, undefined, false);
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
         return;
       }
       markInboundDedupeReplayUnsafe();
-      dispatcher.sendToolResult(payload);
+      await settleDirectOperationalPolicyAfterDispatch(payload, policyResult, () =>
+        dispatcher.sendToolResult(payload),
+      );
     };
     const sendPlanUpdate = async (payload: {
       explanation?: string;
@@ -3467,12 +3643,19 @@ async function dispatchReplyFromConfigInner(
         text: formatPlanUpdateText(payload),
         isStatusNotice: true,
       };
+      const policyResult = await applyOperationalReplyPolicy(replyPayload);
+      if (!policyResult.shouldDeliver) {
+        return;
+      }
       if (shouldRouteToOriginating) {
-        await sendPayloadAsync(replyPayload, undefined, false);
+        const delivered = await sendPayloadAsync(replyPayload, undefined, false);
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
         return;
       }
       markInboundDedupeReplayUnsafe();
-      dispatcher.sendToolResult(replyPayload);
+      await settleDirectOperationalPolicyAfterDispatch(replyPayload, policyResult, () =>
+        dispatcher.sendToolResult(replyPayload),
+      );
     };
     const summarizeApprovalLabel = (payload: {
       status?: string;
@@ -3907,94 +4090,124 @@ async function dispatchReplyFromConfigInner(
                       ) {
                         return;
                       }
-                      const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-                      const isFastModeAutoProgressDelivery =
-                        isFastModeAutoProgress &&
-                        shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
-                      const isForcedToolProgress =
-                        shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                      const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
-                        payload,
-                        isFastModeAutoProgress,
-                      );
-                      if (progressCallbackForwarded) {
-                        await onToolResultFromReplyOptions?.(payload);
-                      }
-                      if (isDispatchOperationAborted()) {
-                        return;
-                      }
-                      if (
-                        isFastModeAutoProgress &&
-                        progressCallbackForwarded &&
-                        onToolResultFromReplyOptions
-                      ) {
-                        return;
-                      }
-                      if (sendPolicyDenied) {
-                        return;
-                      }
-                      if (
-                        shouldSuppressProgressDelivery() &&
-                        !isFastModeAutoProgressDelivery &&
-                        !isForcedToolProgress
-                      ) {
-                        return;
-                      }
-                      const visibleToolPayload = isForcedToolProgress
-                        ? payload
-                        : resolveToolDeliveryPayload(payload);
-                      if (!visibleToolPayload) {
-                        return;
-                      }
-                      const ttsPayload = await maybeApplyTtsToReplyPayload({
-                        payload: visibleToolPayload,
-                        cfg,
-                        channel: deliveryChannel,
-                        kind: "tool",
-                        inboundAudio: hasInboundAudioForTts(),
-                        ttsAuto: sessionTtsAuto,
-                        agentId: sessionAgentId,
-                        accountId: replyRoute.accountId,
-                      });
-                      const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-                      const deliveryPayload = isForcedToolProgress
-                        ? normalizedPayload
-                        : resolveToolDeliveryPayload(normalizedPayload);
-                      if (!deliveryPayload) {
-                        return;
-                      }
-                      if (isDispatchOperationAborted()) {
-                        return;
-                      }
-                      if (
-                        shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                        !isFastModeAutoProgressPayload(deliveryPayload) &&
-                        !isForcedToolProgress
-                      ) {
-                        return;
-                      }
-                      if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
-                        return;
-                      }
-                      if (
-                        shouldSuppressDefaultToolProgressMessages() &&
-                        !isFastModeAutoProgressPayload(deliveryPayload) &&
-                        !isForcedToolProgress
-                      ) {
-                        const hasMedia =
-                          resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                        if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                      const progressCallbackPolicyResult =
+                        await applyOperationalReplyPolicy(payload);
+                      let progressCallbackPolicySettled = false;
+                      const settleProgressCallbackPolicy = async (delivered: boolean) => {
+                        progressCallbackPolicySettled = true;
+                        await markOperationalReplyPolicyDelivered(
+                          progressCallbackPolicyResult,
+                          delivered,
+                        );
+                      };
+                      try {
+                        if (!progressCallbackPolicyResult.shouldDeliver) {
                           return;
                         }
-                      }
-                      if (deliveryPayload.isError === true) {
-                        markVisibleToolErrorProgress();
-                      }
-                      if (shouldRouteToOriginating) {
-                        await sendPayloadAsync(deliveryPayload, undefined, false);
-                      } else {
-                        markInboundDedupeReplayUnsafe();
-                        dispatcher.sendToolResult(deliveryPayload);
+                        const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+                        const isFastModeAutoProgressDelivery =
+                          isFastModeAutoProgress &&
+                          shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
+                        const isForcedToolProgress =
+                          shouldDeliverForcedToolProgressDespiteSourceSuppression();
+                        const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
+                          payload,
+                          isFastModeAutoProgress,
+                        );
+                        if (progressCallbackForwarded) {
+                          await onToolResultFromReplyOptions?.(payload);
+                        }
+                        if (isDispatchOperationAborted()) {
+                          return;
+                        }
+                        if (
+                          isFastModeAutoProgress &&
+                          progressCallbackForwarded &&
+                          onToolResultFromReplyOptions
+                        ) {
+                          await settleProgressCallbackPolicy(true);
+                          return;
+                        }
+                        if (sendPolicyDenied) {
+                          return;
+                        }
+                        if (
+                          shouldSuppressProgressDelivery() &&
+                          !isFastModeAutoProgressDelivery &&
+                          !isForcedToolProgress
+                        ) {
+                          return;
+                        }
+                        const visibleToolPayload = isForcedToolProgress
+                          ? payload
+                          : resolveToolDeliveryPayload(payload);
+                        if (!visibleToolPayload) {
+                          return;
+                        }
+                        const ttsPayload = await maybeApplyTtsToReplyPayload({
+                          payload: visibleToolPayload,
+                          cfg,
+                          channel: deliveryChannel,
+                          kind: "tool",
+                          inboundAudio: hasInboundAudioForTts(),
+                          ttsAuto: sessionTtsAuto,
+                          agentId: sessionAgentId,
+                          accountId: replyRoute.accountId,
+                        });
+                        const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+                        const deliveryPayload = isForcedToolProgress
+                          ? normalizedPayload
+                          : resolveToolDeliveryPayload(normalizedPayload);
+                        if (!deliveryPayload) {
+                          return;
+                        }
+                        if (isDispatchOperationAborted()) {
+                          return;
+                        }
+                        if (
+                          shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
+                          !isFastModeAutoProgressPayload(deliveryPayload) &&
+                          !isForcedToolProgress
+                        ) {
+                          return;
+                        }
+                        if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                          return;
+                        }
+                        if (
+                          shouldSuppressDefaultToolProgressMessages() &&
+                          !isFastModeAutoProgressPayload(deliveryPayload) &&
+                          !isForcedToolProgress
+                        ) {
+                          const hasMedia =
+                            resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
+                          if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                            return;
+                          }
+                        }
+                        if (deliveryPayload.isError === true) {
+                          markVisibleToolErrorProgress();
+                        }
+                        if (shouldRouteToOriginating) {
+                          const delivered = await sendPayloadAsync(
+                            deliveryPayload,
+                            undefined,
+                            false,
+                          );
+                          await settleProgressCallbackPolicy(delivered);
+                        } else {
+                          markInboundDedupeReplayUnsafe();
+                          progressCallbackPolicySettled = true;
+                          await settleDirectOperationalPolicyAfterDispatch(
+                            deliveryPayload,
+                            progressCallbackPolicyResult,
+                            () => dispatcher.sendToolResult(deliveryPayload),
+                          );
+                        }
+                      } finally {
+                        if (!progressCallbackPolicySettled) {
+                          await settleProgressCallbackPolicy(false);
+                        }
                       }
                     };
                     return run();
@@ -4119,7 +4332,14 @@ async function dispatchReplyFromConfigInner(
                       }
                       // Buffered commentary preceded this block; deliver it first.
                       await flushPendingCommentaryProgress();
-                      if (suppressDelivery) {
+                      const policyResult = await applyOperationalReplyPolicy(payload);
+                      if (!policyResult.shouldDeliver) {
+                        return;
+                      }
+                      if (
+                        suppressDelivery &&
+                        !shouldDeliverDespiteSourceReplySuppression(payload)
+                      ) {
                         return;
                       }
                       // Durable reasoning is a channel-owned lane; generic channels
@@ -4210,15 +4430,20 @@ async function dispatchReplyFromConfigInner(
                         return;
                       }
                       if (shouldRouteToOriginating) {
-                        await sendPayloadAsync(
+                        const delivered = await sendPayloadAsync(
                           normalizedPayload,
                           context?.abortSignal,
                           false,
                           "block",
                         );
+                        await markOperationalReplyPolicyDelivered(policyResult, delivered);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        const delivered = dispatcher.sendBlockReply(normalizedPayload);
+                        const delivered = await settleDirectOperationalPolicyAfterDispatch(
+                          normalizedPayload,
+                          policyResult,
+                          () => dispatcher.sendBlockReply(normalizedPayload),
+                        );
                         if (delivered) {
                           hasPendingDirectBlockReplyDelivery = true;
                         }
@@ -4270,6 +4495,7 @@ async function dispatchReplyFromConfigInner(
                     ttsChannel: deliveryChannel,
                     suppressUserDelivery: suppressHookUserDelivery,
                     suppressReplyLifecycle: suppressHookReplyLifecycle,
+                    suppressUserDeliveryBySourceReplyPolicy,
                     sourceReplyDeliveryMode,
                     shouldRouteToOriginating,
                     originatingChannel: routeReplyChannel,
@@ -4337,22 +4563,17 @@ async function dispatchReplyFromConfigInner(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    // Direct dispatchers queue final payloads synchronously; once-policy state
+    // must settle from the later delivery outcome, not queue admission.
+    const finalPolicySettlements: Promise<void>[] = [];
     const finalDeliveries: Array<{
       outcome: Promise<ReplyDispatchDeliveryOutcome>;
       payload: ReplyPayload;
     }> = [];
     let allQueuedFinalsObserved = true;
-    // Explicit command turns (native or authorized text-slash like /compact) are
-    // user-initiated, so a marked terminal reply for the command bypasses
-    // room_event suppression. Ambient marked notices (no CommandTurn) stay
-    // suppressed in room_event. sendPolicy: deny still suppresses everything.
-    // Uses the same helper as the source-reply visibility policy so the bypass
-    // and the policy stay aligned.
-    const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
-      suppressAutomaticSourceDelivery &&
-      !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-      (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    let suppressedFinalByOperationalPolicy = false;
+    let suppressedFinalBySourceReplyPolicy = false;
+    const suppressedOperationalFinalTexts: string[] = [];
     const sentFinalPayloadDedupeKeys = new Set<string>();
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
@@ -4364,8 +4585,18 @@ async function dispatchReplyFromConfigInner(
       if (reply.isCommentary === true && !commentaryPayloadsEnabled) {
         continue;
       }
+      const policyResult = await applyOperationalReplyPolicy(reply);
+      if (!policyResult.shouldDeliver) {
+        suppressedFinalByOperationalPolicy = true;
+        const suppressedText = normalizeOptionalString(reply.text);
+        if (suppressedText) {
+          suppressedOperationalFinalTexts.push(suppressedText);
+        }
+        continue;
+      }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
         if (hasOutboundReplyContent(reply, { trimText: true })) {
+          suppressedFinalBySourceReplyPolicy = true;
           logVerbose(
             [
               `dispatch-from-config: final reply suppressed by ${deliverySuppressionReason || "source delivery policy"}`,
@@ -4387,19 +4618,45 @@ async function dispatchReplyFromConfigInner(
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
-      const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+      let finalReply: Awaited<ReturnType<typeof sendFinalPayload>>;
+      try {
+        finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
+      } catch (error) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        throw error;
+      }
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         if (finalReply.dispatcherOutcome) {
+          finalPolicySettlements.push(
+            finalReply.dispatcherOutcome.then(async (outcome) => {
+              await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+            }),
+          );
           finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
         } else {
+          await markOperationalReplyPolicyDelivered(policyResult, finalReply.delivered);
           allQueuedFinalsObserved = false;
         }
+      } else {
+        await markOperationalReplyPolicyDelivered(policyResult, finalReply.delivered);
       }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
+    }
+
+    if (finalPolicySettlements.length > 0) {
+      const settleFinalOperationalPolicies = Promise.all(finalPolicySettlements).then(
+        () => undefined,
+        (error: unknown) => {
+          logVerbose(
+            `dispatch-from-config: final operational policy settlement failed: ${formatErrorMessage(error)}`,
+          );
+        },
+      );
+      registerReplyDispatcherSettledTask(dispatcher, () => settleFinalOperationalPolicies);
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
@@ -4429,7 +4686,7 @@ async function dispatchReplyFromConfigInner(
       } else {
         // Routed delivery has a transport result already. Custom dispatchers that
         // do not expose the core observer retain the legacy queue-admission behavior.
-        await clearPendingFinalDeliveryAfterSuccess({
+        await clearPendingFinalDeliveryState({
           ...pendingFinalDelivery,
           identity: pendingFinalDeliveryIdentity,
         });
@@ -4437,6 +4694,14 @@ async function dispatchReplyFromConfigInner(
       // Register successful queued cleanup before honoring a late abort. The
       // outer settle owner still runs it from finally (#89115).
       throwIfDispatchOperationAborted();
+    } else if (!attemptedFinalDelivery && suppressedFinalByOperationalPolicy) {
+      if (suppressedOperationalFinalTexts.length > 0) {
+        await clearPendingFinalDeliveryState({
+          ...pendingFinalDelivery,
+          identity: pendingFinalDeliveryIdentity,
+          onlyIfTexts: suppressedOperationalFinalTexts,
+        });
+      }
     }
 
     if (!suppressDelivery) {
@@ -4525,6 +4790,10 @@ async function dispatchReplyFromConfigInner(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
+    const suppressNoVisibleFallbackForOperationalPolicy =
+      operationalReplyPolicyIntentionalSilence &&
+      !suppressedFinalBySourceReplyPolicy &&
+      !attemptedFinalDelivery;
     markIdle("message_completed");
     completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
@@ -4534,7 +4803,10 @@ async function dispatchReplyFromConfigInner(
         ? { sessionMetadataChanges: sessionMetadataChangesForResult }
         : {}),
       ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
-      ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
+      ...(!queuedFinal &&
+      !observedReplyDelivery &&
+      !emptyFinalAllowedAsSilent &&
+      !suppressNoVisibleFallbackForOperationalPolicy
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

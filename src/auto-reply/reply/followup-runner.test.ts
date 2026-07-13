@@ -29,6 +29,9 @@ const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveProviderFollowupFallbackRouteMock = vi.fn();
+const appendAssistantMessageToSessionTranscriptMock = vi.fn(async (_params: unknown) => ({
+  ok: true,
+}));
 let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
@@ -51,6 +54,7 @@ let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
+let clearOperationalReplyPolicyStateForTest: typeof import("./operational-reply-policy.js").clearOperationalReplyPolicyStateForTest;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -433,6 +437,16 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runPreflightCompactionIfNeeded: (...args: unknown[]) =>
       runPreflightCompactionIfNeededMock(...args),
   }));
+  vi.doMock("../../config/sessions/transcript.js", async () => {
+    const actual = await vi.importActual<typeof import("../../config/sessions/transcript.js")>(
+      "../../config/sessions/transcript.js",
+    );
+    return {
+      ...actual,
+      appendAssistantMessageToSessionTranscript: (params: unknown) =>
+        appendAssistantMessageToSessionTranscriptMock(params),
+    };
+  });
   vi.doMock("./route-reply.js", () => ({
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
@@ -518,6 +532,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
     setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
   } = await import("../reply-payload.js"));
+  ({ clearOperationalReplyPolicyStateForTest } = await import("./operational-reply-policy.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -556,6 +571,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearOperationalReplyPolicyStateForTest?.();
   setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
@@ -579,6 +595,8 @@ beforeEach(() => {
   );
   compactEmbeddedAgentSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
+  appendAssistantMessageToSessionTranscriptMock.mockClear();
+  appendAssistantMessageToSessionTranscriptMock.mockResolvedValue({ ok: true });
   resolveCommandSecretRefsViaGatewayMock.mockReset();
   runReplyPayloadSendingHookMock.mockReset();
   runReplyPayloadSendingHookMock.mockImplementation(
@@ -1216,6 +1234,97 @@ describe("createFollowupRunner reply-lane admission", () => {
     );
   });
 
+  it("silences queued preflight compaction failure notices when operational replies are silent", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        originatingChatType: "group",
+        run: {
+          config: {
+            messages: { operationalReplies: { policy: "silent" } },
+          },
+          messageProvider: "discord",
+          provider: "anthropic",
+          model: "claude",
+          verboseLevel: "off",
+          sessionKey: "main",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects queued preflight compaction failure notices when configured", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        messageId: "source-msg-1",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        originatingChatType: "group",
+        run: {
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+          },
+          messageProvider: "discord",
+          provider: "anthropic",
+          model: "claude",
+          verboseLevel: "off",
+          sessionKey: "main",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("auto-compaction could not recover"),
+      }),
+    );
+    const redirectText = (
+      appendAssistantMessageToSessionTranscriptMock.mock.calls[0]?.[0] as
+        | { text?: string }
+        | undefined
+    )?.text;
+    expect(redirectText).toContain("sourceSessionKey: main");
+    expect(redirectText).toContain("sourceChannel: discord");
+    expect(redirectText).toContain("sourceEventKey: source-msg-1:final:0");
+  });
+
   it("suppresses preflight compaction failure notices for queued room events", async () => {
     runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
       new Error("Preflight compaction required but failed: auth profile mismatch"),
@@ -1248,6 +1357,64 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects preflight compaction failure notices for queued room events when configured", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        messageId: "room-preflight-msg",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        originatingChatType: "group",
+        run: {
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+          },
+          messageProvider: "discord",
+          provider: "anthropic",
+          model: "claude",
+          verboseLevel: "off",
+          sessionKey: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("auto-compaction could not recover"),
+      }),
+    );
+    const redirectText = (
+      appendAssistantMessageToSessionTranscriptMock.mock.calls[0]?.[0] as
+        | { text?: string }
+        | undefined
+    )?.text;
+    expect(redirectText).toContain("sourceSessionKey: main");
+    expect(redirectText).toContain("sourceChannel: discord");
+    expect(redirectText).toContain("sourceEventKey: room-preflight-msg:final:0");
   });
 
   it("preserves non-compaction preflight failures for queued followup runs", async () => {
@@ -4320,11 +4487,77 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
+    const firstCall = (
+      onBlockReply.mock.calls as unknown as Array<
+        Array<{ isCompactionNotice?: boolean; text?: string }>
+      >
+    )[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
+    expect(firstCall?.[0]?.isCompactionNotice).toBe(true);
     expect(
       expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
     ).toBe(1);
+  });
+
+  it("redirects verbose auto-compaction notices in message-tool-only followups", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-redirect-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    const onBlockReply = vi.fn(async () => {});
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+          },
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("Auto-compaction complete"),
+      }),
+    );
   });
 
   it("suppresses queued auto-compaction notice when verbose is turned off", async () => {
@@ -5356,6 +5589,113 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectNoBlockReplyText(onBlockReply, "second payload");
   });
 
+  it("silences cross-channel route-failure notices when operational replies are silent", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...baseQueuedRun("webchat").run,
+          config: {
+            messages: { operationalReplies: { policy: "silent" } },
+          },
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects cross-channel route-failure notices when operational replies redirect", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        messageId: "source-route-failure",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...baseQueuedRun("webchat").run,
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+          },
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("could not deliver it to the originating channel"),
+      }),
+    );
+    const redirectText = (
+      appendAssistantMessageToSessionTranscriptMock.mock.calls[0]?.[0] as
+        | { text?: string }
+        | undefined
+    )?.text;
+    expect(redirectText).toContain("sourceSessionKey: main");
+    expect(redirectText).toContain("sourceChannel: discord");
+    expect(redirectText).toContain("sourceEventKey: source-route-failure:block:1");
+  });
+
+  it("redirects room-event cross-channel route-failure notices when operational replies redirect", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello room!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        currentInboundEventKind: "room_event",
+        messageId: "source-room-route-failure",
+        originatingChannel: "discord",
+        originatingChatType: "channel",
+        originatingTo: "channel:C1",
+        run: {
+          ...baseQueuedRun("webchat").run,
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+          },
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("could not deliver it to the originating channel"),
+      }),
+    );
+  });
+
   it("suppresses cross-channel route-failure notices for room events", async () => {
     routeReplyMock.mockResolvedValue({
       ok: false,
@@ -6326,6 +6666,117 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it("applies operational policy to message-tool-only queued followup finals", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { text: "backend failed for queued followup", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+          },
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("backend failed for queued followup"),
+      }),
+    );
+  });
+
+  it("keeps room-event message-tool-only operational finals out of source rooms by default", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { text: "room backend failed", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "room_event",
+        originatingChannel: "discord",
+        originatingChatType: "channel",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("honors once for room-event message-tool-only operational finals when configured", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { text: "room once backend failed", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+          setReplyPayloadMetadataForTest(
+            { text: "room once backend failed", isError: true },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "room_event",
+        originatingChannel: "discord",
+        originatingChatType: "channel",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sessionKey: "followup-room-once-session",
+          sourceReplyDeliveryMode: "message_tool_only",
+          config: {
+            messages: { operationalReplies: { policy: "once" } },
+          },
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "once payload"),
+    ).toMatchObject({
+      text: "room once backend failed",
+      isError: true,
+    });
+  });
+
   it("lets provider followup route hooks force dispatcher delivery", async () => {
     resolveProviderFollowupFallbackRouteMock.mockReturnValue({
       route: "dispatcher",
@@ -6564,6 +7015,189 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
   });
 
+  it("silences queued compaction notices when operational replies are silent", async () => {
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        onCompactionNotice?: (phase: "start" | "end") => Promise<void> | void;
+        sessionEntry?: SessionEntry;
+      }) => {
+        await params.onCompactionNotice?.("start");
+        await params.onCompactionNotice?.("end");
+        return params.sessionEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+        messageId: "current-msg-1",
+        run: {
+          config: {
+            messages: { operationalReplies: { policy: "silent" } },
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const finalRoute = requireMockCallArg(routeReplyMock, 0);
+    expect(finalRoute.replyKind).toBe("final");
+    expect(requireRecord(finalRoute.payload, "final payload")).toMatchObject({
+      text: "hello world!",
+    });
+    expect(String(requireRecord(finalRoute.payload, "final payload").text)).not.toContain(
+      "Compaction",
+    );
+  });
+
+  it("delivers only the first matching queued operational notice when policy is once", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        setReplyPayloadMetadataForTest(
+          { text: "queued once usage limit", isError: true },
+          { deliverDespiteSourceReplySuppression: true },
+        ),
+        setReplyPayloadMetadataForTest(
+          { text: "queued once usage limit", isError: true },
+          { deliverDespiteSourceReplySuppression: true },
+        ),
+      ],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+        messageId: "current-msg-once",
+        run: {
+          sessionKey: "followup-once-session",
+          config: {
+            messages: { operationalReplies: { policy: "once" } },
+            channels: { discord: { replyToMode: "all" } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "once payload")).toMatchObject({
+      text: "queued once usage limit",
+      isError: true,
+    });
+  });
+
+  it("does not consume queued once notices when origin routing suppresses delivery", async () => {
+    const buildNotice = () =>
+      setReplyPayloadMetadataForTest(
+        { text: "queued once suppressed route", isError: true },
+        { deliverDespiteSourceReplySuppression: true },
+      );
+    runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [buildNotice()],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [buildNotice()],
+        meta: {},
+      });
+    routeReplyMock
+      .mockResolvedValueOnce({ ok: true, suppressed: true })
+      .mockResolvedValueOnce({ ok: true });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+      messageId: "current-msg-once-suppressed",
+      run: {
+        sessionKey: "followup-once-suppressed-session",
+        config: {
+          messages: { operationalReplies: { policy: "once" } },
+          channels: { discord: { replyToMode: "all" } },
+        },
+        messageProvider: "discord",
+      },
+    });
+
+    await runner(queued);
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not silence queued before-run block replies when operational replies are silent", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Blocked by before-run policy.", isError: true }],
+      meta: {
+        error: {
+          kind: "hook_block",
+          message: "Blocked by before-run policy.",
+        },
+      },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+        messageId: "current-msg-hook-block",
+        run: {
+          config: {
+            messages: { operationalReplies: { policy: "silent" } },
+            channels: { discord: { replyToMode: "all" } },
+          },
+          messageProvider: "discord",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "hook block payload")).toMatchObject({
+      text: "Blocked by before-run policy.",
+      isError: true,
+    });
+    expect(appendAssistantMessageToSessionTranscriptMock).not.toHaveBeenCalled();
+  });
+
   it("suppresses queued compaction notices for room events", async () => {
     runPreflightCompactionIfNeededMock.mockImplementationOnce(
       async (params: {
@@ -6603,6 +7237,70 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     );
 
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects queued compaction notices for room events when configured", async () => {
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        onCompactionNotice?: (phase: "start" | "end") => Promise<void> | void;
+        sessionEntry?: SessionEntry;
+      }) => {
+        await params.onCompactionNotice?.("start");
+        await params.onCompactionNotice?.("end");
+        return params.sessionEntry;
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        messageId: "room-compaction-msg",
+        run: {
+          config: {
+            messages: {
+              operationalReplies: {
+                policy: "redirect",
+                redirectSessionKey: "agent:main:ops",
+              },
+            },
+            channels: { discord: { replyToMode: "all" } },
+            agents: { defaults: { compaction: { notifyUser: true } } },
+          },
+          messageProvider: "discord",
+          sessionKey: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenCalledTimes(2);
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("Compacting context"),
+      }),
+    );
+    expect(appendAssistantMessageToSessionTranscriptMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionKey: "agent:main:ops",
+        text: expect.stringContaining("Compaction complete"),
+      }),
+    );
   });
 
   it("routes queued compaction hook messages alongside notifyUser notices (#90185)", async () => {

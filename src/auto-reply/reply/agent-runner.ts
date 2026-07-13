@@ -2381,7 +2381,10 @@ export async function runReplyAgent(params: {
     const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+      prefixNotices.push({
+        text: `🧭 New session: ${followupRun.run.sessionId}`,
+        isStatusNotice: true,
+      });
     }
 
     if (autoCompactionCount > 0) {
@@ -2429,7 +2432,10 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        prefixNotices.push({
+          text: `🧹 Auto-compaction complete${suffix}.`,
+          isCompactionNotice: true,
+        });
       }
     }
     const prefixPayloads = [...prefixNotices];

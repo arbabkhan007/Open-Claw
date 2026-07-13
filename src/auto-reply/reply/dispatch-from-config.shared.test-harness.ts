@@ -161,6 +161,26 @@ const sessionStoreMocks = vi.hoisted(() => ({
       return sessionStoreMocks.currentEntry;
     },
   ),
+  patchSessionEntry: vi.fn(
+    async (
+      _scope: unknown,
+      update: (
+        entry: Record<string, unknown>,
+        context: Record<string, unknown>,
+      ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null,
+      _options?: unknown,
+    ) => {
+      if (!sessionStoreMocks.currentEntry) {
+        return null;
+      }
+      const patch = await update(sessionStoreMocks.currentEntry, {});
+      if (!patch) {
+        return sessionStoreMocks.currentEntry;
+      }
+      sessionStoreMocks.currentEntry = { ...sessionStoreMocks.currentEntry, ...patch };
+      return sessionStoreMocks.currentEntry;
+    },
+  ),
   updateSessionEntry: vi.fn(
     async (
       _scope: unknown,
@@ -486,6 +506,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    patchSessionEntry: (...args: Parameters<typeof sessionStoreMocks.patchSessionEntry>) =>
+      sessionStoreMocks.patchSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
   };
