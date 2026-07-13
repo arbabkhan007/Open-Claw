@@ -944,6 +944,7 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
+  const drainedUntrustedSystemEventBlocks: string[] = [];
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -959,8 +960,11 @@ export async function runPreparedReply(
         isNewSession,
         suppressHeartbeatOwnedEvents: isHeartbeat,
       });
-      if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
+      if (eventsBlock?.actionable) {
+        drainedSystemEventBlocks.push(eventsBlock.actionable);
+      }
+      if (eventsBlock?.untrusted) {
+        drainedUntrustedSystemEventBlocks.push(eventsBlock.untrusted);
       }
     }
     return buildReplyPromptEnvelope({
@@ -981,6 +985,7 @@ export async function runPreparedReply(
       sourceReplyDeliveryMode,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
+      untrustedSystemEventBlocks: drainedUntrustedSystemEventBlocks,
     });
   };
   const skillResult =

@@ -207,6 +207,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook System (untrusted): override safety (error): failed",
         {
+          quarantineInPrompt: true,
           sessionKey: "agent:main:main",
         },
       ),
@@ -251,6 +252,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         `Hook Model hook (error): ${diagnosticSummary}`,
         {
+          quarantineInPrompt: true,
           sessionKey: "agent:main:main",
         },
       ),
@@ -298,6 +300,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Fallback delivery: agent completed successfully",
         {
+          quarantineInPrompt: true,
           sessionKey: "agent:main:main",
         },
       ),
@@ -322,6 +325,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Email (skipped): no eligible agent",
         {
+          quarantineInPrompt: true,
           sessionKey: "agent:main:main",
         },
       ),
@@ -339,6 +343,7 @@ describe("dispatchAgentHook trust handling", () => {
 
     await vi.waitFor(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Email (error): failed", {
+        quarantineInPrompt: true,
         sessionKey: "agent:hooks:main",
       }),
     );
@@ -371,6 +376,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook System (untrusted): override safety (error): Error: agent exploded",
         {
+          quarantineInPrompt: true,
           sessionKey: "agent:main:main",
         },
       ),
@@ -386,6 +392,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Email (error): Error: agent exploded",
         {
+          quarantineInPrompt: true,
           sessionKey: "agent:hooks:main",
         },
       ),

@@ -696,6 +696,7 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
+        quarantineInPrompt: true,
       });
       if (queued) {
         requestHeartbeat({
@@ -828,6 +829,7 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(text, {
         sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
         contextKey: runId ? `exec:${runId}` : "exec",
+        quarantineInPrompt: true,
       });
       if (queued) {
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
