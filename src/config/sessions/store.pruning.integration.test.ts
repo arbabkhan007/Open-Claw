@@ -1239,7 +1239,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       session: {
         maintenance: {
           mode: "enforce",
-          pruneAfter: "7d",
+          pruneAfter: "3d",
           resetArchiveRetention: "7d",
           maxEntries: 500,
         },
@@ -1258,18 +1258,24 @@ describe("Integration: saveSessionStore with pruning", () => {
       testDir,
       `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
     );
+    const archiveYoungerThanRetention = path.join(
+      testDir,
+      `retained-session.jsonl.deleted.${archiveTimestamp(now - 5 * DAY_MS)}`,
+    );
     const bakArchived = path.join(
       testDir,
       `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
     );
     await fs.writeFile(oldArchived, "old", "utf-8");
     await fs.writeFile(recentArchived, "recent", "utf-8");
+    await fs.writeFile(archiveYoungerThanRetention, "retained", "utf-8");
     await fs.writeFile(bakArchived, "bak", "utf-8");
 
     await saveSessionStore(storePath, store);
 
     await expectPathMissing(oldArchived);
     await expectPathExists(recentArchived);
+    await expectPathExists(archiveYoungerThanRetention);
     await expectPathExists(bakArchived);
   });
 
@@ -1373,7 +1379,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshReset);
   });
 
-  it("sessions cleanup keeps reset archives when resetArchiveRetention is disabled", async () => {
+  it("sessions cleanup keeps deleted and reset archives when retention is disabled", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -1409,10 +1415,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(applied.appliedSummaries[0]?.archiveCleanup).toEqual({
-      scannedFiles: 1,
-      removedFiles: 1,
+      scannedFiles: 0,
+      removedFiles: 0,
     });
-    await expectPathMissing(oldDeleted);
+    await expectPathExists(oldDeleted);
     await expectPathExists(oldReset);
   });
 
