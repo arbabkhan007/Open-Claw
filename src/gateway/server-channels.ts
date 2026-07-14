@@ -216,7 +216,7 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
 };
 
-export type StopChannelOptions = {
+type StopChannelOptions = {
   manual?: boolean;
 };
 
