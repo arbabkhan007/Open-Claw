@@ -1838,6 +1838,11 @@ export function createConfigIO(
         },
       );
       if (preValidationDuplicates.length > 0) {
+        restoreEnvChangesIfUnchanged({
+          env: deps.env,
+          before: envBeforeRead,
+          after: snapshotEnv(deps.env),
+        });
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
       const validationPluginMetadata = createValidationPluginMetadataSnapshotLoader({
@@ -1852,6 +1857,11 @@ export function createConfigIO(
         preservedLegacyRootKeys: overrides.preservedLegacyRootKeys,
       });
       if (!validated.ok) {
+        restoreEnvChangesIfUnchanged({
+          env: deps.env,
+          before: envBeforeRead,
+          after: snapshotEnv(deps.env),
+        });
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({
             path: configPath,
@@ -2105,6 +2115,11 @@ export function createConfigIO(
         const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
           collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
         );
+        restoreEnvChangesIfUnchanged({
+          env: deps.env,
+          before: envBeforeRead,
+          after: snapshotEnv(deps.env),
+        });
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
             path: configPath,
