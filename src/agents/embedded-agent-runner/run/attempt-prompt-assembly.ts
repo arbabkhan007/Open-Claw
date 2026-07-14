@@ -34,6 +34,8 @@ import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
+  runWithPromptBuildHookDispatch,
+  shouldSkipPromptBuildHooks,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
@@ -119,17 +121,19 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
-  const hookResult = input.isRawModelRun
+  const hookResult = shouldSkipPromptBuildHooks({ isRawModelRun: input.isRawModelRun })
     ? undefined
-    : await resolvePromptBuildHookResult({
-        config: attempt.config ?? getRuntimeConfig(),
-        prompt: attempt.prompt,
-        messages: promptBuildMessages,
-        hookCtx,
-        hookRunner: input.hookRunner,
-        beforeAgentStartResult: attempt.beforeAgentStartResult,
-        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-      });
+    : await runWithPromptBuildHookDispatch(() =>
+        resolvePromptBuildHookResult({
+          config: attempt.config ?? getRuntimeConfig(),
+          prompt: attempt.prompt,
+          messages: promptBuildMessages,
+          hookCtx,
+          hookRunner: input.hookRunner,
+          beforeAgentStartResult: attempt.beforeAgentStartResult,
+          bootstrapContextRunKind: attempt.bootstrapContextRunKind,
+        }),
+      );
   const promptBeforePromptBuildHooks = effectivePrompt;
   const promptBuildPrependContext = hookResult?.prependContext;
   const promptBuildAppendContext = hookResult?.appendContext;
