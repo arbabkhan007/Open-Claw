@@ -294,6 +294,57 @@ describe("writeCliImages", () => {
     }
   });
 
+  it("rejects oversized base64 image before decoding when maxBytes is exceeded", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-oversized-"),
+    );
+    const oversizedBase64 = "A".repeat(64);
+    const image: ImageContent = {
+      type: "image",
+      data: oversizedBase64,
+      mimeType: "image/png",
+    };
+
+    try {
+      await expect(
+        writeCliImages({
+          backend: { command: "codex" },
+          workspaceDir,
+          images: [image],
+          maxBytes: 10,
+        }),
+      ).rejects.toThrow(/exceeds size limit/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts images above MAX_IMAGE_BYTES when a higher configured maxBytes is provided", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-configured-limit-"),
+    );
+    // 7 MB decoded — above MAX_IMAGE_BYTES (6 MiB) but within a configured 8 MiB limit
+    const payload = Buffer.alloc(7 * 1024 * 1024, 0x42);
+    const image: ImageContent = {
+      type: "image",
+      data: payload.toString("base64"),
+      mimeType: "image/png",
+    };
+
+    try {
+      const result = await writeCliImages({
+        backend: { command: "codex" },
+        workspaceDir,
+        images: [image],
+        maxBytes: 8 * 1024 * 1024,
+      });
+      expect(result.paths).toHaveLength(1);
+      await result.cleanup();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("sweeps stale workspace-scoped CLI image files", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-sweep-"),
