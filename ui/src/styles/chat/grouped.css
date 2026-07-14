@@ -40,7 +40,7 @@
 }
 
 .chat-group.tool .chat-group-messages {
-  max-width: min(980px, calc(100% - 46px));
+  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.user .chat-group-footer {
@@ -307,7 +307,8 @@ img.chat-avatar {
    width; all bubble chrome (border/background/padding) is reset. */
 .chat-bubble--tool-shell {
   align-self: stretch;
-  width: min(100%, 760px);
+  width: 100%;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -361,7 +362,7 @@ img.chat-avatar {
 }
 
 .chat-thread--direct .chat-group.tool .chat-group-messages {
-  max-width: min(980px, 100%);
+  max-width: var(--chat-message-max-width, min(980px, 100%));
 }
 
 .chat-duplicate-count {
