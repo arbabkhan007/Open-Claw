@@ -8,6 +8,7 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCreateTargetBackground } from "./create-target-params.js";
 import {
   type ExtensionToRelayMessage,
   parseExtensionMessage,
@@ -807,9 +808,7 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const background =
-          (request.params?.focus === undefined && request.params?.background !== false) ||
-          (request.params?.focus === false && request.params?.background === true); // Explicit focus preserves CDP defaults.
+        const background = resolveCreateTargetBackground(request.params);
         const command = { type: "createTab", url, background } as const;
         const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
@@ -820,8 +819,7 @@ export class ExtensionRelayBridge {
         if (!this.tabs.has(tabId)) {
           this.tabs.set(tabId, { info: { tabId, url, title: "", active: false } });
         }
-        const attached = await this.ensureTabAttached(tabId);
-        // Announce before responding, mirroring Chrome's event-then-result order.
+        const attached = await this.ensureTabAttached(tabId); // Chrome emits attach before create result.
         this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
           onlyAutoAttach: true,
         });

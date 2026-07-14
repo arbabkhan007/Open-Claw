@@ -325,6 +325,28 @@ describe("ExtensionRelayBridge", () => {
     },
   );
 
+  it("rejects conflicting Target.createTarget background and focus requests", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket, handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({
+        id: 1,
+        method: "Target.createTarget",
+        params: { url: "https://conflict.test", background: true, focus: true },
+      }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 1)?.error).toMatchObject({
+      message: expect.stringContaining("background=true"),
+    });
+    expect(socket.frames().find((frame) => frame.type === "createTab")).toBeUndefined();
+  });
+
   it("emits Target.detachedFromTarget when a shared tab leaves the group", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
