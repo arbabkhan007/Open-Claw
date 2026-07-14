@@ -7,7 +7,6 @@ import type {
   CronListResult,
   CronRemoveResult,
   CronRunMode,
-  CronRunOrigin,
   CronRunResult,
   CronStatusSummary,
   CronUpdateInput,
@@ -22,14 +21,8 @@ type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-k
 /** Result shape for direct/queued cron runs. */
 export type CronServiceRunResult = CronRunResult;
 export type CronServiceRunOptions = {
+  /** Optional payload override forwarded to the manual run. */
   payload?: CronPayload;
-  /**
-   * Invocation origin. Defaults to `operator` (public RPC/CLI/manual runs), the
-   * only value external callers pass. The gateway on-exit watcher passes
-   * `watcher-terminal` so its force runs still consume deleteAfterRun jobs; the
-   * timer path never enters here. See CronRunOrigin (#83933).
-   */
-  origin?: CronRunOrigin;
 };
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
