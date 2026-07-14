@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayClient } from "../gateway/client.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -49,6 +48,7 @@ import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-bin
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { NodeHostClient } from "./client.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -263,7 +263,7 @@ async function resolveSystemRunAutoReviewer(params: {
 }
 
 export type HandleSystemRunInvokeOptions = {
-  client: GatewayClient;
+  client: NodeHostClient;
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
   execHostEnforced: boolean;
@@ -282,7 +282,7 @@ export type HandleSystemRunInvokeOptions = {
     approvals: ExecApprovalsResolved;
     request: ExecHostRequest;
   }) => Promise<ExecHostResponse | null>;
-  sendNodeEvent: (client: GatewayClient, event: string, payload: unknown) => Promise<void>;
+  sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
@@ -954,6 +954,11 @@ async function executeSystemRunPhase(
     const macApprovalSource =
       phase.approvalSource ??
       (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
+    const macApprovalDecision = macApprovalSource
+      ? null
+      : phase.approvalGrantSource === "explicit-approval" && phase.approvalDecision === null
+        ? "allow-once"
+        : phase.approvalDecision;
     const execRequest: ExecHostRequest = {
       command: execArgv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
@@ -965,7 +970,7 @@ async function executeSystemRunPhase(
       needsScreenRecording: phase.needsScreenRecording,
       agentId: phase.agentId ?? null,
       sessionKey: phase.sessionKey ?? null,
-      approvalDecision: macApprovalSource ? null : phase.approvalDecision,
+      approvalDecision: macApprovalDecision,
       approvalSource: macApprovalSource,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
     };

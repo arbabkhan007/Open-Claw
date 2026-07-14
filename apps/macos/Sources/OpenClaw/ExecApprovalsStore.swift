@@ -70,18 +70,12 @@ enum ExecApprovalsStore {
 
     private static func legacyStateDirURLs() -> [URL] {
         if OpenClawEnv.path("OPENCLAW_HOME") != nil {
-            var urls = [
+            // OPENCLAW_HOME replaces the OS home; crossing back would mutate
+            // the real default profile during an isolated run.
+            return [
                 self.trustedRootURL()
                     .appendingPathComponent(".openclaw", isDirectory: true),
             ]
-            let osHomeURL = FileManager().homeDirectoryForCurrentUser
-                .appendingPathComponent(".openclaw", isDirectory: true)
-            if !urls.contains(where: {
-                $0.standardizedFileURL.path == osHomeURL.standardizedFileURL.path
-            }) {
-                urls.append(osHomeURL)
-            }
-            return urls
         }
         return [
             FileManager().homeDirectoryForCurrentUser
@@ -92,6 +86,13 @@ enum ExecApprovalsStore {
     private static func legacyFileURLIfPending() -> URL? {
         guard OpenClawEnv.path("OPENCLAW_STATE_DIR") != nil || OpenClawEnv.path("OPENCLAW_HOME") != nil
         else { return nil }
+        // Named profiles are isolated. Bare state-dir relocation keeps the
+        // shipped migration for users who moved their primary state root.
+        if let profile = OpenClawEnv.path("OPENCLAW_PROFILE"),
+           profile.lowercased() != "default"
+        {
+            return nil
+        }
         let targetURL = self.fileURL()
         for stateDirURL in self.legacyStateDirURLs() {
             let legacyURL = stateDirURL
@@ -346,22 +347,6 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func ensureSnapshotResult()
-        -> Result<ExecApprovalsSnapshot, ExecApprovalsReadError>
-    {
-        do {
-            let snapshot = try self.withWriteLock {
-                _ = try self.ensureFileUnlocked()
-                return try self.readSnapshotUnlocked()
-            }
-            return .success(snapshot)
-        } catch {
-            self.logger.warning(
-                "exec approvals snapshot unavailable: \(error.localizedDescription, privacy: .public)")
-            return .failure(.unavailable)
-        }
-    }
-
     private static func readSnapshotUnlocked() throws -> ExecApprovalsSnapshot {
         if self.legacyFileURLIfPending() != nil {
             let file = self.unmigratedLegacyFallbackFile()
@@ -387,22 +372,6 @@ enum ExecApprovalsStore {
             exists: true,
             hash: self.hashRaw(raw),
             file: decoded)
-    }
-
-    static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
-        let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if socketPath.isEmpty {
-            return ExecApprovalsFile(
-                version: file.version,
-                socket: nil,
-                defaults: file.defaults,
-                agents: file.agents)
-        }
-        return ExecApprovalsFile(
-            version: file.version,
-            socket: ExecApprovalsSocketConfig(path: socketPath, token: nil),
-            defaults: file.defaults,
-            agents: file.agents)
     }
 
     static func loadFile() -> ExecApprovalsFile {
@@ -740,10 +709,6 @@ enum ExecApprovalsStore {
             agent: resolvedAgent,
             allowlist: allowlist,
             file: file)
-    }
-
-    static func resolveDefaultsResult() -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError> {
-        self.resolveResult(agentId: nil).map(\.defaults)
     }
 
     static func resolveDefaultsAsyncResult() async
@@ -1199,7 +1164,14 @@ extension ExecApprovalsStore {
 
     private static func ensureSecureStateDirectory() throws {
         let url = self.stateDirURL()
-        try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
+        // Create with the final 0700 mode directly: a default-mode (0755)
+        // create followed by the chmod below leaves a transient window where
+        // the directory is world-listable and concurrent observers see the
+        // wrong permissions.
+        try FileManager().createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: self.secureStateDirPermissions])
         try ExecApprovalsFileIO.assertSafeDirectory(at: url)
         try FileManager().setAttributes(
             [.posixPermissions: self.secureStateDirPermissions],
