@@ -212,7 +212,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
-      10695,
+      // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
+      10710,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
