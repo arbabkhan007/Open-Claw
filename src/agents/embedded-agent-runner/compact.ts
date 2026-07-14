@@ -182,6 +182,7 @@ import {
   runAfterCompactionHooks,
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
+  runSkippedCompactionHooks,
 } from "./compaction-hooks.js";
 import {
   resolveCompactionHarnessRuntime,
@@ -1620,17 +1621,20 @@ async function compactEmbeddedAgentSessionDirectOnce(
             observedTokenCount,
             estimateTokensFn: estimateTokens,
           });
-          const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+          const hookBase = {
             hookRunner,
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
-            metrics: beforeHookMetrics,
             onHookMessages: params.onCompactionHookMessages,
+          };
+          const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+            ...hookBase,
+            sessionKey: params.sessionKey,
+            metrics: beforeHookMetrics,
           });
-          const { messageCountOriginal } = beforeHookMetrics;
+          const afterHookBase = { ...hookBase, hookSessionKey, missingSessionKey };
           const diagEnabled = log.isEnabled("debug");
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
@@ -1652,17 +1656,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
             log.info(
               `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
             );
-            return {
-              ok: true,
-              compacted: false,
-              reason: "no real conversation messages",
-            };
+            await runSkippedCompactionHooks(afterHookBase, {
+              messageCountAfter: beforeHookMetrics.messageCountOriginal,
+              tokensAfter: observedTokenCount,
+              sessionFile: params.sessionFile,
+              reason: "no_real_conversation_messages",
+            });
+            return { ok: true, compacted: false, reason: "no real conversation messages" };
           }
 
           const compactStartedAt = Date.now();
           // Measure compactedCount from the original pre-limiting transcript so compaction
           // lifecycle metrics represent total reduction through the compaction pipeline.
-          const messageCountCompactionInput = messageCountOriginal;
+          const messageCountCompactionInput = beforeHookMetrics.messageCountOriginal;
           // Estimate full session tokens BEFORE compaction (including system prompt,
           // bootstrap context, workspace files, and all history). This is needed for
           // a correct sanity check — result.tokensBefore only covers the summarizable
@@ -1807,13 +1813,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
             );
           }
           await runAfterCompactionHooks({
-            hookRunner,
+            ...afterHookBase,
             sessionId: activeSessionId,
-            sessionAgentId,
-            hookSessionKey,
-            missingSessionKey,
-            workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
             messageCountAfter,
             tokensAfter,
             compactedCount,
@@ -1824,7 +1825,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
-            onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,

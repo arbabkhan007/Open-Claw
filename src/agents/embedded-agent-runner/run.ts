@@ -156,6 +156,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { afterCompactionSkipFields } from "./compaction-skip.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import {
   runContextEngineMaintenance,
@@ -1783,7 +1784,6 @@ async function runEmbeddedAgentInternal(
           if (
             contextEngine.info.ownsCompaction !== true ||
             !compactResult.ok ||
-            !compactResult.compacted ||
             !hookRunner?.hasHooks("after_compaction")
           ) {
             return;
@@ -1792,12 +1792,12 @@ async function runEmbeddedAgentInternal(
             await hookRunner.runAfterCompaction(
               {
                 messageCount: -1,
-                compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
                 sessionFile:
                   resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
                   activeSessionFile,
                 ...(previousSessionId ? { previousSessionId } : {}),
+                ...afterCompactionSkipFields(compactResult),
               },
               resolveActiveHookContext(),
             );
