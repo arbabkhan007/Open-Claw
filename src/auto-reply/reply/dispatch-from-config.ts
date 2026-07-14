@@ -488,6 +488,7 @@ async function dispatchReplyFromConfigInner(
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,
+    getCurrentRunId,
     getObservedReplyDelivery,
     getPreDispatchAbortSignal,
     getReplyOptions,
@@ -721,17 +722,15 @@ async function dispatchReplyFromConfigInner(
       isGroup,
       groupId,
       replyKind: options?.kind ?? "final",
-      runId: params.replyOptions?.runId,
+      runId: getCurrentRunId(),
     });
   };
 
   const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
     result.ok && result.suppressed !== true;
 
-  /**
-   * Helper to send a payload via route-reply (async).
-   * Only used when actually routing to a different provider.
-   * Note: Only called when shouldRouteToOriginating is true, so
+  /** Helper to send a payload via route-reply (async).
+   * Only called when shouldRouteToOriginating is true, so
    * routeReplyChannel and routeReplyTo are guaranteed to be defined.
    */
   const sendPayloadAsync = async (
