@@ -524,6 +524,34 @@ function prepareEmbeddedAgentQueueMessage(
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
+/**
+ * Abort one captured embedded-run generation. Skips when the registry no longer
+ * points at `handle` so stuck-recovery cannot cancel a replacement run.
+ */
+function abortEmbeddedAgentRunHandle(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  reason?: "restart",
+): boolean {
+  const active = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (active !== handle) {
+    diag.debug(`abort failed: sessionId=${sessionId} reason=handle_mismatch`);
+    return false;
+  }
+  if (!isEmbeddedRunHandleAbortable(sessionId, handle)) {
+    diag.debug(`abort failed: sessionId=${sessionId} reason=not_abortable`);
+    return false;
+  }
+  diag.debug(`aborting run: sessionId=${sessionId}`);
+  try {
+    handle.abort(reason);
+  } catch (err) {
+    diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
+    return false;
+  }
+  return true;
+}
+
 export function abortEmbeddedAgentRun(sessionId: string): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
@@ -534,6 +562,9 @@ export function abortEmbeddedAgentRun(
   opts?: { mode?: "all" | "compacting"; reason?: "restart" },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
+    // Administrative current-session abort: intentionally targets whatever is
+    // registered now (user abort, session reset, compaction). Generation-bound
+    // recovery uses abortEmbeddedAgentRunHandle via abortAndDrainEmbeddedAgentRun.
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
       if (abortReplyRunBySessionId(sessionId)) {
@@ -542,18 +573,7 @@ export function abortEmbeddedAgentRun(
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
       return false;
     }
-    if (!isEmbeddedRunHandleAbortable(sessionId, handle)) {
-      diag.debug(`abort failed: sessionId=${sessionId} reason=not_abortable`);
-      return false;
-    }
-    diag.debug(`aborting run: sessionId=${sessionId}`);
-    try {
-      handle.abort(opts?.reason);
-    } catch (err) {
-      diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
-      return false;
-    }
-    return true;
+    return abortEmbeddedAgentRunHandle(sessionId, handle, opts?.reason);
   }
 
   const abortActiveEmbeddedRunHandles = (params: {
@@ -726,21 +746,36 @@ export async function waitForActiveEmbeddedRuns(
   }
 }
 
+/**
+ * Wait until the session has no active embedded run, or until a captured handle
+ * is no longer the active registry occupant when `handle` is provided.
+ */
 export function waitForEmbeddedAgentRunEnd(
   sessionId: string,
   timeoutMs = 15_000,
+  handle?: EmbeddedAgentQueueHandle,
 ): Promise<boolean> {
   if (!sessionId) {
     return Promise.resolve(true);
   }
-  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  const active = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (handle !== undefined) {
+    // Generation-bound wait: the captured run is already gone when the session
+    // points elsewhere or is empty.
+    if (active !== handle) {
+      return Promise.resolve(true);
+    }
+  } else if (!active) {
     return waitForReplyRunEndBySessionId(sessionId, timeoutMs);
   }
-  diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
+  diag.debug(
+    `waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutMs}${handle ? " generation=bound" : ""}`,
+  );
   return new Promise((resolve) => {
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     const waiter: EmbeddedRunWaiter = {
       resolve,
+      handle,
       timer: setTimeout(
         () => {
           waiters.delete(waiter);
@@ -755,14 +790,8 @@ export function waitForEmbeddedAgentRunEnd(
     };
     waiters.add(waiter);
     EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
-      waiters.delete(waiter);
-      if (waiters.size === 0) {
-        EMBEDDED_RUN_WAITERS.delete(sessionId);
-      }
-      clearTimeout(waiter.timer);
-      resolve(true);
-    }
+    // Re-check after registration to close the clear/replace race.
+    notifyEmbeddedRunWaiters(sessionId);
   });
 }
 
@@ -772,6 +801,13 @@ export type AbortAndDrainEmbeddedAgentRunResult = {
   forceCleared: boolean;
 };
 
+/**
+ * Abort, wait, and optionally force-clear one run generation for a session.
+ *
+ * Captures the active handle at entry so later steps cannot act on a
+ * replacement registered under the same sessionId. Session-level and global
+ * abort APIs remain separate for intentional current-run cancellation.
+ */
 export async function abortAndDrainEmbeddedAgentRun(params: {
   sessionId: string;
   sessionKey?: string;
@@ -780,6 +816,8 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  // Capture before any async gap; stuck recovery must not cross generations.
+  const capturedHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
@@ -795,26 +833,67 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
     return { aborted: true, drained, forceCleared: false };
   }
-  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
-  const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
+  const aborted = capturedHandle
+    ? abortEmbeddedAgentRunHandle(
+        params.sessionId,
+        capturedHandle,
+        params.reason === "restart" ? "restart" : undefined,
+      ) || expiredReplyRun
+    : abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+  const drained = aborted
+    ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs, capturedHandle)
+    : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)
-      ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
+      ? forceClearEmbeddedAgentRun(
+          params.sessionId,
+          params.sessionKey,
+          params.reason,
+          capturedHandle,
+        )
       : false;
   return { aborted, drained, forceCleared };
 }
 
-function notifyEmbeddedRunEnded(sessionId: string) {
+/**
+ * Resolve waiters whose end condition is already true:
+ * - generation-bound: captured handle is no longer the active occupant
+ * - session-bound: session has no active embedded handle
+ */
+function notifyEmbeddedRunWaiters(sessionId: string) {
   const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
   if (!waiters || waiters.size === 0) {
     return;
   }
-  EMBEDDED_RUN_WAITERS.delete(sessionId);
-  diag.debug(`notifying waiters: sessionId=${sessionId} waiterCount=${waiters.size}`);
+  const active = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const ready: EmbeddedRunWaiter[] = [];
   for (const waiter of waiters) {
+    if (waiter.handle !== undefined) {
+      if (active !== waiter.handle) {
+        ready.push(waiter);
+      }
+    } else if (active === undefined) {
+      ready.push(waiter);
+    }
+  }
+  if (ready.length === 0) {
+    return;
+  }
+  diag.debug(
+    `notifying waiters: sessionId=${sessionId} waiterCount=${ready.length} remaining=${waiters.size - ready.length}`,
+  );
+  for (const waiter of ready) {
+    waiters.delete(waiter);
     clearTimeout(waiter.timer);
     waiter.resolve(true);
   }
+  if (waiters.size === 0) {
+    EMBEDDED_RUN_WAITERS.delete(sessionId);
+  }
+}
+
+function notifyEmbeddedRunEnded(sessionId: string) {
+  notifyEmbeddedRunWaiters(sessionId);
 }
 
 export function setActiveEmbeddedRun(
@@ -846,6 +925,11 @@ export function setActiveEmbeddedRun(
   markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+  }
+  // Replacement ends the previous generation for handle-bound waiters only;
+  // session-bound waiters keep waiting until the session is fully idle.
+  if (previousHandle && previousHandle !== handle) {
+    notifyEmbeddedRunWaiters(sessionId);
   }
 }
 
@@ -909,12 +993,23 @@ export function forceClearEmbeddedAgentRun(
   sessionId: string,
   sessionKey?: string,
   reason = "stuck_recovery",
+  /**
+   * When provided, delete only if the registry still points at this captured
+   * generation. Omitting the handle keeps the administrative current-session
+   * force-clear path used by non-recovery callers.
+   */
+  handle?: EmbeddedAgentQueueHandle,
 ): boolean {
   let cleared = false;
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (handle) {
+  const active = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (active) {
+    if (handle !== undefined && active !== handle) {
+      // A newer run owns the session; do not delete it or its reply ownership.
+      diag.debug(`run force-clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
+      return false;
+    }
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    clearEmbeddedRunAbortability(handle);
+    clearEmbeddedRunAbortability(active);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId);

@@ -30,6 +30,7 @@ import {
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
   clearEmbeddedRunAbandonment,
+  forceClearEmbeddedAgentRun,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunAbortableForRunId,
   isEmbeddedAgentRunAbortableForCompaction,
@@ -836,6 +837,82 @@ describe("embedded-agent runner run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("does not abort or force-clear a replacement run after recovery captures the stale generation", async () => {
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    const staleAbort = vi.fn();
+    const replacementAbort = vi.fn();
+    const replacementHandle = createRunHandle({ abort: replacementAbort });
+    const staleHandle = createRunHandle({
+      abort: () => {
+        // During abort of the captured generation, install a replacement so
+        // later drain/force-clear steps must not cross into it.
+        setActiveEmbeddedRun("session-replaced-gen", replacementHandle, "agent:main:gen");
+        staleAbort();
+      },
+    });
+
+    setActiveEmbeddedRun("session-replaced-gen", staleHandle, "agent:main:gen");
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId: "session-replaced-gen",
+      sessionKey: "agent:main:gen",
+      settleMs: 50,
+      forceClear: true,
+      reason: "stuck_recovery",
+    });
+
+    expect(result).toEqual({ aborted: true, drained: true, forceCleared: false });
+    expect(staleAbort).toHaveBeenCalledTimes(1);
+    expect(replacementAbort).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunHandleActive("session-replaced-gen")).toBe(true);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:gen")).toBe("session-replaced-gen");
+    // Generation-bound wait ends even though the session still has a live replacement.
+    await expect(waitForEmbeddedAgentRunEnd("session-replaced-gen", 50, staleHandle)).resolves.toBe(
+      true,
+    );
+    expect(
+      forceClearEmbeddedAgentRun(
+        "session-replaced-gen",
+        "agent:main:gen",
+        "stuck_recovery",
+        staleHandle,
+      ),
+    ).toBe(false);
+    expect(isEmbeddedAgentRunHandleActive("session-replaced-gen")).toBe(true);
+    expect(
+      debugSpy.mock.calls.some(([message]) => message.includes("run force-clear skipped")),
+    ).toBe(true);
+  });
+
+  it("skips force-clear and generation wait when the captured handle was already replaced", async () => {
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    const staleAbort = vi.fn();
+    const replacementAbort = vi.fn();
+    const staleHandle = createRunHandle({ abort: staleAbort });
+    const replacementHandle = createRunHandle({ abort: replacementAbort });
+
+    setActiveEmbeddedRun("session-pre-replaced", staleHandle, "agent:main:pre");
+    setActiveEmbeddedRun("session-pre-replaced", replacementHandle, "agent:main:pre");
+
+    await expect(
+      waitForEmbeddedAgentRunEnd("session-pre-replaced", 100, staleHandle),
+    ).resolves.toBe(true);
+    expect(
+      forceClearEmbeddedAgentRun(
+        "session-pre-replaced",
+        "agent:main:pre",
+        "stuck_recovery",
+        staleHandle,
+      ),
+    ).toBe(false);
+    expect(replacementAbort).not.toHaveBeenCalled();
+    expect(staleAbort).not.toHaveBeenCalled();
+    expect(isEmbeddedAgentRunHandleActive("session-pre-replaced")).toBe(true);
+    expect(
+      debugSpy.mock.calls.some(([message]) => message.includes("run force-clear skipped")),
+    ).toBe(true);
   });
 
   it("clamps oversized embedded run wait timers", async () => {
