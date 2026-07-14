@@ -88,10 +88,6 @@ import type {
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
-import type {
-  AISafetyEventEmitResult,
-  AISafetyEventInput,
-} from "./safety-event-emission.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
@@ -149,6 +145,7 @@ import type {
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginHookOptions,

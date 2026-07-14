@@ -1704,6 +1704,7 @@ export const pl: TranslationMap = {
     memoryImport: "Importuj pamięć",
     debug: "Debug",
     logs: "Logi",
+    safety: "Safety",
     plugin: "Wtyczka",
   },
   subtitles: {
@@ -1735,6 +1736,7 @@ export const pl: TranslationMap = {
     memoryImport: "Przenieś pamięć Codex i Claude Code do obszaru roboczego agenta.",
     debug: "Migawki, zdarzenia, RPC.",
     logs: "Logi Gateway na żywo.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Panel udostępniany przez wtyczkę.",
   },
   memoryImport: {

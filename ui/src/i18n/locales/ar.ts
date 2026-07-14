@@ -1685,6 +1685,7 @@ export const ar: TranslationMap = {
     memoryImport: "استيراد الذاكرة",
     debug: "تصحيح الأخطاء",
     logs: "السجلات",
+    safety: "Safety",
     plugin: "المكوّن الإضافي",
   },
   subtitles: {
@@ -1716,6 +1717,7 @@ export const ar: TranslationMap = {
     memoryImport: "انقل ذاكرة Codex وClaude Code إلى مساحة عمل وكيل.",
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "لوحة مقدمة من المكوّن الإضافي.",
   },
   memoryImport: {

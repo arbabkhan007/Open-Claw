@@ -1704,6 +1704,7 @@ export const ja_JP: TranslationMap = {
     memoryImport: "メモリをインポート",
     debug: "デバッグ",
     logs: "ログ",
+    safety: "Safety",
     plugin: "プラグイン",
   },
   subtitles: {
@@ -1735,6 +1736,7 @@ export const ja_JP: TranslationMap = {
     memoryImport: "Codex と Claude Code のメモリをエージェントワークスペースに取り込みます。",
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "プラグインが提供するパネル。",
   },
   memoryImport: {

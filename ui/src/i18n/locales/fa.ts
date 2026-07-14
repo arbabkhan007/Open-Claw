@@ -1694,6 +1694,7 @@ export const fa: TranslationMap = {
     memoryImport: "درون‌ریزی حافظه",
     debug: "اشکال‌زدایی",
     logs: "گزارش‌ها",
+    safety: "Safety",
     plugin: "افزونه",
   },
   subtitles: {
@@ -1725,6 +1726,7 @@ export const fa: TranslationMap = {
     memoryImport: "حافظه Codex و Claude Code را به فضای کاری عامل وارد کنید.",
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "پنل ارائه‌شده توسط افزونه.",
   },
   memoryImport: {
