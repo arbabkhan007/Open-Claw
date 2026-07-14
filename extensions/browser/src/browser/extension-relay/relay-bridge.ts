@@ -8,7 +8,7 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveCreateTargetBackground } from "./create-target-params.js";
+import { resolveCreateTargetParams } from "./create-target-params.js";
 import {
   type ExtensionToRelayMessage,
   parseExtensionMessage,
@@ -808,8 +808,8 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const background = resolveCreateTargetBackground(request.params);
-        const command = { type: "createTab", url, background } as const;
+        const createParams = resolveCreateTargetParams(request.params);
+        const command = { type: "createTab", url, ...createParams } as const;
         const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");

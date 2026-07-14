@@ -1,6 +1,4 @@
-export function resolveCreateTargetBackground(
-  params: Record<string, unknown> | undefined,
-): boolean {
+export function resolveCreateTargetParams(params: Record<string, unknown> | undefined) {
   const background = params?.background;
   const focus = params?.focus;
   if (background === true && focus === true) {
@@ -8,8 +6,10 @@ export function resolveCreateTargetBackground(
   }
   // OpenClaw changes only the fully omitted automation case to background.
   // Explicit focus keeps the CDP foreground semantics for both boolean values.
-  if (focus === undefined) {
-    return background !== false;
-  }
-  return background === true && focus === false;
+  const resolvedBackground =
+    focus === undefined ? background !== false : background === true && focus === false;
+  return {
+    background: resolvedBackground,
+    focus: focus === true || (focus === undefined && !resolvedBackground),
+  };
 }

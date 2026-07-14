@@ -87,6 +87,12 @@ async function addTabToOpenClawGroup(tabId) {
   });
 }
 
+async function focusWindowForTab(tab) {
+  if (typeof tab.windowId === "number") {
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
+}
+
 async function removeTabFromOpenClawGroup(tabId) {
   try {
     await chrome.tabs.ungroup([tabId]);
@@ -240,6 +246,9 @@ async function handleRelayCommand(msg) {
       case "createTab": {
         const tab = await chrome.tabs.create({ url: msg.url, active: msg.background !== true });
         await addTabToOpenClawGroup(tab.id);
+        if (msg.focus === true) {
+          await focusWindowForTab(tab);
+        }
         scheduleTabsSync();
         send({ type: "result", seq, result: { tabId: tab.id } });
         return;
@@ -253,9 +262,7 @@ async function handleRelayCommand(msg) {
       case "activateTab": {
         const tab = await chrome.tabs.get(msg.tabId);
         await chrome.tabs.update(msg.tabId, { active: true });
-        if (typeof tab.windowId === "number") {
-          await chrome.windows.update(tab.windowId, { focused: true });
-        }
+        await focusWindowForTab(tab);
         send({ type: "result", seq, result: {} });
         return;
       }
