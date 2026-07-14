@@ -1456,7 +1456,13 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  // Explicit cron wakes must bypass the active-hours gate: activeHours bounds
+  // scheduled heartbeat polls, not cron job execution. Without this bypass a
+  // main/systemEvent cron scheduled outside activeHours is silently skipped as
+  // "quiet-hours" and its payload never runs (regression #105413).
+  const wakeSource = opts.source ?? inferHeartbeatWakeSourceFromReason(opts.reason);
+  const isExplicitCronWake = wakeSource === "cron";
+  if (!isExplicitCronWake && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
