@@ -179,7 +179,7 @@ describe("exec approval requests", () => {
   it("passes approval metadata into host approval registration payloads", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
-    await registerExecApprovalRequestForHost({
+    await registerExecApprovalRequestForHostOrThrow({
       approvalId: "approval-id",
       command: "echo hi",
       title: "Run echo hi",

@@ -29,6 +29,7 @@ import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
+import { resolveExecDetail } from "./tool-display-exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
@@ -37,6 +38,18 @@ const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   () => import("./bash-tools.exec-approval-request.runtime.js"),
   { cacheRejections: true },
 );
+
+export type ExecApprovalMetadata = {
+  title?: string;
+  toolCallId?: string;
+};
+
+export function resolveExecApprovalMetadata(
+  args: unknown,
+  toolCallId: unknown,
+): ExecApprovalMetadata {
+  return { title: resolveExecDetail(args), toolCallId: parseString(toolCallId) };
+}
 
 /** Gateway payload fields used to register or wait for an exec approval decision. */
 type RequestExecApprovalDecisionParams = {

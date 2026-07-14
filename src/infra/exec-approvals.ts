@@ -212,10 +212,7 @@ export type SystemRunApprovalPlan = {
   mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
-export type ExecApprovalCommandSpan = {
-  startIndex: number;
-  endIndex: number;
-};
+export type ExecApprovalCommandSpan = { startIndex: number; endIndex: number };
 
 export type ExecApprovalRequestPayload = {
   command: string;

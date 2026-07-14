@@ -538,8 +538,10 @@ describe("processGatewayAllowlist", () => {
 
     await runGatewayAllowlist({
       command: "echo ok",
-      title: "Run echo ok",
-      toolCallId: "tool-raw",
+      approvalMetadata: {
+        title: "Run echo ok",
+        toolCallId: "tool-raw",
+      },
     });
 
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(

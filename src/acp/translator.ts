@@ -62,6 +62,7 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
+import { findUniquePendingApprovalTarget } from "./pending-approval-correlation.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -978,9 +979,11 @@ export class AcpGatewayAgent implements Agent {
 
     const pending = params.runId
       ? this.findPendingBySessionKey(params.sessionKey, params.runId)
-      : ((approvalEvent.toolCallId
-          ? this.findUniquePendingByToolCallId(params.sessionKey, approvalEvent.toolCallId)
-          : undefined) ?? this.findUniquePendingBySessionKey(params.sessionKey));
+      : findUniquePendingApprovalTarget(
+          this.pendingPrompts.values(),
+          params.sessionKey,
+          approvalEvent.toolCallId,
+        );
     if (!pending) {
       return;
     }
@@ -1256,37 +1259,6 @@ export class AcpGatewayAgent implements Agent {
       }
     }
     return undefined;
-  }
-
-  private findUniquePendingByToolCallId(
-    sessionKey: string,
-    toolCallId: string,
-  ): PendingPrompt | undefined {
-    let match: PendingPrompt | undefined;
-    for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey !== sessionKey || !pending.toolCalls?.has(toolCallId)) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = pending;
-    }
-    return match;
-  }
-
-  private findUniquePendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
-    let match: PendingPrompt | undefined;
-    for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey !== sessionKey) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = pending;
-    }
-    return match;
   }
 
   private reconcilePendingSessionKey(pending: PendingPrompt, sessionKey: string): void {

@@ -608,8 +608,10 @@ describe("executeNodeHostCommand", () => {
 
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
-      title: "Run node script",
-      toolCallId: "tool-node-raw",
+      approvalMetadata: {
+        title: "Run node script",
+        toolCallId: "tool-node-raw",
+      },
       workdir: "/tmp/work",
       env: {},
       security: "full",

@@ -238,6 +238,21 @@ describe("ACP translator permission relay", () => {
     const harness = await createHarness();
     const approvalId = "approval-raw";
 
+    await harness.agent.handleGatewayEvent({
+      type: "event",
+      event: "agent",
+      payload: {
+        runId: harness.runId,
+        sessionKey: SESSION_KEY,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-raw",
+          args: { command: "echo raw" },
+        },
+      },
+    } as EventFrame);
     await harness.agent.handleGatewayEvent(
       createApprovalRequestEvent({
         approvalId,
@@ -268,7 +283,7 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
-  it("falls back to the sole pending prompt when a structured approval tool call id is unmatched", async () => {
+  it("rejects a structured approval when its explicit tool call id is unmatched", async () => {
     const harness = await createHarness();
     const approvalId = "approval-unmatched-tool";
 
@@ -279,16 +294,9 @@ describe("ACP translator permission relay", () => {
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
-      expect(approvalResolveCalls(harness.request)).toHaveLength(1);
-    });
-
-    expect(firstCallArg(harness.requestPermission).sessionId).toBe(SESSION_ID);
-    expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: approvalId,
-      decision: "allow-once",
-    });
+    expect(hasApprovalRelay(harness.agent, approvalId)).toBe(false);
+    expect(harness.requestPermission).not.toHaveBeenCalled();
+    expect(approvalResolveCalls(harness.request)).toHaveLength(0);
 
     await cleanupHarness(harness);
   });
@@ -359,6 +367,21 @@ describe("ACP translator permission relay", () => {
         }),
     });
 
+    await harness.agent.handleGatewayEvent({
+      type: "event",
+      event: "agent",
+      payload: {
+        runId: harness.runId,
+        sessionKey: SESSION_KEY,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-raw",
+          args: { command: "echo raw" },
+        },
+      },
+    } as EventFrame);
     await harness.agent.handleGatewayEvent({
       type: "event",
       event: requested.event,

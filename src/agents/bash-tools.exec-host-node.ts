@@ -31,6 +31,7 @@ import {
   shouldSkipNodeApprovalPrepare,
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import type { ExecHostApprovalContext } from "./bash-tools.exec-host-shared.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -49,11 +50,7 @@ type NodeGatewayDispatchAuthority =
   | "auto-review"
   | "ask-fallback";
 
-type NodeGatewayPolicyCheckpoint = {
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  askFallback: ExecSecurity;
-};
+type NodeGatewayPolicyCheckpoint = Omit<ExecHostApprovalContext, "approvals">;
 
 async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   request: ExecuteNodeHostCommandParams;
@@ -235,8 +232,7 @@ export async function executeNodeHostCommand(
   ) =>
     await registerExecApprovalRequestForHostOrThrow({
       approvalId,
-      title: params.title,
-      toolCallId: params.toolCallId,
+      ...params.approvalMetadata,
       systemRunPlan: prepared.plan,
       env: target.env,
       workdir: prepared.cwd,
