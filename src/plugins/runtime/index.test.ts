@@ -377,6 +377,7 @@ describe("plugin runtime command execution", () => {
           "getSessionEntry",
           "listSessionEntries",
           "patchSessionEntry",
+          "resetSessionEntryLifecycle",
           "upsertSessionEntry",
           "runWithWorkAdmission",
           "updateSessionStoreEntry",

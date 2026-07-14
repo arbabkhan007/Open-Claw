@@ -17,11 +17,11 @@ import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { buildMSTeamsActivityHandler } from "./monitor-activity-handler.js";
 import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
   registerMSTeamsHandlers,
-  type MSTeamsActivityHandler,
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
@@ -277,7 +277,7 @@ export async function monitorMSTeamsProvider(
   // Build a simple ActivityHandler-compatible object and register our
   // existing dispatch handlers on it. The SDK's App routes all inbound
   // activities to our handler via app.on('activity', ...).
-  const handler = buildActivityHandler();
+  const handler = buildMSTeamsActivityHandler();
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime,
@@ -571,68 +571,6 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
-}
-
-/**
- * Build a minimal ActivityHandler-compatible object that supports
- * onMessage / onMembersAdded registration and a run() method.
- */
-function buildActivityHandler(): MSTeamsActivityHandler {
-  type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
-  const messageHandlers: Handler[] = [];
-  const membersAddedHandlers: Handler[] = [];
-  const reactionsAddedHandlers: Handler[] = [];
-  const reactionsRemovedHandlers: Handler[] = [];
-
-  const handler: MSTeamsActivityHandler = {
-    onMessage(cb) {
-      messageHandlers.push(cb);
-      return handler;
-    },
-    onMembersAdded(cb) {
-      membersAddedHandlers.push(cb);
-      return handler;
-    },
-    onReactionsAdded(cb) {
-      reactionsAddedHandlers.push(cb);
-      return handler;
-    },
-    onReactionsRemoved(cb) {
-      reactionsRemovedHandlers.push(cb);
-      return handler;
-    },
-    async run(context: unknown) {
-      const ctx = context as { activity?: { type?: string } };
-      const activityType = ctx?.activity?.type;
-      const noop = async () => {};
-
-      if (activityType === "message") {
-        for (const h of messageHandlers) {
-          await h(context, noop);
-        }
-      } else if (activityType === "conversationUpdate") {
-        for (const h of membersAddedHandlers) {
-          await h(context, noop);
-        }
-      } else if (activityType === "messageReaction") {
-        const activity = (
-          ctx as { activity?: { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] } }
-        )?.activity;
-        if (activity?.reactionsAdded?.length) {
-          for (const h of reactionsAddedHandlers) {
-            await h(context, noop);
-          }
-        }
-        if (activity?.reactionsRemoved?.length) {
-          for (const h of reactionsRemovedHandlers) {
-            await h(context, noop);
-          }
-        }
-      }
-    },
-  };
-
-  return handler;
 }
 
 /**

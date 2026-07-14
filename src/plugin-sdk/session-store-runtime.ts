@@ -8,8 +8,10 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePath as resolveLegacySessionFilePath,
+  resolveStorePath as resolveSessionStorePath,
+} from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -22,7 +24,6 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   replaceSessionEntry,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
-  type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -36,6 +37,11 @@ import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/s
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { toSessionAccessScope } from "./session-store-access-scope.js";
+import {
+  resetSessionEntryLifecycleImpl,
+  type ResetSessionEntryLifecycleParams,
+} from "./session-store-lifecycle-runtime.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -130,21 +136,6 @@ type SessionLifecycleArtifactsCleanupResult = {
   archivedTranscriptArtifacts: number;
   removedEntries: number;
 };
-
-function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
-  // Maintainer note: keep this adapter narrow so plugin callers retain the
-  // object-parameter API while internal accessor-only options stay private.
-  return {
-    sessionKey: params.sessionKey,
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  };
-}
 
 function resolveLegacySessionStoreTarget(storePath: string): {
   agentId?: string;
@@ -410,6 +401,15 @@ export async function patchSessionEntry(
     replaceEntry: params.replaceEntry,
     skipMaintenance: params.skipMaintenance,
   });
+}
+
+/** Rotates one session through the canonical lifecycle owner and active-work fence. */
+export async function resetSessionEntryLifecycle(
+  params: ResetSessionEntryLifecycleParams,
+): Promise<SessionEntry | null> {
+  return await resetSessionEntryLifecycleImpl(params, (sessionId, options) =>
+    resolveSessionFilePath(sessionId, undefined, options),
+  );
 }
 
 /** Reads the last activity timestamp for one session entry. */
