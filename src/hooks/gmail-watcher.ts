@@ -70,6 +70,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
+  let spawnFailed = false;
   // Carry a bounded tail across stderr chunks so split patterns such as
   // "address alre" + "ady in use" are classified before the close handler
   // decides whether to stop restarts or to schedule a 5 s respawn. Restart
@@ -116,6 +117,12 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   child.on("error", (err) => {
+    // A failed spawn still emits `close`, but has no pid. Preserve the
+    // non-retry behavior for launch failures without suppressing restarts
+    // after errors from an already-running child.
+    if (child.pid === undefined) {
+      spawnFailed = true;
+    }
     log.error(`gog process error: ${String(err)}`);
   });
 
@@ -125,6 +132,10 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
       return;
     }
     if (shuttingDown) {
+      return;
+    }
+    if (spawnFailed) {
+      watcherProcess = null;
       return;
     }
     if (addressInUse) {

@@ -395,6 +395,31 @@ describe("startGmailWatcher", () => {
     await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });
   });
 
+  it("does not respawn when the child process fails to spawn", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<EventEmitter & { kill: ReturnType<typeof vi.fn> }> = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const mockedChild = Object.assign(child, { kill: vi.fn() });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      spawnedChildren[0]?.emit("error", new Error("spawn gog ENOENT"));
+      spawnedChildren[0]?.emit("close", -2, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops restarts when address-in-use marker is split across stderr chunks", async () => {
     vi.useFakeTimers();
     try {
