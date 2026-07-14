@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setQQBotRuntime, resetQQBotRuntimeForTest } from "./bridge/runtime.js";
+import { setQQBotRuntime } from "./bridge/runtime.js";
 import { qqbotPlugin } from "./channel.js";
 import type { QQBotAccountConfig, ResolvedQQBotAccount } from "./types.js";
 
@@ -45,7 +45,7 @@ async function runLogoutScenario(params: { cfg: OpenClawConfig; accountId: strin
 
 describe("qqbotPlugin gateway.logoutAccount", () => {
   afterEach(() => {
-    resetQQBotRuntimeForTest();
+    setQQBotRuntime({ version: "test" } as PluginRuntime);
   });
 
   it("ignores inherited named accounts during logout cleanup", async () => {
