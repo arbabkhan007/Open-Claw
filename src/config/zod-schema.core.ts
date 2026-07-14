@@ -241,6 +241,7 @@ const ModelCompatSchema = z
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
     requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
+    disableBoundaryAwareCache: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
@@ -1143,7 +1144,6 @@ export const ToolsLinksSchema = z
   .optional();
 
 export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
-
 export const ProviderCommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional(),
