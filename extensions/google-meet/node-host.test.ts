@@ -270,6 +270,89 @@ describe("google-meet node host bridge sessions", () => {
     }
   });
 
+  it("removes timed-out pull waiters before the next audio chunk", async () => {
+    const originalPlatform = process.platform;
+    const NativePromise = Promise;
+    let bridgeId: string | undefined;
+    let waiterRegistrations = 0;
+    let waiterResolveCalls = 0;
+    children.length = 0;
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "realtime",
+            launch: false,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      );
+      bridgeId = start.bridgeId;
+      const inputProcess = children[1];
+      if (!inputProcess) {
+        throw new Error("expected Google Meet node host input process");
+      }
+
+      class TrackingPromise<T> extends NativePromise<T> {
+        constructor(
+          executor: (
+            resolve: (value: T | PromiseLike<T>) => void,
+            reject: (reason?: unknown) => void,
+          ) => void,
+        ) {
+          const isAudioWaiter = executor.toString().includes("session.waiters.push");
+          super((resolve, reject) => {
+            if (!isAudioWaiter) {
+              executor(resolve, reject);
+              return;
+            }
+            waiterRegistrations += 1;
+            executor((value) => {
+              waiterResolveCalls += 1;
+              resolve(value);
+            }, reject);
+          });
+        }
+      }
+      vi.stubGlobal("Promise", TrackingPromise);
+
+      const pullAudio = (timeoutMs: number) =>
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({ action: "pullAudio", bridgeId: start.bridgeId, timeoutMs }),
+        ).then((raw) => JSON.parse(raw));
+
+      await pullAudio(1);
+      await pullAudio(1);
+      expect(waiterRegistrations).toBe(2);
+      expect(waiterResolveCalls).toBe(0);
+
+      const activePull = pullAudio(1_000);
+      inputProcess.stdout?.emit("data", Buffer.from([1, 2, 3]));
+      await expect(activePull).resolves.toEqual({
+        bridgeId: start.bridgeId,
+        closed: false,
+        base64: Buffer.from([1, 2, 3]).toString("base64"),
+      });
+      expect(waiterRegistrations).toBe(3);
+      expect(waiterResolveCalls).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+      if (bridgeId) {
+        try {
+          await handleGoogleMeetNodeHostCommand(JSON.stringify({ action: "stop", bridgeId }));
+        } catch {
+          // Best-effort test cleanup.
+        }
+      }
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
   it("lists active bridge sessions and hides closed sessions", async () => {
     const originalPlatform = process.platform;
     children.length = 0;

@@ -222,12 +222,23 @@ async function pullAudio(params: Record<string, unknown>) {
   }
   const timeoutMs = Math.min(readNumber(params.timeoutMs, 250), 2_000);
   if (session.chunks.length === 0 && !session.closed) {
-    await Promise.race([
-      sleep(timeoutMs),
-      new Promise<void>((resolve) => {
-        session.waiters.push(resolve);
-      }),
-    ]);
+    let pendingWaiter: (() => void) | undefined;
+    try {
+      await Promise.race([
+        sleep(timeoutMs),
+        new Promise<void>((resolve) => {
+          pendingWaiter = resolve;
+          session.waiters.push(resolve);
+        }),
+      ]);
+    } finally {
+      if (pendingWaiter) {
+        const waiterIndex = session.waiters.indexOf(pendingWaiter);
+        if (waiterIndex >= 0) {
+          session.waiters.splice(waiterIndex, 1);
+        }
+      }
+    }
   }
   const chunk = session.chunks.shift();
   return {
