@@ -429,6 +429,56 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 
+  it("keeps verified catalog budgets ahead of bundled static fallbacks", async () => {
+    mockContextDeps({
+      getRuntimeConfig: () => ({}),
+      discoveredModels: [
+        { id: "gpt-5.6-sol", provider: "github-copilot", contextTokens: 922_000 },
+        { id: "gpt-5.6-sol", provider: "other-provider", contextTokens: 64_000 },
+        {
+          id: "github-copilot/claude-opus-4.8",
+          provider: "github-copilot",
+          contextTokens: 936_000,
+        },
+        {
+          id: "mai-code-1-flash-picker",
+          provider: "github-copilot",
+          contextTokens: 128_000,
+        },
+      ],
+    });
+    contextTestState.staticCatalogModels = [
+      { id: "gpt-5.6-sol", provider: "github-copilot", contextWindow: 128_000 },
+      { id: "claude-opus-4.8", provider: "github-copilot", contextWindow: 128_000 },
+      {
+        id: "github-copilot/mai-code-1-flash-picker",
+        provider: "github-copilot",
+        contextWindow: 64_000,
+      },
+      { id: "offline-model", provider: "github-copilot", contextWindow: 64_000 },
+    ];
+
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
+    lookupContextTokens("gpt-5.6-sol");
+    await flushAsyncWarmup();
+
+    expect(resolveContextTokensForModel({ provider: "github-copilot", model: "gpt-5.6-sol" })).toBe(
+      922_000,
+    );
+    expect(
+      resolveContextTokensForModel({ provider: "github-copilot", model: "claude-opus-4.8" }),
+    ).toBe(936_000);
+    expect(
+      resolveContextTokensForModel({
+        provider: "github-copilot",
+        model: "mai-code-1-flash-picker",
+      }),
+    ).toBe(128_000);
+    expect(
+      resolveContextTokensForModel({ provider: "github-copilot", model: "offline-model" }),
+    ).toBe(64_000);
+  });
+
   it("keeps persisted context metadata when provider static warmup fails", async () => {
     mockDiscoveryDeps([
       {

@@ -55,9 +55,21 @@ const loadStaticModelCatalogRuntime = () =>
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
+  mode?: "minimum" | "fallback";
 }) {
+  const mode = params.mode ?? "minimum";
+  const fallbackProtectedKeys = mode === "fallback" ? new Set(params.cache.keys()) : undefined;
   const cacheMinimum = (key: string, contextTokens: number) => {
     const existing = params.cache.get(key);
+    if (mode === "fallback") {
+      if (fallbackProtectedKeys?.has(key)) {
+        return;
+      }
+      if (existing === undefined || contextTokens < existing) {
+        params.cache.set(key, contextTokens);
+      }
+      return;
+    }
     if (existing === undefined || contextTokens < existing) {
       params.cache.set(key, contextTokens);
     }
@@ -225,7 +237,14 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
           providerStaticModelsResult.status === "fulfilled" ? providerStaticModelsResult.value : [];
         applyDiscoveredContextWindows({
           cache: stagedTokenCache,
-          models: [...models, ...providerStaticModels],
+          models,
+        });
+        // Bundled metadata is an offline fallback. It must not lower verified
+        // provider discovery for the same model when both sources are present.
+        applyDiscoveredContextWindows({
+          cache: stagedTokenCache,
+          models: providerStaticModels,
+          mode: "fallback",
         });
       } catch {
         // If model discovery fails, continue with config overrides only.
