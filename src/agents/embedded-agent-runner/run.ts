@@ -236,6 +236,7 @@ import {
   resolveSilentToolResultReplyPayload,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
+  resolveTurnBudgetTimeoutNotice,
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
@@ -4143,6 +4144,84 @@ async function runEmbeddedAgentInternal(
                 `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
             );
             continue;
+          }
+
+          // A turn that exhausts its time budget (`agents.defaults.timeoutSeconds`)
+          // or a run-level deadline without producing a visible reply would
+          // otherwise fall through to the terminal path below with no payloads —
+          // returning `undefined` and going completely silent on the channel
+          // (indistinguishable from a hung process). Surface a recoverable notice
+          // instead, mirroring the prompt-level timeout copy above. `timedOut` is
+          // distinct from a user cancel (`aborted`); the notice is suppressed for
+          // compaction timeouts (paused/resumable, not abandoned), for
+          // intentionally-silent (cron/heartbeat) turns, when a messaging tool
+          // or a deterministic approval prompt already delivered out-of-band,
+          // when a `message_tool_only` source reply already delivered the visible
+          // response (`didDeliverSourceReplyViaMessageTool`), and when the attempt
+          // carries a structured terminal state (pending client tool calls / yield)
+          // that the terminal path below must preserve.
+          const turnBudgetTimeoutNotice = resolveTurnBudgetTimeoutNotice({
+            timedOut,
+            idleTimedOut,
+            timedOutDuringCompaction,
+            payloadCount,
+            allowSilentReply: params.allowEmptyAssistantReplyAsSilent === true,
+            hasMessagingDelivery: hasMessagingToolDeliveryEvidence(attempt),
+            hasDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt === true,
+            hasClientToolCalls: (attempt.clientToolCalls?.length ?? 0) > 0,
+            yieldDetected: attempt.yieldDetected === true,
+            hasSourceReplyDelivery: attempt.didDeliverSourceReplyViaMessageTool === true,
+          });
+          if (turnBudgetTimeoutNotice) {
+            const replayInvalid = resolveReplayInvalidForAttempt(turnBudgetTimeoutNotice);
+            const livenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: turnBudgetTimeoutNotice,
+            });
+            const timeoutPhase = attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
+            const providerStarted = attempt.promptTimeoutOutcome?.providerStarted ?? true;
+            setTerminalLifecycleMeta({
+              replayInvalid,
+              livenessState,
+              timeoutPhase,
+              providerStarted,
+            });
+            return {
+              payloads: [
+                {
+                  text: turnBudgetTimeoutNotice,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                timeoutPhase,
+                providerStarted,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
           }
 
           log.debug(
