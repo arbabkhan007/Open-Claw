@@ -45,6 +45,10 @@ import {
   resolveHostingProfile,
 } from "../hosting/profiles.js";
 import {
+  resolveRuntimeActivationIdentity,
+  type RuntimeActivationIdentity,
+} from "../hosting/runtime-activation.js";
+import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
@@ -547,6 +551,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Runtime identity reported through readiness and status. */
+  runtimeActivationIdentity?: RuntimeActivationIdentity;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1
@@ -607,6 +613,8 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  const runtimeActivationIdentity =
+    opts.runtimeActivationIdentity ?? resolveRuntimeActivationIdentity({ env: process.env });
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -1182,6 +1190,7 @@ export async function startGatewayServer(
       configLoaded: true,
       gateway: "responding",
       plugins: buildGatewayPluginReadinessInput(pluginRegistry),
+      activation: runtimeActivationIdentity,
       additionalConditions: [...profileConditions, ...additionalConditions],
     });
   };
