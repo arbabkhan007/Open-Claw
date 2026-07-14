@@ -213,13 +213,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
-      10710,
+      // +1: emitPluginSafetyEvent manifest-gated AI safety emission facade (diagnostic-runtime).
+      10711,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
-      5382,
+      // +2: emitPluginSafetyEvent (diagnostic-runtime + compat mirror).
+      5384,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
