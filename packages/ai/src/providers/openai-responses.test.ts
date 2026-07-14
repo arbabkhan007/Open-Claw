@@ -2,13 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
-const openAiMockState = vi.hoisted(() => ({ configs: [] as unknown[] }));
+const openAiMockState = vi.hoisted(() => ({
+  configs: [] as unknown[],
+  thrown: new Error("stop after constructor") as unknown,
+}));
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
     responses = {
       create: vi.fn(() => {
-        throw new Error("stop after constructor");
+        throw openAiMockState.thrown;
       }),
     };
 
@@ -43,7 +46,27 @@ function model(overrides: Partial<Model<"openai-responses">> = {}) {
 describe("OpenAI Responses provider", () => {
   afterEach(() => {
     openAiMockState.configs = [];
+    openAiMockState.thrown = new Error("stop after constructor");
     configureAiTransportHost({});
+  });
+
+  it("terminates the stream when provider-specific error inspection throws", async () => {
+    const hostile = new Error("request failed");
+    Object.defineProperty(hostile, "status", {
+      get() {
+        throw new Error("status getter failed");
+      },
+    });
+    openAiMockState.thrown = hostile;
+
+    const result = await streamOpenAIResponses(model(), context, {
+      apiKey: "test",
+    }).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "request failed",
+    });
   });
 
   it("constructs the SDK client with the host guarded fetch", async () => {

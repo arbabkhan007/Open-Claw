@@ -27,6 +27,7 @@ import type {
   ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { formatUnknownError } from "../utils/format-unknown-error.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -288,19 +289,18 @@ function deriveMistralToolCallId(id: string, attempt: number): string {
 }
 
 function formatMistralError(error: unknown): string {
-  if (error instanceof Error) {
-    const sdkError = error as Error & { statusCode?: unknown; body?: unknown };
-    const statusCode = typeof sdkError.statusCode === "number" ? sdkError.statusCode : undefined;
-    const bodyText = typeof sdkError.body === "string" ? sdkError.body.trim() : undefined;
+  return formatUnknownError(error, (sdkError) => {
+    const details = sdkError as Error & { statusCode?: unknown; body?: unknown };
+    const statusCode = typeof details.statusCode === "number" ? details.statusCode : undefined;
+    const bodyText = typeof details.body === "string" ? details.body.trim() : undefined;
     if (statusCode !== undefined && bodyText) {
       return `Mistral API error (${statusCode}): ${truncateErrorText(bodyText, MAX_MISTRAL_ERROR_BODY_CHARS)}`;
     }
     if (statusCode !== undefined) {
-      return `Mistral API error (${statusCode}): ${error.message}`;
+      return `Mistral API error (${statusCode}): ${sdkError.message}`;
     }
-    return error.message;
-  }
-  return safeJsonStringify(error);
+    return sdkError.message;
+  });
 }
 
 function truncateErrorText(text: string, maxChars: number): string {
@@ -309,15 +309,6 @@ function truncateErrorText(text: string, maxChars: number): string {
   }
   const truncated = truncateUtf16Safe(text, maxChars);
   return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? String(value) : serialized;
-  } catch {
-    return String(value);
-  }
 }
 
 function buildChatPayload(

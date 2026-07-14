@@ -11,6 +11,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { formatUnknownError } from "../utils/format-unknown-error.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
@@ -40,19 +41,14 @@ function resolveDeploymentName(
 }
 
 function formatAzureOpenAIError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
+  return formatUnknownError(error, (apiError) => {
+    const status = (apiError as Error & { status?: unknown }).status;
     const statusCode = typeof status === "number" ? status : undefined;
     if (statusCode !== undefined) {
-      return `Azure OpenAI API error (${statusCode}): ${error.message}`;
+      return `Azure OpenAI API error (${statusCode}): ${apiError.message}`;
     }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
+    return apiError.message;
+  });
 }
 
 // Azure OpenAI Responses-specific options
@@ -247,6 +243,7 @@ function buildParams(
 }
 
 export const testing = {
+  formatAzureOpenAIError,
   isOpenAICompatibleAzureResponsesBaseUrl,
   normalizeAzureBaseUrl,
   resolveAzureConfig,

@@ -203,6 +203,50 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
   };
 }
 
+function createThrowingStream(error: unknown): AsyncIterable<OpenAICompatibleChatCompletionChunk> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          throw error;
+        },
+      };
+    },
+  };
+}
+
+describe("OpenAI-compatible completions stream errors", () => {
+  it("terminates the stream when a circular non-Error value is thrown", async () => {
+    const thrown: Record<string, unknown> = { code: "ECONNRESET" };
+    thrown.self = thrown;
+    mockChunksRef.stream = createThrowingStream(thrown);
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "test",
+    }).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "[object Object]",
+    });
+  });
+
+  it("terminates the stream when thrown-value inspection is hostile", async () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    mockChunksRef.stream = createThrowingStream(proxy);
+    revoke();
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "test",
+    }).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Unknown error",
+    });
+  });
+});
+
 describe("OpenAI-compatible completions params", () => {
   it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
