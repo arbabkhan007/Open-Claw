@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -1300,10 +1299,9 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
   "agents.defaults.memorySearch.queryInputType":
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
-  "agents.defaults.memorySearch.documentInputType":
-    "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+  "agents.defaults.memorySearch.documentInputType": "Document/index embedding `input_type`.",
   "agents.defaults.memorySearch.queryInstructionTemplate":
-    "Set to true to use model-specific retrieval query instruction templates for OpenAI and OpenAI-compatible embedding models such as Qwen3 and Mixedbread. Document/index embeddings stay raw.",
+    "Use retrieval query templates for Qwen3 and Mixedbread.",
   "agents.defaults.memorySearch.outputDimensionality":
     "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "agents.defaults.memorySearch.remote.baseUrl":
