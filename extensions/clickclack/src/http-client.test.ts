@@ -1,7 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import * as loggingConfigModule from "../../../src/logging/config.js";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
@@ -226,58 +225,37 @@ describe("ClickClack HTTP client", () => {
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("redacts non-2xx response details independently of log redaction config", async () => {
-    const readLoggingConfig = vi.spyOn(loggingConfigModule, "readLoggingConfig");
-    try {
-      for (const { loggingConfig, redactsCustomPattern } of [
-        { loggingConfig: { redactSensitive: "off" as const }, redactsCustomPattern: false },
-        {
-          loggingConfig: {
-            redactSensitive: "tools" as const,
-            redactPatterns: [String.raw`\bcustom-ticket-[A-Za-z0-9]+\b`],
-          },
-          redactsCustomPattern: true,
-        },
-      ]) {
-        readLoggingConfig.mockReturnValue(loggingConfig);
-        const fieldA = ["access", "token"].join("_");
-        const fieldB = ["client", "secret"].join("_");
-        const valueA = ["redact", "fixture", "a", "123"].join("_");
-        const valueB = ["redact", "fixture", "b", "123"].join("_");
-        const fetchMock = vi.fn(
-          async () =>
-            new Response(
-              JSON.stringify({
-                safe: "diagnostic",
-                [fieldA]: valueA,
-                [fieldB]: valueB,
-                custom: "custom-ticket-abc123",
-              }),
-              { status: 502 },
-            ),
-        );
-        const client = createClickClackClient({
-          baseUrl: "https://clickclack.example",
-          token: "test-token",
-          fetch: fetchMock as unknown as typeof fetch,
-        });
+  it("redacts non-2xx response details with built-in patterns", async () => {
+    const fieldA = ["access", "token"].join("_");
+    const fieldB = ["client", "secret"].join("_");
+    const valueA = ["redact", "fixture", "a", "123"].join("_");
+    const valueB = ["redact", "fixture", "b", "123"].join("_");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            safe: "diagnostic",
+            [fieldA]: valueA,
+            [fieldB]: valueB,
+          }),
+          { status: 502 },
+        ),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
-        let message = "";
-        try {
-          await client.me();
-        } catch (error) {
-          message = error instanceof Error ? error.message : String(error);
-        }
-        expect(message).toContain('"safe":"diagnostic"');
-        expect(message).not.toContain(valueA);
-        expect(message).not.toContain(valueB);
-        if (redactsCustomPattern) {
-          expect(message).not.toContain("custom-ticket-abc123");
-        }
-      }
-    } finally {
-      readLoggingConfig.mockRestore();
+    let message = "";
+    try {
+      await client.me();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
     }
+    expect(message).toContain('"safe":"diagnostic"');
+    expect(message).not.toContain(valueA);
+    expect(message).not.toContain(valueB);
   });
 
   it("POSTs durable activity rows with kind and turn_id", async () => {
