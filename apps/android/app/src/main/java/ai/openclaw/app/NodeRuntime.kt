@@ -122,6 +122,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -131,6 +132,10 @@ import java.util.concurrent.atomic.AtomicReference
 private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
 private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
 private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
+private const val CRON_JOBS_PAGE_SIZE = 200
+private const val CRON_JOBS_MAX_PAGES = 100
+private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
+private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val OperatorAdminScope = "operator.admin"
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
@@ -1673,7 +1678,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = nativeText("This cron job already has a queued run."),
+          message = nativeText("This automation already has a queued run."),
           kind = GatewayCronNoticeKind.Warning,
         )
       return
@@ -1703,7 +1708,7 @@ class NodeRuntime private constructor(
             }
           }
           CronActionResult(
-            message = if (outcome.runId == null) nativeText("Cron job started.") else nativeText("Cron run queued."),
+            message = if (outcome.runId == null) nativeText("Automation started.") else nativeText("Automation run queued."),
             kind = GatewayCronNoticeKind.Success,
             refresh = cronRunShouldRefresh(outcome),
           )
@@ -1716,7 +1721,7 @@ class NodeRuntime private constructor(
           )
         GatewayCronRunOutcome.Rejected ->
           CronActionResult(
-            message = nativeText("Gateway rejected the cron run."),
+            message = nativeText("Gateway rejected the automation run."),
             kind = GatewayCronNoticeKind.Error,
             refresh = false,
           )
@@ -1747,7 +1752,7 @@ class NodeRuntime private constructor(
         }.toString(),
       )
       CronActionResult(
-        message = if (enabled) nativeText("Cron job enabled.") else nativeText("Cron job disabled."),
+        message = if (enabled) nativeText("Automation enabled.") else nativeText("Automation paused."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1769,13 +1774,13 @@ class NodeRuntime private constructor(
         if (!isCronJobRevisionConflict(err.gatewayError)) throw err
         reloadCronJobIfSelected(original.id)
         return@launchCronAction CronActionResult(
-          message = nativeText("This cron job changed on the gateway. Review the latest version before saving again."),
+          message = nativeText("This automation changed on the gateway. Review the latest version before saving again."),
           kind = GatewayCronNoticeKind.Warning,
           refresh = false,
         )
       }
       CronActionResult(
-        message = nativeText("Cron job updated."),
+        message = nativeText("Automation updated."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
       )
@@ -1790,7 +1795,7 @@ class NodeRuntime private constructor(
         buildJsonObject { put("id", JsonPrimitive(jobId)) }.toString(),
       )
       CronActionResult(
-        message = nativeText("Cron job deleted."),
+        message = nativeText("Automation deleted."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
         deleted = true,
@@ -2129,6 +2134,8 @@ class NodeRuntime private constructor(
 
   private var didAutoConnect = false
 
+  @Volatile private var preferredGatewayReconnectSuppressed = false
+
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
@@ -2211,7 +2218,7 @@ class NodeRuntime private constructor(
     cronJobDetailRequestGuard.publishIfCurrent(detailRequest) {
       _cronJobDetailState.value =
         detail?.let(GatewayCronJobDetailState::Loaded)
-          ?: GatewayCronJobDetailState.Error(detailRequest.id, nativeText("Gateway returned an invalid cron job."))
+          ?: GatewayCronJobDetailState.Error(detailRequest.id, nativeText("Gateway returned an invalid automation."))
     }
     publishScreenshotCronHistory(historyRequest)
   }
@@ -2399,6 +2406,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth? = null,
   ): Boolean {
+    preferredGatewayReconnectSuppressed = false
     val intent = gatewayLifecycleIntentSeq.incrementAndGet()
     return gatewaySwitchMutex.withLock {
       if (intent != gatewayLifecycleIntentSeq.get()) return@withLock false
@@ -2430,6 +2438,7 @@ class NodeRuntime private constructor(
   }
 
   private fun autoConnectIfNeeded() {
+    if (preferredGatewayReconnectSuppressed) return
     if (didAutoConnect) return
     if (gatewayConnectionDisplay.value.isConnected) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
@@ -2444,6 +2453,7 @@ class NodeRuntime private constructor(
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
+    if (preferredGatewayReconnectSuppressed) return
     if (gatewayConnectionDisplay.value.isConnected) return
     if (_pendingGatewayTrust.value != null) return
     if (connectedEndpoint != null) {
@@ -2458,11 +2468,15 @@ class NodeRuntime private constructor(
   }
 
   fun setCameraEnabled(value: Boolean) {
+    if (prefs.cameraEnabled.value == value) return
     prefs.setCameraEnabled(value)
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setLocationMode(mode: LocationMode) {
+    if (prefs.locationMode.value == mode) return
     prefs.setLocationMode(mode)
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -2496,13 +2510,13 @@ class NodeRuntime private constructor(
   fun grantInstalledAppsDisclosureConsent() {
     if (prefs.installedAppsSharingEnabled.value) return
     prefs.grantInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSharingChange()
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun revokeInstalledAppsDisclosureConsent() {
     if (!prefs.installedAppsSharingEnabled.value) return
     prefs.revokeInstalledAppsDisclosureConsent()
-    refreshNodeSurfaceAfterSharingChange()
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -3082,6 +3096,7 @@ class NodeRuntime private constructor(
     }
 
   fun refreshGatewayConnection() {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchGatewayLifecycle {
       val endpoint = connectedEndpoint
@@ -3103,8 +3118,9 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun refreshNodeSurfaceAfterSharingChange() {
+  private fun refreshNodeSurfaceAfterSettingsChange() {
     launchGatewayLifecycle {
+      if (preferredGatewayReconnectSuppressed) return@launchGatewayLifecycle
       val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
       connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
     }
@@ -3335,6 +3351,7 @@ class NodeRuntime private constructor(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = null)
   }
@@ -3343,6 +3360,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    preferredGatewayReconnectSuppressed = false
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = auth)
   }
@@ -3487,6 +3505,7 @@ class NodeRuntime private constructor(
 
   fun disconnect() {
     synchronized(gatewayLifecycleIntentLock) {
+      preferredGatewayReconnectSuppressed = true
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnect(retireRunState = false)
     }
@@ -3494,6 +3513,7 @@ class NodeRuntime private constructor(
 
   fun prepareForGatewaySetup() {
     synchronized(gatewayLifecycleIntentLock) {
+      preferredGatewayReconnectSuppressed = true
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnect(retireRunState = true)
     }
@@ -4281,16 +4301,27 @@ class NodeRuntime private constructor(
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      val listRes = requestGatewayData(gatewayScope, "cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
-      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
-      val jobs = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
+      var snapshot: List<GatewayCronJobSummary>? = null
+      repeat(CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS) {
+        if (snapshot == null) snapshot = requestCronJobsSnapshot(gatewayScope)
+      }
+      val jobs =
+        requireNotNull(snapshot) {
+          "Gateway cron jobs changed repeatedly while loading."
+        }
+      val sortedJobs =
+        jobs.sortedWith(
+          compareBy<GatewayCronJobSummary> { it.nextRunAtMs == null }
+            .thenBy { it.nextRunAtMs ?: Long.MAX_VALUE }
+            .thenBy { it.id },
+        )
       publishCronRefresh(gatewayScope, refreshGeneration) {
         _cronStatus.value = status
-        _cronJobs.value = jobs
+        _cronJobs.value = sortedJobs
       }
     } catch (_: Throwable) {
       publishCronRefresh(gatewayScope, refreshGeneration) {
-        _cronErrorText.value = nativeText("Could not load cron jobs.")
+        _cronErrorText.value = nativeText("Could not load automations.")
       }
     } finally {
       publishCronRefresh(gatewayScope, refreshGeneration) {
@@ -4299,11 +4330,84 @@ class NodeRuntime private constructor(
     }
   }
 
+  private suspend fun requestCronJobsSnapshot(
+    gatewayScope: GatewayDataScope,
+  ): List<GatewayCronJobSummary>? {
+    val jobs = mutableListOf<GatewayCronJobSummary>()
+    val jobIds = mutableSetOf<String>()
+    var offset = 0
+    var complete = false
+    var pageCount = 0
+    var expectedTotal: Long? = null
+    var expectedSnapshotRevision: String? = null
+    var snapshotRevisionSupported: Boolean? = null
+    while (pageCount < CRON_JOBS_MAX_PAGES && !complete) {
+      pageCount += 1
+      val listParams =
+        buildJsonObject {
+          put("includeDisabled", JsonPrimitive(true))
+          put("limit", JsonPrimitive(CRON_JOBS_PAGE_SIZE))
+          put("offset", JsonPrimitive(offset))
+          // nextRunAtMs changes as jobs execute; name plus the server's id tie-breaker
+          // keeps offsets stable while paging, then we restore scheduler order below.
+          put("sortBy", JsonPrimitive("name"))
+          put("sortDir", JsonPrimitive("asc"))
+        }.toString()
+      val listRes = requestGatewayData(gatewayScope, "cron.list", listParams)
+      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
+      val rawJobs = listRoot?.get("jobs") as? JsonArray
+      val pageJobs = parseCronJobs(rawJobs)
+      val total =
+        requireNotNull(listRoot.long("total")) {
+          "Gateway did not return a cron jobs total."
+        }
+      require(total in 0L..CRON_JOBS_MAX_COUNT.toLong()) {
+        "Gateway returned an invalid cron jobs total."
+      }
+      if (expectedTotal != null && total != expectedTotal) return null
+      expectedTotal = total
+      val snapshotRevision =
+        (listRoot?.get("snapshotRevision") as? JsonPrimitive)
+          ?.contentOrNull
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+      val pageSupportsSnapshotRevision = snapshotRevision != null
+      if (
+        snapshotRevisionSupported != null &&
+        snapshotRevisionSupported != pageSupportsSnapshotRevision
+      ) {
+        return null
+      }
+      snapshotRevisionSupported = pageSupportsSnapshotRevision
+      if (expectedSnapshotRevision != null && snapshotRevision != expectedSnapshotRevision) return null
+      expectedSnapshotRevision = snapshotRevision
+      for (job in pageJobs) {
+        // Offset pages are separately locked by the Gateway. A mutation between
+        // calls can shift a boundary; discard the partial snapshot and retry.
+        if (!jobIds.add(job.id)) return null
+      }
+      jobs += pageJobs
+      require(jobs.size <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
+      require(total >= jobs.size.toLong()) {
+        "Gateway returned an invalid cron jobs total."
+      }
+      val nextOffset = nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
+      if (nextOffset == null) {
+        complete = true
+        break
+      }
+      require(nextOffset <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
+      offset = nextOffset
+    }
+    require(complete) { "Gateway returned too many cron job pages." }
+    return jobs.takeIf { it.size.toLong() == expectedTotal }
+  }
+
   private suspend fun loadCronJobDetailFromGateway(request: CronJobDetailRequest) {
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Connect the gateway to inspect cron jobs."))
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Connect the gateway to inspect automations."))
       }
       return
     }
@@ -4313,11 +4417,11 @@ class NodeRuntime private constructor(
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value =
           parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
-            ?: GatewayCronJobDetailState.Error(request.id, nativeText("Gateway returned an invalid cron job."))
+            ?: GatewayCronJobDetailState.Error(request.id, nativeText("Gateway returned an invalid automation."))
       }
     } catch (_: Throwable) {
       cronJobDetailRequestGuard.publishIfCurrent(request) {
-        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Could not load cron job."))
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, nativeText("Could not load automation."))
       }
     }
   }
@@ -4329,7 +4433,7 @@ class NodeRuntime private constructor(
         _cronRunHistoryState.value =
           GatewayCronRunHistoryState.Error(
             id = request.id,
-            message = nativeString("Connect the gateway to inspect cron run history."),
+            message = nativeString("Connect the gateway to inspect automation run history."),
           )
       }
       return
@@ -4360,7 +4464,7 @@ class NodeRuntime private constructor(
           _cronRunHistoryState.value =
             GatewayCronRunHistoryState.Error(
               id = request.id,
-              message = nativeString("Could not load cron run history."),
+              message = nativeString("Could not load automation run history."),
             )
         }
       }
@@ -4386,7 +4490,7 @@ class NodeRuntime private constructor(
       _cronActionState.value =
         GatewayCronActionState.Notice(
           id = jobId,
-          message = nativeText("Connect the gateway to manage cron jobs."),
+          message = nativeText("Connect the gateway to manage automations."),
           kind = GatewayCronNoticeKind.Error,
         )
       return
@@ -6137,6 +6241,12 @@ class NodeRuntime private constructor(
               ?.trim()
               ?.takeIf(String::isNotEmpty),
           clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubOwnerHandle =
+            clawHub
+              ?.get("ownerHandle")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
           clawHubInstalledVersion =
             clawHub
               ?.get("installedVersion")
@@ -6879,6 +6989,7 @@ data class GatewaySkillSummary(
   val installCount: Int,
   val clawHubSlug: String? = null,
   val clawHubValid: Boolean = false,
+  val clawHubOwnerHandle: String? = null,
   val clawHubInstalledVersion: String? = null,
 )
 

@@ -1077,6 +1077,7 @@ function createSessionMcpRuntimeManager(
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         logDiagnostics: false,
+        manifestRegistry: params.manifestRegistry,
       });
       const existing = runtimesBySessionId.get(params.sessionId);
       if (existing) {
@@ -1120,6 +1121,7 @@ function createSessionMcpRuntimeManager(
           workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           cfg: params.cfg,
+          manifestRegistry: params.manifestRegistry,
           configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
@@ -1202,7 +1204,7 @@ function createSessionMcpRuntimeManager(
   };
 }
 
-export function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
+function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
   return resolveGlobalSingleton(SESSION_MCP_RUNTIME_MANAGER_KEY, createSessionMcpRuntimeManager);
 }
 
@@ -1212,6 +1214,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
 }
@@ -1229,7 +1232,7 @@ export function peekSessionMcpRuntime(params: {
   });
 }
 
-export async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
+async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {
   await getSessionMcpRuntimeManager().disposeSession(sessionId);
 }
 
