@@ -52,6 +52,7 @@ row appears until the next inbound or outbound conversation event.
 
 ```bash
 openclaw channels add --channel telegram --token <bot-token>
+openclaw channels add --channel telegram --token <bot-token> --dm-policy disabled
 openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
 openclaw channels remove --channel telegram --delete
 ```
@@ -63,7 +64,9 @@ openclaw channels remove --channel telegram --delete
 `channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels. Without `--delete` it asks to disable the account and keeps its config; `--delete` removes the config entries without prompting.
 For runtime-backed channel plugins, `channels remove` also asks the running Gateway to stop the selected account before it updates config, so disabling or deleting an account does not leave the old listener active until restart.
 
-Non-interactive add flags shared across channels: `--account <id>`, `--name <name>`, `--token`, `--token-file`, `--bot-token`, `--app-token`, `--secret`, `--secret-file`, `--password`, `--cli-path`, `--url`, `--base-url`, `--http-url`, `--auth-dir`, and `--use-env` (env-backed auth, default account only, where supported). Channel-specific flags include:
+Non-interactive add flags shared across channels: `--account <id>`, `--name <name>`, `--token`, `--token-file`, `--bot-token`, `--app-token`, `--secret`, `--secret-file`, `--password`, `--dm-policy <open|pairing|allowlist|disabled>`, `--cli-path`, `--url`, `--base-url`, `--http-url`, `--auth-dir`, and `--use-env` (env-backed auth, default account only, where supported). A channel that does not expose DM policy setup rejects `--dm-policy` instead of silently ignoring it. Sender allowlist inputs remain channel-specific; for example, Tlon owns `--dm-allowlist` and its ship-name normalization. Set a non-empty channel-specific sender allowlist before selecting `allowlist`; restrictive policies reject an existing `"*"` wildcard until you remove it through that channel's configuration.
+
+Channel-specific flags include:
 
 | Channel     | Flags                                                                                                |
 | ----------- | ---------------------------------------------------------------------------------------------------- |
