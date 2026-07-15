@@ -1,6 +1,6 @@
 type PendingApprovalTarget = {
   sessionKey: string;
-  toolCalls?: ReadonlyMap<string, unknown>;
+  toolCalls?: ReadonlyMap<string, { kind?: string }>;
 };
 
 export function findUniquePendingApprovalTarget<T extends PendingApprovalTarget>(
@@ -10,7 +10,10 @@ export function findUniquePendingApprovalTarget<T extends PendingApprovalTarget>
 ): T | undefined {
   let match: T | undefined;
   for (const pending of pendingTargets) {
-    if (pending.sessionKey !== sessionKey || (toolCallId && !pending.toolCalls?.has(toolCallId))) {
+    if (
+      pending.sessionKey !== sessionKey ||
+      (toolCallId && pending.toolCalls?.get(toolCallId)?.kind !== "execute")
+    ) {
       continue;
     }
     if (match) {

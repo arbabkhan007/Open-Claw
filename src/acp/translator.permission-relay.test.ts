@@ -81,7 +81,7 @@ function createApprovalRequestEvent(params: {
   } as EventFrame;
 }
 
-function createToolStartEvent(runId: string, toolCallId: string): EventFrame {
+function createToolStartEvent(runId: string, toolCallId: string, name = "exec"): EventFrame {
   return {
     type: "event",
     event: "agent",
@@ -91,7 +91,7 @@ function createToolStartEvent(runId: string, toolCallId: string): EventFrame {
       stream: "tool",
       data: {
         phase: "start",
-        name: "exec",
+        name,
         toolCallId,
         args: { command: `echo ${toolCallId}` },
       },
@@ -300,6 +300,24 @@ describe("ACP translator permission relay", () => {
         approvalId,
         toolCallId: "tool-not-yet-observed",
       }),
+    );
+
+    expect(hasApprovalRelay(harness.agent, approvalId)).toBe(false);
+    expect(harness.requestPermission).not.toHaveBeenCalled();
+    expect(approvalResolveCalls(harness.request)).toHaveLength(0);
+
+    await cleanupHarness(harness);
+  });
+
+  it("rejects an exec approval matched to a non-exec tool call id", async () => {
+    const harness = await createHarness();
+    const approvalId = "approval-read-tool";
+
+    await harness.agent.handleGatewayEvent(
+      createToolStartEvent(harness.runId, "tool-read", "read"),
+    );
+    await harness.agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId, toolCallId: "tool-read" }),
     );
 
     expect(hasApprovalRelay(harness.agent, approvalId)).toBe(false);
