@@ -411,6 +411,88 @@ describe("update global helpers", () => {
     });
   });
 
+  it("rejects redacted npm global roots when no running-package fallback exists", async () => {
+    await withTempDir({ prefix: "openclaw-update-redacted-probe-" }, async (base) => {
+      const redactedRoot = path.join(
+        base,
+        "ci-agent",
+        "***",
+        "workspace",
+        "sbx-***",
+        "nvm",
+        "versions",
+        "node",
+        "v24.14.0",
+        "lib",
+        "node_modules",
+      );
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: redactedRoot });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: null,
+        packageRoot: null,
+      });
+    });
+  });
+
+  it("preserves literal star segments reported by pnpm", async () => {
+    await withTempDir({ prefix: "openclaw-update-pnpm-stars-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm", "***", "5", "node_modules");
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "pnpm") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toEqual({
+        manager: "pnpm",
+        command: "pnpm",
+        globalRoot,
+        packageRoot: path.join(globalRoot, "openclaw"),
+      });
+    });
+  });
+
+  it("rejects multiline package-manager root output", async () => {
+    await withTempDir({ prefix: "openclaw-update-multiline-root-" }, async (base) => {
+      const firstRoot = path.join(base, "first", "lib", "node_modules");
+      const secondRoot = path.join(base, "second", "lib", "node_modules");
+      const runCommand: CommandRunner = async () => ({
+        stdout: `${firstRoot}\n${secondRoot}\n`,
+        stderr: "",
+        code: 0,
+      });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: null,
+        packageRoot: null,
+      });
+    });
+  });
+
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
     await withTempDir({ prefix: "openclaw-update-npm-missing-bin-" }, async (base) => {
       const brewRoot = path.join(base, "opt", "homebrew", "lib", "node_modules");
