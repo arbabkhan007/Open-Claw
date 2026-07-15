@@ -231,6 +231,7 @@ export async function registerChannelsCli(
     .option("--bot-token <token>", "Bot token")
     .option("--app-token <token>", "App token")
     .option("--password <password>", "Channel password or login secret")
+    .option("--dm-policy <policy>", "Initial DM policy (open|pairing|allowlist|disabled)")
     .option("--cli-path <path>", "Channel CLI path")
     .option("--url <url>", "Channel setup URL")
     .option("--base-url <url>", "Channel base URL")

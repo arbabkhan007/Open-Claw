@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { createLegacyCompatChannelDmPolicy } from "../channels/plugins/setup-wizard-helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -232,7 +233,9 @@ function expectExternalChatEnabledConfigWrite() {
   expect(writtenChannel("external-chat").enabled).toBe(true);
 }
 
-function createLifecycleChatAddTestPlugin(): ChannelPlugin {
+function createLifecycleChatAddTestPlugin(
+  params: { resolveAllowFrom?: boolean } = {},
+): ChannelPlugin {
   const resolveLifecycleChatAccount = (
     cfg: Parameters<NonNullable<ChannelPlugin["config"]["resolveAccount"]>>[0],
     accountId: string,
@@ -241,7 +244,11 @@ function createLifecycleChatAddTestPlugin(): ChannelPlugin {
       | {
           token?: string;
           enabled?: boolean;
-          accounts?: Record<string, { token?: string; enabled?: boolean }>;
+          allowFrom?: Array<string | number>;
+          accounts?: Record<
+            string,
+            { token?: string; enabled?: boolean; allowFrom?: Array<string | number> }
+          >;
         }
       | undefined;
     const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
@@ -271,6 +278,22 @@ function createLifecycleChatAddTestPlugin(): ChannelPlugin {
             | undefined,
         ),
       resolveAccount: resolveLifecycleChatAccount,
+      ...(params.resolveAllowFrom === false
+        ? {}
+        : {
+            resolveAllowFrom: ({ cfg, accountId }) => {
+              const lifecycleChat = cfg.channels?.["lifecycle-chat"] as
+                | {
+                    allowFrom?: Array<string | number>;
+                    accounts?: Record<string, { allowFrom?: Array<string | number> }>;
+                  }
+                | undefined;
+              return (
+                lifecycleChat?.accounts?.[accountId ?? DEFAULT_ACCOUNT_ID]?.allowFrom ??
+                lifecycleChat?.allowFrom
+              );
+            },
+          }),
     },
     setup: {
       resolveAccountId: ({ accountId }) => accountId || DEFAULT_ACCOUNT_ID,
@@ -314,6 +337,19 @@ function createLifecycleChatAddTestPlugin(): ChannelPlugin {
           },
         };
       },
+    },
+    setupWizard: {
+      channel: "lifecycle-chat",
+      getStatus: async () => ({
+        channel: "lifecycle-chat",
+        configured: true,
+        statusLines: [],
+      }),
+      configure: async ({ cfg }) => ({ cfg }),
+      dmPolicy: createLegacyCompatChannelDmPolicy({
+        label: "Lifecycle Chat",
+        channel: "lifecycle-chat",
+      }),
     },
     lifecycle: {
       onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
@@ -546,6 +582,117 @@ describe("channelsAddCommand", () => {
     );
 
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
+  });
+
+  it("writes the requested DM policy through the channel setup owner", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "lifecycle-chat",
+        account: "ops",
+        token: "fixture",
+        dmPolicy: "disabled",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const lifecycleChat = writtenChannel("lifecycle-chat");
+    expect(requireRecord(lifecycleChat.accounts, "lifecycle chat accounts").ops).toEqual({
+      token: "fixture",
+      dmPolicy: "disabled",
+      enabled: true,
+    });
+  });
+
+  it("rejects invalid DM policy values before plugin setup", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await expect(
+      channelsAddCommand(
+        {
+          channel: "lifecycle-chat",
+          token: "fixture",
+          dmPolicy: "everyone",
+        },
+        runtime,
+        { hasFlags: true },
+      ),
+    ).rejects.toThrow("--dm-policy must be one of: open, pairing, allowlist, disabled.");
+
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects allowlist policy without a channel-specific sender allowlist", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "lifecycle-chat",
+        token: "fixture",
+        dmPolicy: "allowlist",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Lifecycle Chat requires a non-empty channel-specific sender allowlist before --dm-policy allowlist.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects restrictive DM policy when sender allowlist state is unavailable", async () => {
+    const plugin = createLifecycleChatAddTestPlugin({ resolveAllowFrom: false });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "lifecycle-chat", plugin, source: "test" }]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "lifecycle-chat",
+        token: "fixture",
+        dmPolicy: "pairing",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Lifecycle Chat cannot set --dm-policy pairing because the channel does not expose account sender allowlist state. Use the channel-specific configuration instead.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects restrictive DM policy while the sender allowlist contains a wildcard", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          "lifecycle-chat": { token: "fixture", allowFrom: ["*"] },
+        },
+      },
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "lifecycle-chat",
+        token: "fixture",
+        dmPolicy: "pairing",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Lifecycle Chat cannot set --dm-policy pairing while the account sender allowlist contains "*". Remove the wildcard with the channel-specific allowlist configuration first.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {

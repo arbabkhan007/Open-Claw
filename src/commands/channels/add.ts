@@ -1,7 +1,9 @@
 // Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
+import { normalizeChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -13,6 +15,7 @@ import {
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { DmPolicy } from "../../config/types.base.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
@@ -48,7 +51,7 @@ export type ChannelsAddOptions = {
   account?: string;
 } & Record<string, unknown>;
 
-const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
+const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account", "dmPolicy"]);
 const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
@@ -100,7 +103,10 @@ function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
+function buildChannelSetupInput(opts: ChannelsAddOptions): {
+  input: ChannelSetupInput;
+  dmPolicy?: DmPolicy;
+} {
   const input: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(opts)) {
     if (CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) || value === undefined) {
@@ -119,7 +125,53 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit, "--initial-sync-limit");
   input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
   input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
-  return input as ChannelSetupInput;
+  const dmPolicy = normalizeChannelDmPolicy(readOptionalString(opts.dmPolicy));
+  if (opts.dmPolicy !== undefined && !dmPolicy) {
+    throw new Error("--dm-policy must be one of: open, pairing, allowlist, disabled.");
+  }
+  return {
+    input: input as ChannelSetupInput,
+    ...(dmPolicy ? { dmPolicy } : {}),
+  };
+}
+
+function validateDmPolicyAllowFrom(params: {
+  cfg: OpenClawConfig;
+  plugin: ChannelPlugin;
+  accountId: string;
+  dmPolicy: DmPolicy;
+  runtime: RuntimeEnv;
+}): boolean {
+  if (params.dmPolicy === "open" || params.dmPolicy === "disabled") {
+    return true;
+  }
+  const label = params.plugin.meta.label ?? channelLabel(params.plugin.id);
+  const resolveAllowFrom = params.plugin.config.resolveAllowFrom;
+  if (!resolveAllowFrom) {
+    params.runtime.error(
+      `${label} cannot set --dm-policy ${params.dmPolicy} because the channel does not expose account sender allowlist state. Use the channel-specific configuration instead.`,
+    );
+    params.runtime.exit(1);
+    return false;
+  }
+  const allowFrom = normalizeStringEntries(
+    resolveAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ?? [],
+  );
+  if (allowFrom.includes("*")) {
+    params.runtime.error(
+      `${label} cannot set --dm-policy ${params.dmPolicy} while the account sender allowlist contains "*". Remove the wildcard with the channel-specific allowlist configuration first.`,
+    );
+    params.runtime.exit(1);
+    return false;
+  }
+  if (params.dmPolicy === "allowlist" && allowFrom.length === 0) {
+    params.runtime.error(
+      `${label} requires a non-empty channel-specific sender allowlist before --dm-policy allowlist.`,
+    );
+    params.runtime.exit(1);
+    return false;
+  }
+  return true;
 }
 
 /** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
@@ -263,7 +315,7 @@ async function channelsAddCommandImpl(
     runtime.exit(1);
     return;
   }
-  const input = buildChannelSetupInput(opts);
+  const { input, dmPolicy } = buildChannelSetupInput(opts);
   const accountId =
     plugin.setup.resolveAccountId?.({
       cfg: nextConfig,
@@ -278,6 +330,14 @@ async function channelsAddCommandImpl(
   });
   if (validationError) {
     runtime.error(validationError);
+    runtime.exit(1);
+    return;
+  }
+  const dmPolicySetup = dmPolicy ? plugin.setupWizard?.dmPolicy : undefined;
+  if (dmPolicy && !dmPolicySetup) {
+    runtime.error(
+      `${plugin.meta.label ?? channelLabel(channel)} does not support --dm-policy during non-interactive setup.`,
+    );
     runtime.exit(1);
     return;
   }
@@ -298,6 +358,20 @@ async function channelsAddCommandImpl(
     input,
     plugin,
   });
+  if (dmPolicy && dmPolicySetup) {
+    if (
+      !validateDmPolicyAllowFrom({
+        cfg: nextConfig,
+        plugin,
+        accountId,
+        dmPolicy,
+        runtime,
+      })
+    ) {
+      return;
+    }
+    nextConfig = dmPolicySetup.setPolicy(nextConfig, dmPolicy, accountId);
+  }
   if (plugin.lifecycle?.onAccountConfigChanged) {
     await params?.beforePersistentEffect?.();
     await plugin.lifecycle.onAccountConfigChanged({

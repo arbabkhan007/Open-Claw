@@ -49,6 +49,14 @@ describe("registerChannelsCli", () => {
     expect(getChannelAddOptionFlags(program)).toContain("--workspace <workspace>");
   });
 
+  it("registers the shared non-interactive DM policy option", async () => {
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelAddOptionFlags(program)).toContain("--dm-policy <policy>");
+  });
+
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {
     process.argv = ["node", "openclaw", "channels"];
 
