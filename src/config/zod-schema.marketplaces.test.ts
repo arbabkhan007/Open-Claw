@@ -30,6 +30,7 @@ describe("OpenClawSchema marketplaces config", () => {
           },
           acme: {
             url: "https://packages.acme.example/openclaw/feed",
+            feedId: "acme-plugins",
             verification: {
               mode: "signed",
               keys: [
@@ -58,6 +59,7 @@ describe("OpenClawSchema marketplaces config", () => {
 
     const acmeFeed = expectDefined(marketplaces?.feeds?.acme, "Acme marketplace feed");
     expect(acmeFeed.url).toBe("https://packages.acme.example/openclaw/feed");
+    expect(acmeFeed.feedId).toBe("acme-plugins");
     expect(acmeFeed.verification).toEqual({
       mode: "signed",
       keys: [
@@ -171,12 +173,36 @@ describe("OpenClawSchema marketplaces config", () => {
             feeds: {
               acme: {
                 url: "https://packages.acme.example/openclaw/feed",
+                feedId: "acme-plugins",
                 verification,
               },
             },
           },
         }).success,
       ).toBe(false);
+    }
+  });
+
+  it("rejects signed feed verification without an expected feed identity", () => {
+    const result = OpenClawSchema.safeParse({
+      marketplaces: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: ACME_ROOT_PUBLIC_KEY }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ path: ["marketplaces", "feeds", "acme", "feedId"] }),
+      );
     }
   });
 
@@ -212,6 +238,7 @@ describe("OpenClawSchema marketplaces config", () => {
           feeds: {
             acme: {
               url: "https://packages.acme.example/openclaw/feed",
+              feedId: "acme-plugins",
               verification,
             },
           },

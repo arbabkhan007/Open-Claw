@@ -583,16 +583,27 @@ const MarketplaceVerificationSchema = z.union([
     }),
 ]);
 
-const MarketplaceFeedProfileSchema = z.strictObject({
-  url: z
-    .string()
-    .url()
-    .refine(
-      (value) => isPlainHttpsUrl(value),
-      "Expected https:// URL without credentials, query, or fragment",
-    ),
-  verification: MarketplaceVerificationSchema.optional(),
-});
+const MarketplaceFeedProfileSchema = z
+  .strictObject({
+    url: z
+      .string()
+      .url()
+      .refine(
+        (value) => isPlainHttpsUrl(value),
+        "Expected https:// URL without credentials, query, or fragment",
+      ),
+    feedId: z.string().trim().min(1).optional(),
+    verification: MarketplaceVerificationSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.verification?.mode === "signed" && !value.feedId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["feedId"],
+        message: "Signed marketplace feeds require an expected feedId",
+      });
+    }
+  });
 
 const MarketplaceSourceProfileSchema = z.union([
   z.strictObject({ type: z.literal("npm") }),
