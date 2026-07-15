@@ -106,51 +106,6 @@ export function writeControlPlaneDiagnostic(
   }, stateDatabaseOptions(options.env));
 }
 
-/** Atomically appends one record only when the current scope still satisfies the predicate. */
-export function writeControlPlaneDiagnosticWhen(
-  scope: string,
-  key: string,
-  payload: unknown,
-  shouldWrite: (records: Array<ControlPlaneDiagnosticRecord<unknown>>) => boolean,
-  options: { createdAt?: number; env?: NodeJS.ProcessEnv } = {},
-): boolean {
-  const createdAt = options.createdAt ?? Date.now();
-  const payloadJson = JSON.stringify(payload);
-  if (payloadJson === undefined) {
-    throw new Error(`Control-plane diagnostic ${scope}/${key} is not JSON-serializable`);
-  }
-  return runOpenClawStateWriteTransaction(({ db: database }) => {
-    const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
-    const records = executeSqliteQuerySync(
-      database,
-      db
-        .selectFrom("diagnostic_events")
-        .select(["event_key", "payload_json", "created_at"])
-        .where("scope", "=", scope)
-        .orderBy("created_at", "asc")
-        .orderBy("event_key", "asc"),
-    ).rows.flatMap((row) => {
-      const currentPayload = parsePayload(row.payload_json);
-      return currentPayload === undefined
-        ? []
-        : [{ key: row.event_key, payload: currentPayload, createdAt: row.created_at }];
-    });
-    if (!shouldWrite(records)) {
-      return false;
-    }
-    executeSqliteQuerySync(
-      database,
-      db.insertInto("diagnostic_events").values({
-        scope,
-        event_key: key,
-        payload_json: payloadJson,
-        created_at: createdAt,
-      }),
-    );
-    return true;
-  }, stateDatabaseOptions(options.env));
-}
-
 export function deleteControlPlaneDiagnostic(
   scope: string,
   key: string,

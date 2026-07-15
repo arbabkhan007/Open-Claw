@@ -6,7 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { createIncidentIfAbsent, getOpenIncidents, readLedger } from "./ledger.js";
+import { clearIncident, getOpenIncidents, readLedger, setIncident } from "./ledger.js";
 
 describe("incident ledger", () => {
   let tempDir: string;
@@ -26,26 +26,30 @@ describe("incident ledger", () => {
     const database = openOpenClawStateDatabase();
     expect(database.path).toBe(path.join(tempDir, "state", "openclaw.sqlite"));
 
-    const entry = createIncidentIfAbsent({
+    const entry = setIncident({
       type: "session_state_corruption",
       severity: "medium",
       summary: "Test incident",
       source: "test",
     });
-    expect(entry).not.toBeNull();
-    expect(readLedger().incidents[0]?.id).toBe(entry?.id);
+    expect(readLedger().incidents[0]?.id).toBe(entry.id);
   });
 
-  it("atomically avoids duplicate open incidents for one source", () => {
+  it("updates and clears the current incident for one source", () => {
     const params = {
       type: "gateway_health" as const,
       severity: "high" as const,
       summary: "Gateway unhealthy",
       source: "diagnose",
     };
-    expect(createIncidentIfAbsent(params)).not.toBeNull();
-    expect(createIncidentIfAbsent(params)).toBeNull();
+    const first = setIncident(params);
+    const second = setIncident({ ...params, summary: "Gateway still unhealthy" });
     expect(getOpenIncidents()).toHaveLength(1);
+    expect(second.id).toBe(first.id);
+    expect(getOpenIncidents()[0]?.summary).toBe("Gateway still unhealthy");
+
+    clearIncident(params.type, params.source);
+    expect(getOpenIncidents()).toEqual([]);
   });
 
   it("redacts sensitive incident details before persistence", () => {
@@ -54,7 +58,7 @@ describe("incident ledger", () => {
     const callbackUrl = new URL("/path", "https://example.com");
     callbackUrl.username = "fixture";
     callbackUrl.password = "placeholder";
-    createIncidentIfAbsent({
+    setIncident({
       type: "gateway_health",
       severity: "high",
       summary: "Gateway leaked config",

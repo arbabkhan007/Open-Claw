@@ -2,7 +2,7 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { captureBaseline, listBaselines, saveBaseline } from "../baseline/capture.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
-import { createIncidentIfAbsent, getOpenIncidents, readLedger } from "../incidents/ledger.js";
+import { clearIncident, getOpenIncidents, readLedger, setIncident } from "../incidents/ledger.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { validatePluginContracts } from "../plugins/contract-validator.js";
 import { executeWithCacheAndStagger, listCachedProbes } from "../probes/cache.js";
@@ -16,6 +16,15 @@ type DiagnoseOptions = {
 
 const DIAGNOSE_BASELINE_NAME = "diagnose-latest";
 const DIAGNOSE_SCHEMA_VERSION = "openclaw-diagnose/v1";
+
+const BASELINE_INCIDENTS = [
+  { component: "gateway", type: "gateway_health", source: "diagnose:baseline:gateway" },
+  { component: "channels", type: "channel_connectivity", source: "diagnose:baseline:channels" },
+  { component: "agents", type: "custom", source: "diagnose:baseline:agents" },
+  { component: "tasks", type: "task_flow_stuck", source: "diagnose:baseline:tasks" },
+  { component: "locks", type: "custom", source: "diagnose:baseline:locks" },
+  { component: "plugins", type: "plugin_failure", source: "diagnose:baseline:plugins" },
+] as const;
 
 function summarizeIncident(incident: {
   id: string;
@@ -44,6 +53,14 @@ function summarizeGatewayConfig(gatewayConfig: GatewayConfig | undefined) {
   };
 }
 
+function syncIncident(active: boolean, params: Parameters<typeof setIncident>[0]): void {
+  if (active) {
+    setIncident(params);
+  } else {
+    clearIncident(params.type, params.source);
+  }
+}
+
 async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
   const cfg = getRuntimeConfig();
   const pluginContractsProbe = await executeWithCacheAndStagger(
@@ -64,25 +81,46 @@ async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
     gatewayTimeoutMs: opts.timeoutMs,
   });
   await saveBaseline(currentBaseline, DIAGNOSE_BASELINE_NAME);
-  if (!pluginContracts.ok || tasks.summary.combined.errors > 0) {
-    createIncidentIfAbsent({
-      type: "gateway_health",
-      severity: pluginContracts.ok ? "medium" : "high",
-      summary: "Control-plane diagnose detected failing checks",
-      source: "diagnose",
+  syncIncident(!pluginContracts.ok, {
+    type: "plugin_failure",
+    severity: "high",
+    summary: "Plugin contract validation failed",
+    source: "diagnose:plugin-contracts",
+    details: { findingCount: pluginContracts.findingCount },
+  });
+  syncIncident(tasks.summary.combined.errors > 0, {
+    type: "task_flow_stuck",
+    severity: "high",
+    summary: "Task audit detected errors",
+    source: "diagnose:task-audit",
+    details: { errorCount: tasks.summary.combined.errors },
+  });
+  const baselineFailures = BASELINE_INCIDENTS.flatMap((spec) => {
+    const component = currentBaseline.components[spec.component];
+    const active = component.status !== "pass";
+    syncIncident(active, {
+      type: spec.type,
+      severity: component.status === "fail" ? "high" : "medium",
+      summary: `${spec.component} baseline check ${component.status}`,
+      source: spec.source,
       details: {
-        pluginContractFindings: pluginContracts.findingCount,
-        taskErrors: tasks.summary.combined.errors,
+        status: component.status,
+        ...(component.message ? { message: component.message } : {}),
       },
     });
-  }
+    return active ? [spec.component] : [];
+  });
   const ledger = readLedger();
   const openIncidents = getOpenIncidents();
   const baselines = listBaselines();
   const probeCache = listCachedProbes();
   return {
     schemaVersion: DIAGNOSE_SCHEMA_VERSION,
-    ok: pluginContracts.ok && tasks.summary.combined.errors === 0 && openIncidents.length === 0,
+    ok:
+      pluginContracts.ok &&
+      tasks.summary.combined.errors === 0 &&
+      baselineFailures.length === 0 &&
+      openIncidents.length === 0,
     timestamp: new Date().toISOString(),
     redaction: {
       secretsIncluded: false,

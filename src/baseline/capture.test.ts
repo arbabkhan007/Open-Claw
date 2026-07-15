@@ -109,4 +109,16 @@ describe("captureBaseline", () => {
     expect(baseline.components.gateway.message).toContain("Authorization: Bearer");
     expect(baseline.components.gateway.message).not.toContain(sensitiveValue);
   });
+
+  it("preserves configured channel metrics when the gateway probe fails", async () => {
+    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+
+    const baseline = await captureBaseline({ config: {}, skipPlugins: true });
+    expect(baseline.components.channels).toMatchObject({
+      status: "warn",
+      details: { total: 2 },
+    });
+    expect(baseline.metrics.channelCount).toBe(2);
+    expect(baseline.config?.configuredChannels).toBe(2);
+  });
 });

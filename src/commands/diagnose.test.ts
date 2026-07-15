@@ -21,6 +21,7 @@ import { captureBaseline } from "../baseline/capture.js";
 
 type DiagnoseTestPayload = {
   schemaVersion: string;
+  ok: boolean;
   redaction: {
     secretsIncluded: boolean;
     rawConfigIncluded: boolean;
@@ -40,6 +41,10 @@ type DiagnoseTestPayload = {
     current: { timestamp: string };
   };
   actions: { unsafe: string[] };
+  incidents: {
+    open: number;
+    recent: Array<{ type: string; source: string }>;
+  };
 };
 
 async function runDiagnoseJson(timeoutMs: number): Promise<DiagnoseTestPayload> {
@@ -171,5 +176,40 @@ describe("diagnose command", () => {
     const payload = await runDiagnoseJson(0);
 
     expect(payload.status.configuredAgents).toBe(1);
+  });
+
+  it("reports baseline failures and clears their incidents after recovery", async () => {
+    const template = await captureBaseline({ config: {}, skipGateway: true, skipPlugins: true });
+    const failedBaseline = {
+      ...template,
+      components: {
+        ...template.components,
+        gateway: { status: "fail" as const, message: "gateway unavailable" },
+      },
+    };
+    vi.mocked(captureBaseline).mockResolvedValueOnce(failedBaseline);
+
+    const failed = await runDiagnoseJson(1000);
+    expect(failed.ok).toBe(false);
+    expect(failed.incidents.recent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "gateway_health", source: "diagnose:baseline:gateway" }),
+      ]),
+    );
+
+    vi.mocked(captureBaseline).mockResolvedValueOnce({
+      ...template,
+      components: {
+        gateway: { status: "pass" },
+        channels: { status: "pass" },
+        agents: { status: "pass" },
+        tasks: { status: "pass" },
+        locks: { status: "pass" },
+        plugins: { status: "pass" },
+      },
+    });
+    const recovered = await runDiagnoseJson(1000);
+    expect(recovered.ok).toBe(true);
+    expect(recovered.incidents.open).toBe(0);
   });
 });

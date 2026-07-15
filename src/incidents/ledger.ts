@@ -1,8 +1,9 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import {
+  deleteControlPlaneDiagnostic,
   listControlPlaneDiagnostics,
-  writeControlPlaneDiagnosticWhen,
+  writeControlPlaneDiagnostic,
 } from "../state/control-plane-diagnostic-store.js";
 
 /** Persistent incident summaries used by the read-only diagnose report. */
@@ -40,12 +41,6 @@ function nextLedgerTimestampMs(): number {
   return lastLedgerTimestampMs;
 }
 
-function generateId(timestampMs: number): string {
-  const timestamp = timestampMs.toString(36);
-  const random = Math.random().toString(36).slice(2, 10);
-  return `${timestamp}-${random}`;
-}
-
 function parseLedgerRecord(value: unknown): LedgerEntry | null {
   if (value && typeof value === "object" && "id" in value && "timestamp" in value) {
     return value as LedgerEntry;
@@ -75,7 +70,10 @@ function redactLedgerRecord<T extends Record<string, unknown>>(record: T): T {
   return redactLedgerValue(redactConfigObject(record)) as T;
 }
 
-function buildLedgerEntry(entry: Omit<LedgerEntry, "id" | "timestamp">): {
+function buildLedgerEntry(
+  id: string,
+  entry: Omit<LedgerEntry, "id" | "timestamp">,
+): {
   entry: LedgerEntry;
   timestampMs: number;
 } {
@@ -84,33 +82,26 @@ function buildLedgerEntry(entry: Omit<LedgerEntry, "id" | "timestamp">): {
     entry: {
       ...entry,
       details: entry.details ? redactLedgerRecord(entry.details) : undefined,
-      id: generateId(timestampMs),
+      id,
       timestamp: new Date(timestampMs).toISOString(),
     },
     timestampMs,
   };
 }
 
-export function createIncidentIfAbsent(
-  params: Omit<LedgerEntry, "id" | "timestamp" | "status">,
-): LedgerEntry | null {
-  const { entry, timestampMs } = buildLedgerEntry({ ...params, status: "open" });
-  const written = writeControlPlaneDiagnosticWhen(
-    INCIDENT_LEDGER_STORE_SCOPE,
-    `incident:${entry.id}`,
-    entry,
-    (records) =>
-      !records.some((record) => {
-        const incident = parseLedgerRecord(record.payload);
-        return (
-          incident?.status === "open" &&
-          incident.type === params.type &&
-          incident.source === params.source
-        );
-      }),
-    { createdAt: timestampMs },
-  );
-  return written ? entry : null;
+function incidentKey(type: IncidentType, source: string): string {
+  return `incident:${encodeURIComponent(source)}:${type}`;
+}
+
+export function setIncident(params: Omit<LedgerEntry, "id" | "timestamp" | "status">): LedgerEntry {
+  const key = incidentKey(params.type, params.source);
+  const { entry, timestampMs } = buildLedgerEntry(key, { ...params, status: "open" });
+  writeControlPlaneDiagnostic(INCIDENT_LEDGER_STORE_SCOPE, key, entry, { createdAt: timestampMs });
+  return entry;
+}
+
+export function clearIncident(type: IncidentType, source: string): void {
+  deleteControlPlaneDiagnostic(INCIDENT_LEDGER_STORE_SCOPE, incidentKey(type, source));
 }
 
 export function readLedger(): { incidents: LedgerEntry[] } {

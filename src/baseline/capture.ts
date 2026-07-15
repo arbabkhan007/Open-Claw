@@ -249,10 +249,12 @@ async function checkChannelsStatus(
   config?: OpenClawConfig,
   timeoutMs = 5000,
 ): Promise<ComponentStatus> {
+  let total = 0;
   try {
     const channelIds = listConfiguredChannelIdsForReadOnlyScope({ config: config ?? {} });
+    total = channelIds.length;
     if (channelIds.length === 0) {
-      return { status: "pass", message: "No channels configured" };
+      return { status: "pass", message: "No channels configured", details: { total } };
     }
 
     const result = await callGateway<{
@@ -277,8 +279,6 @@ async function checkChannelsStatus(
       result?.channelAccounts && Object.keys(result.channelAccounts).length > 0
         ? connectedFromAccounts
         : channels.filter(isChannelConnected).length;
-    const total = channelIds.length;
-
     if (connected === total) {
       return {
         status: "pass",
@@ -299,7 +299,7 @@ async function checkChannelsStatus(
       details: { connected, total },
     };
   } catch (err) {
-    return { status: "warn", message: formatErrorMessage(err) };
+    return { status: "warn", message: formatErrorMessage(err), details: { total } };
   }
 }
 
