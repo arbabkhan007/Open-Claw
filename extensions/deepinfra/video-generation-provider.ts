@@ -251,7 +251,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         resolveProviderHttpRequestConfig({
           baseUrl: resolvedBaseUrl,
           defaultBaseUrl: DEEPINFRA_NATIVE_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
