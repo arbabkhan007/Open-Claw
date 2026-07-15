@@ -99,6 +99,7 @@ describe("navigationIconForRoute", () => {
       "memory-import": "download",
       debug: "bug",
       logs: "scrollText",
+      safety: "shieldAlert",
     });
   });
 
@@ -150,6 +151,7 @@ describe("titleForRoute", () => {
       "memory-import": "Import Memory",
       debug: "Debug",
       logs: "Logs",
+      safety: "Safety",
     });
   });
 });
@@ -187,6 +189,7 @@ describe("subtitleForRoute", () => {
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
+      safety: "AI safety taxonomy events and severity trends.",
     });
   });
 });
@@ -366,6 +369,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "debug",
       "logs",
       "activity",
+      "safety",
       "about",
     ]);
   });

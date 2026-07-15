@@ -365,6 +365,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Memory migration reads host assistant state and writes agent workspaces.
   { name: "migrations.memory.plan", scope: "operator.admin" },
   { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "safety.events.list", scope: "operator.read" },
+  { name: "safety.events.summary", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

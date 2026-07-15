@@ -377,6 +377,8 @@ enum class GatewayMethod(
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  SafetyEventsList("safety.events.list"),
+  SafetyEventsSummary("safety.events.summary"),
 }
 
 enum class GatewayEvent(

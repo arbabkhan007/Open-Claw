@@ -148,3 +148,9 @@ export type * from "./provider-plugin.types.js";
 export type * from "./provider-replay.types.js";
 export type * from "./provider-runtime.types.js";
 export type * from "./provider-transport.types.js";
+
+export type {
+  AISafetyEventEmitResult,
+  AISafetyEventInput,
+  AISafetyEventType,
+} from "./safety-event-emission.js";
