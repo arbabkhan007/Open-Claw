@@ -1315,14 +1315,11 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
       }
       try {
         const timeout = 5000 + attempt * 2000;
-        const discoveredEndpoint = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy);
-        const endpoint =
-          discoveredEndpoint ?? (isWebSocketUrl(normalized) ? normalized : undefined);
+        const endpoint = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy);
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
         if (!endpoint || !isWebSocketUrl(endpoint)) {
           const prefix = hasUrlCredentials ? "Authenticated " : "";
-          // Never hand HTTP discovery to Playwright: managed-proxy bypasses are
-          // exact URL matches and cannot cover dependency-derived endpoints.
+          // Never let Playwright derive an endpoint outside the exact managed-proxy leases.
           throw new Error(`${prefix}CDP HTTP endpoint did not expose a usable WebSocket URL.`);
         }
         const connectEndpoint = async (target: string) => {
