@@ -337,8 +337,8 @@ async function checkLocksStatus(): Promise<ComponentStatus> {
       return { status: "pass", message: "No locks" };
     }
     return {
-      status: "warn",
-      message: `${lockFiles.length} stale locks`,
+      status: "pass",
+      message: `${lockFiles.length} lock file${lockFiles.length === 1 ? "" : "s"} present`,
       details: { files: lockFiles },
     };
   } catch (err) {

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
@@ -120,5 +123,28 @@ describe("captureBaseline", () => {
     });
     expect(baseline.metrics.channelCount).toBe(2);
     expect(baseline.config?.configuredChannels).toBe(2);
+  });
+
+  it("treats lock-file presence as informational without liveness proof", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-baseline-locks-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    fs.mkdirSync(path.join(stateDir, "locks"), { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "locks", "active.lock"), "active", "utf8");
+
+    try {
+      const baseline = await captureBaseline({ config: {}, skipPlugins: true });
+      expect(baseline.components.locks).toMatchObject({
+        status: "pass",
+        message: "1 lock file present",
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 });
