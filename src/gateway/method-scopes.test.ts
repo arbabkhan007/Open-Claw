@@ -599,6 +599,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.list",
       "skills.proposals.inspect",
       "skills.proposals.historyStatus",
+      "skills.write.validate",
     ]) {
       expect(listGatewayMethods()).toContain(method);
       expect(coreGatewayHandlers).toHaveProperty(method);
@@ -609,6 +610,10 @@ describe("core gateway method classification", () => {
     }
 
     for (const method of [
+      "skills.write.propose",
+      "skills.write.applyProposal",
+      "skills.write.direct",
+      "skills.write.refreshSnapshot",
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",

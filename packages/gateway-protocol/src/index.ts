@@ -433,6 +433,16 @@ import {
   SkillsStatusParamsSchema,
   SkillsUploadBeginParamsSchema,
   SkillsUploadChunkParamsSchema,
+  SkillsWriteDirectParamsSchema,
+  SkillsWriteDirectResultSchema,
+  SkillsWriteApplyProposalParamsSchema,
+  SkillsWriteApplyProposalResultSchema,
+  SkillsWriteProposeParamsSchema,
+  SkillsWriteProposeResultSchema,
+  SkillsWriteRefreshSnapshotParamsSchema,
+  SkillsWriteRefreshSnapshotResultSchema,
+  SkillsWriteValidateParamsSchema,
+  SkillsWriteValidateResultSchema,
   SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   ToolsCatalogParamsSchema,
@@ -757,6 +767,15 @@ export const validateSkillsProposalRequestRevisionParams = lazyCompile(
   SkillsProposalRequestRevisionParamsSchema,
 );
 export const validateSkillsProposalActionParams = lazyCompile(SkillsProposalActionParamsSchema);
+export const validateSkillsWriteValidateParams = lazyCompile(SkillsWriteValidateParamsSchema);
+export const validateSkillsWriteProposeParams = lazyCompile(SkillsWriteProposeParamsSchema);
+export const validateSkillsWriteApplyProposalParams = lazyCompile(
+  SkillsWriteApplyProposalParamsSchema,
+);
+export const validateSkillsWriteDirectParams = lazyCompile(SkillsWriteDirectParamsSchema);
+export const validateSkillsWriteRefreshSnapshotParams = lazyCompile(
+  SkillsWriteRefreshSnapshotParamsSchema,
+);
 export const validateSkillsSecurityVerdictsParams = lazyCompile(SkillsSecurityVerdictsParamsSchema);
 export const validateSkillsSkillCardParams = lazyCompile(SkillsSkillCardParamsSchema);
 export const validateCronListParams = lazyCompile(CronListParamsSchema);
@@ -1175,6 +1194,16 @@ export {
   SkillsProposalActionParamsSchema,
   SkillsProposalApplyResultSchema,
   SkillsProposalRecordResultSchema,
+  SkillsWriteDirectParamsSchema,
+  SkillsWriteDirectResultSchema,
+  SkillsWriteApplyProposalParamsSchema,
+  SkillsWriteApplyProposalResultSchema,
+  SkillsWriteProposeParamsSchema,
+  SkillsWriteProposeResultSchema,
+  SkillsWriteRefreshSnapshotParamsSchema,
+  SkillsWriteRefreshSnapshotResultSchema,
+  SkillsWriteValidateParamsSchema,
+  SkillsWriteValidateResultSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSecurityVerdictsResultSchema,
   SkillsSkillCardParamsSchema,
@@ -1490,6 +1519,16 @@ export type {
   SkillsProposalActionParams,
   SkillsProposalApplyResult,
   SkillsProposalRecordResult,
+  SkillsWriteDirectParams,
+  SkillsWriteDirectResult,
+  SkillsWriteApplyProposalParams,
+  SkillsWriteApplyProposalResult,
+  SkillsWriteProposeParams,
+  SkillsWriteProposeResult,
+  SkillsWriteRefreshSnapshotParams,
+  SkillsWriteRefreshSnapshotResult,
+  SkillsWriteValidateParams,
+  SkillsWriteValidateResult,
   SkillsSecurityVerdictsParams,
   SkillsSecurityVerdictsResult,
   SkillsSkillCardParams,
