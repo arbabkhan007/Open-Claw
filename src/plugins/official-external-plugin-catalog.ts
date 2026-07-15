@@ -718,7 +718,7 @@ async function loadHostedCatalogSnapshotResult(params: {
 
 function isHostedCatalogSignedFeedRollback(params: {
   candidate: OfficialExternalPluginCatalogFeed;
-  current: OfficialExternalPluginCatalogFeed;
+  current: Pick<OfficialExternalPluginCatalogFeed, "sequence" | "generatedAt">;
 }): boolean {
   if (params.candidate.sequence < params.current.sequence) {
     return true;
@@ -976,15 +976,20 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (snapshotStore && parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
-        const current = await parseHostedCatalogFeedBody({
-          body: currentSnapshot.body,
-          verification: source.verification,
-          verifiedAt: currentSnapshot.trust.verifiedAt,
-        });
+        const current =
+          currentSnapshot.monotonic?.mode === "signed-feed"
+            ? currentSnapshot.monotonic
+            : (
+                await parseHostedCatalogFeedBody({
+                  body: currentSnapshot.body,
+                  verification: source.verification,
+                  verifiedAt: currentSnapshot.trust.verifiedAt,
+                })
+              ).feed;
         if (
           isHostedCatalogSignedFeedRollback({
             candidate: parsed.feed,
-            current: current.feed,
+            current,
           })
         ) {
           throw new Error("hosted catalog signed feed sequence is older than current snapshot");

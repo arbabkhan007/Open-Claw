@@ -99,6 +99,7 @@ function hostedCatalogFeed(params: {
 function signedHostedCatalogFeed(params: {
   feed: OfficialExternalPluginCatalogFeed;
   privateKeyPem?: string;
+  keyId?: string;
 }): { body: string; privateKeyPem: string; publicKeyPem: string } {
   const keys = params.privateKeyPem
     ? {
@@ -130,7 +131,7 @@ function signedHostedCatalogFeed(params: {
       payload: payloadBytes.toString("base64url"),
       signatures: [
         {
-          keyId: "acme-root",
+          keyId: params.keyId ?? "acme-root",
           algorithm: "ed25519",
           signature: crypto
             .sign(null, signingInput, crypto.createPrivateKey(keys.privateKeyPem))
@@ -142,14 +143,14 @@ function signedHostedCatalogFeed(params: {
   };
 }
 
-function signedCatalogConfig(publicKeyPem: string): HostedCatalogConfig {
+function signedCatalogConfig(publicKeyPem: string, keyId = "acme-root"): HostedCatalogConfig {
   return {
     feeds: {
       acme: {
         url: "https://packages.acme.example/openclaw/feed",
         verification: {
           mode: "signed",
-          keys: [{ keyId: "acme-root", publicKey: publicKeyPem }],
+          keys: [{ keyId, publicKey: publicKeyPem }],
         },
       },
     },
@@ -487,6 +488,69 @@ describe("official external plugin catalog", () => {
       expect(rolledBack.error).toContain("signed feed sequence is older");
     }
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses accepted monotonic metadata when trusted signing keys rotate", async () => {
+    const previous = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/signed-v8" }),
+      keyId: "acme-root-2026-q2",
+    });
+    const current = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 9, pluginName: "@openclaw/signed-v9" }),
+      keyId: "acme-root-2026-q3",
+    });
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+
+    const acceptedPrevious = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(previous.publicKeyPem, "acme-root-2026-q2"),
+      fetchImpl: vi.fn(async () => new Response(previous.body, { status: 200 })),
+      now: () => new Date("2026-06-22T00:00:08.000Z"),
+      snapshotStore,
+    });
+    expect(acceptedPrevious.source).toBe("hosted");
+
+    const acceptedCurrent = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(current.publicKeyPem, "acme-root-2026-q3"),
+      fetchImpl: vi.fn(async () => new Response(current.body, { status: 200 })),
+      now: () => new Date("2026-06-22T00:00:09.000Z"),
+      snapshotStore,
+    });
+
+    expect(acceptedCurrent.source).toBe("hosted");
+    expect(acceptedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
+    if (acceptedCurrent.source === "hosted") {
+      expect(acceptedCurrent.trust?.signedBy).toBe("acme-root-2026-q3");
+    }
+
+    const rolledBack = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 7, pluginName: "@openclaw/signed-v7" }),
+      keyId: "acme-root-2026-q4",
+    });
+    const rejectedRollback = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(rolledBack.publicKeyPem, "acme-root-2026-q4"),
+      fetchImpl: vi.fn(async () => new Response(rolledBack.body, { status: 200 })),
+      now: () => new Date("2026-06-22T00:00:10.000Z"),
+      snapshotStore,
+    });
+
+    expect(rejectedRollback.source).toBe("bundled-fallback");
+    expect(rejectedRollback.entries).toEqual([]);
+    if (rejectedRollback.source === "bundled-fallback") {
+      expect(rejectedRollback.error).toContain("signed feed sequence is older");
+      expect(rejectedRollback.error).toContain("snapshot fallback failed");
+    }
+
+    const retainedCurrent = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(current.publicKeyPem, "acme-root-2026-q3"),
+      offline: true,
+      snapshotStore,
+    });
+    expect(retainedCurrent.source).toBe("hosted-snapshot");
+    expect(retainedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
   });
 
   it("fails closed for unsigned signed-profile responses and re-verifies offline snapshots", async () => {
