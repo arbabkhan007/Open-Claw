@@ -323,6 +323,36 @@ function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
   ).rows;
 }
 
+/** Loads runs for a controller, including older rows whose requester is the controller. */
+export function loadSubagentRunsForControllerFromSqlite(
+  controllerSessionKey: string,
+): SubagentRunRecord[] {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where((eb) =>
+        eb.or([
+          eb("controller_session_key", "=", key),
+          eb.and([eb("controller_session_key", "is", null), eb("requester_session_key", "=", key)]),
+        ]),
+      )
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
+}
+
 /** Loads the canonical subagent registry from shared SQLite state. */
 export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
   // Retired file-era runs are intentionally not recovered here: after SQLite

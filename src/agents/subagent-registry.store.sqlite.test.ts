@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
@@ -183,6 +184,40 @@ describe("subagent registry sqlite store", () => {
         announcedAt: 300,
         deliveredAt: 300,
       });
+    });
+  });
+
+  it("does not read or delete the retired JSON registry at runtime", async () => {
+  it("loads explicit controller rows and null-controller requester fallbacks", async () => {
+    await withTempStateEnv(async () => {
+      const explicit = createRun({
+        runId: "explicit",
+        controllerSessionKey: "agent:main:controller",
+        requesterSessionKey: "agent:main:other",
+      });
+      const fallback = createRun({
+        runId: "fallback",
+        controllerSessionKey: undefined,
+        requesterSessionKey: "agent:main:controller",
+      });
+      const other = createRun({
+        runId: "other",
+        controllerSessionKey: "agent:main:other-controller",
+        requesterSessionKey: "agent:main:controller",
+      });
+
+      saveSubagentRegistryToSqlite(
+        new Map([
+          [explicit.runId, explicit],
+          [fallback.runId, fallback],
+          [other.runId, other],
+        ]),
+      );
+
+      expect(
+        loadSubagentRunsForControllerFromSqlite("agent:main:controller").map((run) => run.runId),
+      ).toEqual(["explicit", "fallback"]);
+      expect(loadSubagentRunsForControllerFromSqlite("   ")).toEqual([]);
     });
   });
 
