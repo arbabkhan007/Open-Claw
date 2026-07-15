@@ -950,6 +950,120 @@ describe("processResponsesStream", () => {
     ]);
   });
 
+  it("flushes a fully-materialized tool call still tracked when response.completed arrives (gpt-5.6-sol)", async () => {
+    // Regression: gpt-5.6-sol can emit response.completed while a tool call is
+    // still tracked as active (its output_item.done never cleared the entry)
+    // even though the tool-call block is already complete in output.content.
+    // The stock code threw "Responses stream completed with unresolved tool
+    // calls", discarding a valid response and causing an LLM-request-failed
+    // retry loop. It must instead flush the completed call and finish cleanly.
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const collect = (async () => {
+      for await (const _event of stream) {
+        // drain
+      }
+    })();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            item: {
+              type: "function_call",
+              id: "fc_read",
+              call_id: "call_read",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            delta: '{"path":"README.md"}',
+          },
+          {
+            type: "response.function_call_arguments.done",
+            arguments: '{"path":"README.md"}',
+            item_id: "fc_read",
+            name: "read",
+            output_index: 0,
+            sequence_number: 3,
+          },
+          // No response.output_item.done: the tool call stays tracked as active
+          // even though its block is already materialized in output.content.
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_sol",
+              status: "completed",
+            },
+          },
+        ]),
+        output,
+        stream,
+        gpt56SolModel,
+      ),
+    ).resolves.toBeUndefined();
+    stream.end();
+    await collect;
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
+  });
+
+  it("still throws when response.completed arrives with a genuinely incomplete tool call", async () => {
+    // The graceful flush must be scoped: if a tracked tool call has no complete
+    // block in output.content, the stream really is truncated and must throw.
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const collect = (async () => {
+      for await (const _event of stream) {
+        // drain
+      }
+    })();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            item: {
+              type: "function_call",
+              id: "fc_partial",
+              call_id: "call_partial",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            delta: '{"path":"RE',
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_partial",
+              status: "completed",
+            },
+          },
+        ]),
+        output,
+        stream,
+        gpt56SolModel,
+      ),
+    ).rejects.toThrow(/Responses stream completed with unresolved tool calls/);
+    stream.end();
+    await collect;
+  });
+
   it("keeps idless tool-call ids stable within a response and unique across responses", async () => {
     const runOnce = async () => {
       const output = createAssistantOutput();
