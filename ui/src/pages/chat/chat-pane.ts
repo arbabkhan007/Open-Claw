@@ -91,7 +91,6 @@ import {
 } from "./chat-history.ts";
 import {
   applySelectedSessionProjection,
-  dismissChatError,
   resolveAssistantAttachmentAuthToken,
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -2451,10 +2450,6 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeVideo: () => void state.toggleRealtimeTalk({ video: true }),
-      onDismissError: () => {
-        dismissChatError(state as never);
-        state.requestUpdate?.();
-      },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state as never);
         state.requestUpdate?.();

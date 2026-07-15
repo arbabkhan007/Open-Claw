@@ -1947,20 +1947,63 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         sessionKey: "main",
         state: "delta",
       });
-      await page.getByText(partialText).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(partialText).waitFor({ timeout: 10_000 });
 
+      const errorText = "The agent run failed before producing a reply.";
       await gateway.emitGatewayEvent("chat", {
-        errorMessage: "gateway disconnected",
+        errorMessage: errorText,
+        message: {
+          content: [{ text: errorText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
         runId,
         sessionKey: "main",
         state: "error",
       });
 
-      await page.getByText(partialText).waitFor({ timeout: 10_000 });
-      await page
-        .locator(".chat-thread-inner")
-        .getByText("Error: gateway disconnected")
-        .waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(partialText).waitFor({ timeout: 10_000 });
+      const alert = page.locator(".chat-run-error");
+      await alert.getByText(errorText).waitFor({ timeout: 10_000 });
+      expect(await alert.locator("button").count()).toBe(0);
+      expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
+      expect(
+        await alert.evaluate((element) =>
+          element.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
+        ),
+      ).toBe(true);
+      const [alertBox, composerBox] = await Promise.all([
+        alert.boundingBox(),
+        page.locator(".agent-chat__composer-shell").boundingBox(),
+      ]);
+      expect(alertBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
+      expect(Math.abs((alertBox?.x ?? 0) - (composerBox?.x ?? 0))).toBeLessThan(1);
+      expect(Math.abs((alertBox?.width ?? 0) - (composerBox?.width ?? 0))).toBeLessThan(1);
+      const screenshotPath = process.env.OPENCLAW_CHAT_RUN_ERROR_SCREENSHOT?.trim();
+      if (screenshotPath && alertBox && composerBox) {
+        const padding = 12;
+        const x = Math.max(0, Math.min(alertBox.x, composerBox.x) - padding);
+        const y = Math.max(0, alertBox.y - padding);
+        const right = Math.max(alertBox.x + alertBox.width, composerBox.x + composerBox.width);
+        const bottom = Math.max(alertBox.y + alertBox.height, composerBox.y + composerBox.height);
+        await page.screenshot({
+          animations: "disabled",
+          caret: "hide",
+          clip: {
+            x,
+            y,
+            width: right - x + padding,
+            height: bottom - y + padding,
+          },
+          path: screenshotPath,
+        });
+      }
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await waitForRequests(gateway, "chat.send", 2);
+      await alert.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }

@@ -27,13 +27,3 @@ export function resolveAssistantAttachmentAuthToken(state: {
 }) {
   return resolveControlUiAuthToken(state);
 }
-
-export function dismissChatError(state: {
-  chatError?: string | null;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-}) {
-  state.lastError = null;
-  state.lastErrorCode = null;
-  state.chatError = null;
-}

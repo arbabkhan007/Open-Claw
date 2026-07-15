@@ -226,6 +226,13 @@ export const icons = {
       <path d="M12 17h.01" />
     </svg>
   `,
+  circleAlert: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 8v4" />
+      <path d="M12 16h.01" />
+    </svg>
+  `,
   layoutComfortable: html`
     <svg viewBox="0 0 24 24">
       <rect width="16" height="5" x="4" y="4" rx="1.5" />

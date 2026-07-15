@@ -647,7 +647,6 @@ function createChatProps(
     onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeVideo: () => undefined,
-    onDismissError: () => undefined,
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
@@ -720,6 +719,22 @@ describe("chat conversation width", () => {
 
     expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
     expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
+  });
+
+  it("renders chat errors as a neutral alert immediately above the composer", () => {
+    const errorText = "The agent run failed before producing a reply.";
+    const container = renderChatView({
+      error: errorText,
+    });
+    const alert = requireElement(container, ".chat-run-error", "chat run error");
+
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toContain(errorText);
+    expect(alert.classList.contains("danger")).toBe(false);
+    expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(container.querySelector(".chat-thread .chat-run-error")).toBeNull();
+
+    expect(alert.querySelector("button")).toBeNull();
   });
 });
 
