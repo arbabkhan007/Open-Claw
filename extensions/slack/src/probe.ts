@@ -17,9 +17,18 @@ export async function probeSlack(
   timeoutMs = 2500,
   opts?: { accountId?: string | null },
 ): Promise<SlackProbe> {
+  const deadlineSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
   const client = createSlackWebClient(token, {
     // Slack otherwise sleeps through Retry-After outside the request timeout.
     rejectRateLimitedCalls: true,
+    // Axios's request timeout is inactivity-based; a wall-clock signal also aborts
+    // trickle responses so the transport cannot outlive the probe deadline.
+    requestInterceptor: deadlineSignal
+      ? (config) => {
+          config.signal = deadlineSignal;
+          return config;
+        }
+      : undefined,
     retryConfig: { retries: 0 },
     timeout: timeoutMs,
   });

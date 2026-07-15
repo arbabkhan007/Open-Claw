@@ -45,7 +45,10 @@ describe("probeSlack", () => {
       bot: { id: "U123", name: "openclaw-bot" },
       team: { id: "T123", name: "OpenClaw" },
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test", PROBE_CLIENT_OPTIONS);
+    expect(createSlackWebClientMock).toHaveBeenCalledWith(
+      "xoxb-test",
+      expect.objectContaining(PROBE_CLIENT_OPTIONS),
+    );
   });
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {
@@ -78,7 +81,10 @@ describe("probeSlack", () => {
     expect(result.elapsedMs).toBe(35);
     expect(result.bot).toStrictEqual({ id: undefined, name: undefined });
     expect(result.team).toStrictEqual({ id: undefined, name: undefined });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test", PROBE_CLIENT_OPTIONS);
+    expect(createSlackWebClientMock).toHaveBeenCalledWith(
+      "xoxb-test",
+      expect.objectContaining(PROBE_CLIENT_OPTIONS),
+    );
   });
 
   it("returns a failure when the request-level timeout aborts the probe", async () => {
@@ -92,6 +98,9 @@ describe("probeSlack", () => {
       status: null,
       elapsedMs: 2500,
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test", PROBE_CLIENT_OPTIONS);
+    expect(createSlackWebClientMock).toHaveBeenCalledWith(
+      "xoxb-test",
+      expect.objectContaining(PROBE_CLIENT_OPTIONS),
+    );
   });
 });
