@@ -13,17 +13,35 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
+  "src/agents/compaction-planning.worker.ts!",
+  "scripts/print-cli-backend-live-metadata.ts!",
+  "scripts/repro/code-mode-namespace-live.ts!",
   "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
+  "src/agents/subagent-orphan-recovery.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
+  // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
+  // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
+  "src/agents/sessions/extension-sdk.ts!",
+  // Plugin-SDK ACP facades expose the registry's runtime signatures.
+  "src/acp/runtime/registry.ts!",
+  "src/plugins/runtime/index.ts!",
+  "src/plugins/source-display.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
+  // Spawned by generated system-agent MCP configs; this stdio entry is not statically imported.
+  "src/mcp/openclaw-tools-serve.ts!",
+  "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
+  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
+  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -41,6 +59,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
+  "@discord/embedded-app-sdk",
   "@discordjs/opus",
   "@homebridge/ciao",
   "@lit/context",
@@ -240,6 +259,10 @@ const config = {
       entry: ["src/*.ts!"],
       project: ["src/**/*.ts!"],
     },
+    "packages/memory-host-sdk": {
+      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/speech-core": {
       entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
       project: ["**/*.ts!"],
@@ -258,6 +281,15 @@ const config = {
         "node-llama-cpp",
         ...bundledPluginIgnoredRuntimeDependencies,
       ],
+    },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
+      // Reef vendors its wire protocol under protocol/, which owns the noble
+      // crypto dependencies. The protocol barrel is the vendored library's
+      // public surface, so its exports are intentional even where the channel
+      // consumes only a subset.
+      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
