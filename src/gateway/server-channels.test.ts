@@ -2,7 +2,11 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext, ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelGatewayContext,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -1650,3 +1654,4 @@ describe("server-channels auto restart", () => {
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

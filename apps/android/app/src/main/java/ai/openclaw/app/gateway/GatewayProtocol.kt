@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 const val GATEWAY_PROTOCOL_VERSION = 4
-const val GATEWAY_MIN_PROTOCOL_VERSION = 4
+const val GATEWAY_MIN_PROTOCOL_VERSION = 3
 
 @Serializable
 data class GatewayProtocolError(
@@ -135,10 +135,10 @@ enum class GatewayMethod(
   PluginApprovalResolve("plugin.approval.resolve"),
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
-  CrestodianChat("crestodian.chat"),
-  CrestodianSetupDetect("crestodian.setup.detect"),
-  CrestodianSetupActivate("crestodian.setup.activate"),
-  CrestodianSetupAuthStart("crestodian.setup.auth.start"),
+  OpenclawChat("openclaw.chat"),
+  OpenclawSetupDetect("openclaw.setup.detect"),
+  OpenclawSetupActivate("openclaw.setup.activate"),
+  OpenclawSetupAuthStart("openclaw.setup.auth.start"),
   WizardStart("wizard.start"),
   WizardNext("wizard.next"),
   WizardCancel("wizard.cancel"),
@@ -155,6 +155,7 @@ enum class GatewayMethod(
   TalkSessionEndTurn("talk.session.endTurn"),
   TalkSessionCancelTurn("talk.session.cancelTurn"),
   TalkSessionCancelOutput("talk.session.cancelOutput"),
+  TalkSessionAcknowledgeMark("talk.session.acknowledgeMark"),
   TalkSessionSubmitToolResult("talk.session.submitToolResult"),
   TalkSessionSteer("talk.session.steer"),
   TalkSessionClose("talk.session.close"),
@@ -221,6 +222,8 @@ enum class GatewayMethod(
   SkillsCuratorRestore("skills.curator.restore"),
   SkillsProposalsList("skills.proposals.list"),
   SkillsProposalsInspect("skills.proposals.inspect"),
+  SkillsProposalsHistoryStatus("skills.proposals.historyStatus"),
+  SkillsProposalsHistoryScan("skills.proposals.historyScan"),
   SkillsProposalsCreate("skills.proposals.create"),
   SkillsProposalsUpdate("skills.proposals.update"),
   SkillsProposalsRevise("skills.proposals.revise"),
@@ -286,6 +289,7 @@ enum class GatewayMethod(
   NodeInvoke("node.invoke"),
   NodePendingPull("node.pending.pull"),
   NodePendingAck("node.pending.ack"),
+  NodeInvokeProgress("node.invoke.progress"),
   NodeInvokeResult("node.invoke.result"),
   NodeEvent("node.event"),
   CronGet("cron.get"),
@@ -356,16 +360,21 @@ enum class GatewayMethod(
   GatewaySuspendResume("gateway.suspend.resume"),
   ChatToolTitles("chat.toolTitles"),
   SessionsDiff("sessions.diff"),
-  CrestodianSetupVerify("crestodian.setup.verify"),
+  OpenclawSetupVerify("openclaw.setup.verify"),
   EnvironmentsCreate("environments.create"),
   EnvironmentsDestroy("environments.destroy"),
   SessionsCatalogList("sessions.catalog.list"),
   SessionsCatalogRead("sessions.catalog.read"),
+  TerminalUpload("terminal.upload"),
   SessionsCatalogContinue("sessions.catalog.continue"),
   SessionsCatalogArchive("sessions.catalog.archive"),
   ApprovalGet("approval.get"),
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
+  SessionsDispatch("sessions.dispatch"),
+  ModelsProbe("models.probe"),
+  MigrationsMemoryPlan("migrations.memory.plan"),
+  MigrationsMemoryApply("migrations.memory.apply"),
 }
 
 enum class GatewayEvent(
@@ -392,6 +401,8 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeInvokeCancel("node.invoke.cancel"),
+  NodeInvokeInput("node.invoke.input"),
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),

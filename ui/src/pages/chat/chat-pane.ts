@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state as litState } from "lit/decorators.js";
 import type {
@@ -33,7 +34,7 @@ import {
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
-} from "../../components/command-palette.ts";
+} from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -60,6 +61,7 @@ import {
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import {
   applyChatAgentsList,
@@ -70,6 +72,7 @@ import {
   syncSelectedSessionMessageSubscription,
   type ChatHistoryPagination,
 } from "./chat-history.ts";
+import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -83,8 +86,6 @@ import {
   canCreateChatSession,
   ChatStateController,
   createPageState,
-  dismissChatError,
-  handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
   refreshChatMetadata,
@@ -93,19 +94,19 @@ import {
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
-  resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
+import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
   createBackgroundTasksProps,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
@@ -149,14 +150,7 @@ type ChatHistoryAnchor = {
   scrollHeight: number;
   scrollTop: number;
 };
-
 const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
-
-function catalogRawRecord(raw: unknown): Record<string, unknown> | null {
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : null;
-}
 
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -171,7 +165,6 @@ function catalogRawString(raw: unknown, keys: readonly string[]): string | null 
   }
   return null;
 }
-
 function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
   if (result === undefined) {
@@ -184,7 +177,6 @@ function catalogRawResult(raw: unknown): string | null {
     return null;
   }
 }
-
 function nativeHistoryMessageIdentity(message: unknown): string | null {
   const record = catalogRawRecord(message);
   const metadata = catalogRawRecord(record?.["__openclaw"]);
@@ -208,10 +200,6 @@ function nativeHistoryMessageIdentity(message: unknown): string | null {
   }
 }
 
-function catalogMessageId(message: unknown): string | null {
-  const messageId = catalogRawRecord(message)?.messageId;
-  return typeof messageId === "string" && messageId ? messageId : null;
-}
 type ChatPaneConnectionScope = {
   context: ChatPageContext;
   state: ChatPageHost;
@@ -219,9 +207,8 @@ type ChatPaneConnectionScope = {
   generation: number;
   sessions: ChatPageContext["sessions"];
 };
-
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -706,7 +693,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
     }
     void state.loadAssistantIdentity();
-    void refreshChatAvatar(state);
+    void refreshChatAvatar(state).finally(() => this.requestUpdate());
     void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -1357,11 +1344,11 @@ class ChatPane extends OpenClawLightDomElement {
       });
       return;
     }
-    if (!state.chatMobileControlsOpen) {
+    if (!state.chatViewMenuOpen) {
       return;
     }
     event.preventDefault();
-    state.setChatMobileControlsOpen(false, { restoreFocus: true });
+    state.setChatViewMenuOpen(false, { restoreFocus: true });
   };
 
   private readonly handleDocumentPointerdown = (event: PointerEvent) => {
@@ -1380,16 +1367,14 @@ class ChatPane extends OpenClawLightDomElement {
     if (changed) {
       state.requestUpdate();
     }
-    if (!state.chatMobileControlsOpen) {
+    if (!state.chatViewMenuOpen) {
       return;
     }
-    const wrapper =
-      this.querySelector(".chat-settings-popover-wrapper") ??
-      this.querySelector(".chat-mobile-controls-wrapper");
+    const wrapper = this.querySelector(".chat-view-menu-wrapper");
     if (wrapper && path.includes(wrapper)) {
       return;
     }
-    state.setChatMobileControlsOpen(false);
+    state.setChatViewMenuOpen(false);
   };
 
   override connectedCallback() {
@@ -1434,14 +1419,6 @@ class ChatPane extends OpenClawLightDomElement {
       this.setPaneSessionKey(this.sessionKey);
     }
     chatState.attach(pageState);
-    const mediaDevices = globalThis.navigator?.mediaDevices;
-    if (mediaDevices?.addEventListener) {
-      const handleDeviceChange = () => void pageState.refreshRealtimeTalkInputs();
-      mediaDevices.addEventListener("devicechange", handleDeviceChange);
-      chatState.addCleanup(() =>
-        mediaDevices.removeEventListener("devicechange", handleDeviceChange),
-      );
-    }
     chatState.restoreComposer({ preserveCurrent: true });
     chatState.startComposerPersistence();
     if (this.draft !== undefined) {
@@ -1665,7 +1642,11 @@ class ChatPane extends OpenClawLightDomElement {
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
       state.requestUpdate?.();
-      return;
+      // Persisted state may already own the canonical key; continue startup
+      // because no later route update would load its history.
+      if (state.sessionKey !== canonicalRouteSessionKey) {
+        return;
+      }
     }
     state.assistantName = this.context.config.current.assistantIdentity.name;
     if (!snapshot.connected) {
@@ -1749,6 +1730,7 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
+          ${renderCatalogTerminalButton(this.state, this.catalogSession)}
           ${renderSessionDiffToggle(sessionWorkspace)}
           ${renderBackgroundTasksToggle(backgroundTasks)}
           ${renderSessionWorkspaceToggle(sessionWorkspace)}
@@ -1827,9 +1809,6 @@ class ChatPane extends OpenClawLightDomElement {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
-      this.context.gateway.snapshot.hello?.auth ?? null,
-    );
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.paneId,
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
@@ -1922,11 +1901,6 @@ class ChatPane extends OpenClawLightDomElement {
         ? nothing
         : renderChatControls({
             paneId: this.paneId,
-            agentsList: state.agentsList,
-            connected: state.connected,
-            hideCronSessions: state.sessionsHideCron,
-            loading: state.chatLoading,
-            manualRefreshInFlight: state.chatManualRefreshInFlight,
             model: {
               activeRunId: state.chatRunId,
               agentDefaultModel,
@@ -1952,39 +1926,11 @@ class ChatPane extends OpenClawLightDomElement {
                 switchChatThinkingLevel(state, next, targetSessionKey),
             },
             onboarding: state.onboarding,
-            runId: state.chatRunId,
-            sending: state.chatSending,
             settings: state.settings,
-            settingsOpen: state.chatMobileControlsOpen,
-            sessionKey: state.sessionKey,
-            sessionsResult: state.sessionsResult,
-            stream: state.chatStream,
-            realtimeTalkOptions: state.realtimeTalkOptions,
-            realtimeTalkInputDevices: state.realtimeTalkInputDevices,
-            realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
-            realtimeTalkInputLoading: state.realtimeTalkInputLoading,
-            realtimeTalkInputError: state.realtimeTalkInputError,
-            canOpenRealtimeTalkSettings,
-            onRefresh: () => handleChatManualRefresh(state),
-            onRealtimeTalkInputRefresh: () => void state.refreshRealtimeTalkInputs(true),
-            onRealtimeTalkInputSelect: state.selectRealtimeTalkInput,
-            onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-            onOpenRealtimeTalkSettings: () => {
-              if (!canOpenRealtimeTalkSettings) {
-                return;
-              }
-              this.context.navigate("communications", { search: "?section=talk" });
-            },
+            viewMenuOpen: state.chatViewMenuOpen,
             onSettingsChange: state.applySettings,
-            onSettingsOpenChange: (open, options) => {
-              state.setChatMobileControlsOpen(open, options);
-              if (open) {
-                void state.refreshRealtimeTalkInputs(false);
-              }
-            },
-            onToggleCronSessions: () => {
-              state.sessionsHideCron = !state.sessionsHideCron;
-              state.requestUpdate?.();
+            onViewMenuOpenChange: (open, options) => {
+              state.setChatViewMenuOpen(open, options);
             },
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
@@ -2036,7 +1982,7 @@ class ChatPane extends OpenClawLightDomElement {
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
-      showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+      showNewMessages: state.chatNewMessagesBelow,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
       getAttachments: () => state.chatAttachments,
@@ -2170,3 +2116,4 @@ declare global {
     "openclaw-chat-pane": ChatPane;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

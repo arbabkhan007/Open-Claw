@@ -8,7 +8,7 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   normalizeMessagePresentation,
@@ -3007,3 +3007,4 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

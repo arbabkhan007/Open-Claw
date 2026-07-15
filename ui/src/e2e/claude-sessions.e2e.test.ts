@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -70,6 +72,7 @@ suite("Claude native session catalog", () => {
           cases: [
             {
               match: {
+                agentId: "main",
                 catalogId: "claude",
                 cursors: { "node:devbox": "catalog-page-2" },
               },
@@ -119,6 +122,7 @@ suite("Claude native session catalog", () => {
     await page.getByRole("button", { name: "Load more sessions" }).click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
+      agentId: "main",
       catalogId: "claude",
       cursors: { "node:devbox": "catalog-page-2" },
     });
@@ -160,6 +164,34 @@ suite("Claude native session catalog", () => {
     await expect
       .poll(() => page.getByText("This session is on a paired node and is view-only.").count())
       .toBe(1);
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const expectCenteredLayout = async (screenshotName: string) => {
+      const [workbenchBox, threadBox, composerBox] = await Promise.all([
+        page.locator(".chat-workbench").boundingBox(),
+        page.locator(".chat-thread-inner").boundingBox(),
+        page.locator(".agent-chat__composer-shell").boundingBox(),
+      ]);
+      expect(workbenchBox).not.toBeNull();
+      expect(threadBox).not.toBeNull();
+      expect(composerBox).not.toBeNull();
+      const workbenchCenter = workbenchBox!.x + workbenchBox!.width / 2;
+      expect(Math.abs(threadBox!.x + threadBox!.width / 2 - workbenchCenter)).toBeLessThanOrEqual(
+        1,
+      );
+      expect(
+        Math.abs(composerBox!.x + composerBox!.width / 2 - workbenchCenter),
+      ).toBeLessThanOrEqual(1);
+      if (artifactDir) {
+        await fs.mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(artifactDir, screenshotName),
+          fullPage: true,
+        });
+      }
+    };
+    await expectCenteredLayout("claude-external-session-centered-1280.png");
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await expectCenteredLayout("claude-external-session-centered-1600.png");
     expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
       catalogId: "claude",
       cursor: "older",

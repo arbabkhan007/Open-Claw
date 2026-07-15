@@ -150,7 +150,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
 } as const;
 
-export type PluginInstallErrorCode =
+type PluginInstallErrorCode =
   (typeof PLUGIN_INSTALL_ERROR_CODE)[keyof typeof PLUGIN_INSTALL_ERROR_CODE];
 
 export type InstallPluginResult =
@@ -251,7 +251,7 @@ async function readOptionalPackageManifest(params: {
   }
 }
 
-export type PluginNpmIntegrityDriftParams = {
+type PluginNpmIntegrityDriftParams = {
   spec: string;
   expectedIntegrity: string;
   actualIntegrity: string;
@@ -2827,7 +2827,7 @@ export async function installPluginFromArchive(
   return result;
 }
 
-export async function installPluginFromDir(
+async function installPluginFromDir(
   params: {
     dirPath: string;
   } & PackageInstallCommonParams,
@@ -3271,3 +3271,4 @@ export async function installPluginFromPath(
       "Plain file plugin installs are not supported. Install a plugin directory or archive that contains openclaw.plugin.json, or list standalone plugin files in plugins.load.paths.",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
