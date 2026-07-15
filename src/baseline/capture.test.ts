@@ -125,6 +125,36 @@ describe("captureBaseline", () => {
     expect(baseline.config?.configuredChannels).toBe(2);
   });
 
+  it("correlates mixed channel status evidence by configured channel id", async () => {
+    callGatewayMock.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "status") {
+        return {};
+      }
+      if (method === "channels.status") {
+        return {
+          channels: {
+            signal: { connected: true },
+            unconfigured: { connected: true },
+          },
+          channelAccounts: {
+            telegram: [{ accountId: "default", running: true }],
+          },
+        };
+      }
+      if (method === "sessions.list" || method === "tasks.list") {
+        return {};
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    });
+
+    const baseline = await captureBaseline({ config: {}, skipPlugins: true });
+    expect(baseline.components.channels).toMatchObject({
+      status: "pass",
+      message: "All 2 channels connected",
+      details: { connected: 2, total: 2 },
+    });
+  });
+
   it("treats lock-file presence as informational without liveness proof", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-baseline-locks-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -137,7 +167,9 @@ describe("captureBaseline", () => {
       expect(baseline.components.locks).toMatchObject({
         status: "pass",
         message: "1 lock file present",
+        details: { count: 1 },
       });
+      expect(JSON.stringify(baseline.components.locks)).not.toContain("active.lock");
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
       if (previousStateDir === undefined) {

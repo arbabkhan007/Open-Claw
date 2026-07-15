@@ -213,18 +213,6 @@ type ChannelAccountStatusSummary = ChannelStatusSummary & {
   accountId?: string;
 };
 
-function listChannelStatusSummaries(
-  channels: Record<string, ChannelStatusSummary> | ChannelStatusSummary[] | undefined,
-): ChannelStatusSummary[] {
-  if (Array.isArray(channels)) {
-    return channels;
-  }
-  if (channels && typeof channels === "object") {
-    return Object.values(channels);
-  }
-  return [];
-}
-
 function listChannelAccountStatusSummaries(
   accounts: Record<string, ChannelAccountStatusSummary> | ChannelAccountStatusSummary[] | undefined,
 ): ChannelAccountStatusSummary[] {
@@ -258,7 +246,7 @@ async function checkChannelsStatus(
     }
 
     const result = await callGateway<{
-      channels?: Record<string, ChannelStatusSummary> | ChannelStatusSummary[];
+      channels?: Record<string, ChannelStatusSummary>;
       channelAccounts?: Record<
         string,
         Record<string, ChannelAccountStatusSummary> | ChannelAccountStatusSummary[]
@@ -269,16 +257,14 @@ async function checkChannelsStatus(
       timeoutMs,
     });
 
-    const channels = listChannelStatusSummaries(result?.channels);
-    const connectedFromAccounts = channelIds.filter((channelId) =>
-      listChannelAccountStatusSummaries(result?.channelAccounts?.[channelId]).some(
-        isChannelAccountConnected,
-      ),
-    ).length;
-    const connected =
-      result?.channelAccounts && Object.keys(result.channelAccounts).length > 0
-        ? connectedFromAccounts
-        : channels.filter(isChannelConnected).length;
+    const connected = channelIds.filter((channelId) => {
+      const accounts = listChannelAccountStatusSummaries(result?.channelAccounts?.[channelId]);
+      if (accounts.length > 0) {
+        return accounts.some(isChannelAccountConnected);
+      }
+      const channel = result?.channels?.[channelId];
+      return channel ? isChannelConnected(channel) : false;
+    }).length;
     if (connected === total) {
       return {
         status: "pass",
@@ -339,7 +325,7 @@ async function checkLocksStatus(): Promise<ComponentStatus> {
     return {
       status: "pass",
       message: `${lockFiles.length} lock file${lockFiles.length === 1 ? "" : "s"} present`,
-      details: { files: lockFiles },
+      details: { count: lockFiles.length },
     };
   } catch (err) {
     return { status: "warn", message: formatErrorMessage(err) };
