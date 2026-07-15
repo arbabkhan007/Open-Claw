@@ -86,7 +86,8 @@ function readOwnAccountConfig(
   if (!accounts || !Object.hasOwn(accounts, accountId)) {
     return undefined;
   }
-  return asRecord(accounts[accountId]);
+  const account = asRecord(accounts[accountId]);
+  return account ? { ...account } : undefined;
 }
 
 /**
