@@ -1,10 +1,10 @@
-import { captureBaseline, listBaselines, saveBaseline } from "../baseline/capture.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { captureBaseline, listBaselines, saveBaseline } from "../baseline/capture.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import { createIncidentIfAbsent, getOpenIncidents, readLedger } from "../incidents/ledger.js";
-import { validatePluginContracts } from "../plugins/contract-validator.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
+import { validatePluginContracts } from "../plugins/contract-validator.js";
 import { executeWithCacheAndStagger, listCachedProbes } from "../probes/cache.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { tasksAuditJsonPayloadForDiagnose } from "./tasks-json.js";

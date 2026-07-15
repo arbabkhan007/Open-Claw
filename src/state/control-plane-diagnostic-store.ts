@@ -84,29 +84,26 @@ export function writeControlPlaneDiagnostic(
   if (payloadJson === undefined) {
     throw new Error(`Control-plane diagnostic ${scope}/${key} is not JSON-serializable`);
   }
-  runOpenClawStateWriteTransaction(
-    ({ db: database }) => {
-      const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
-      executeSqliteQuerySync(
-        database,
-        db
-          .insertInto("diagnostic_events")
-          .values({
-            scope,
-            event_key: key,
-            payload_json: payloadJson,
-            created_at: createdAt,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["scope", "event_key"]).doUpdateSet({
-              payload_json: (eb) => eb.ref("excluded.payload_json"),
-              created_at: (eb) => eb.ref("excluded.created_at"),
-            }),
-          ),
-      );
-    },
-    stateDatabaseOptions(options.env),
-  );
+  runOpenClawStateWriteTransaction(({ db: database }) => {
+    const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
+    executeSqliteQuerySync(
+      database,
+      db
+        .insertInto("diagnostic_events")
+        .values({
+          scope,
+          event_key: key,
+          payload_json: payloadJson,
+          created_at: createdAt,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["scope", "event_key"]).doUpdateSet({
+            payload_json: (eb) => eb.ref("excluded.payload_json"),
+            created_at: (eb) => eb.ref("excluded.created_at"),
+          }),
+        ),
+    );
+  }, stateDatabaseOptions(options.env));
 }
 
 /** Atomically appends one record only when the current scope still satisfies the predicate. */
@@ -122,39 +119,36 @@ export function writeControlPlaneDiagnosticWhen(
   if (payloadJson === undefined) {
     throw new Error(`Control-plane diagnostic ${scope}/${key} is not JSON-serializable`);
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db: database }) => {
-      const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
-      const records = executeSqliteQuerySync(
-        database,
-        db
-          .selectFrom("diagnostic_events")
-          .select(["event_key", "payload_json", "created_at"])
-          .where("scope", "=", scope)
-          .orderBy("created_at", "asc")
-          .orderBy("event_key", "asc"),
-      ).rows.flatMap((row) => {
-        const currentPayload = parsePayload(row.payload_json);
-        return currentPayload === undefined
-          ? []
-          : [{ key: row.event_key, payload: currentPayload, createdAt: row.created_at }];
-      });
-      if (!shouldWrite(records)) {
-        return false;
-      }
-      executeSqliteQuerySync(
-        database,
-        db.insertInto("diagnostic_events").values({
-          scope,
-          event_key: key,
-          payload_json: payloadJson,
-          created_at: createdAt,
-        }),
-      );
-      return true;
-    },
-    stateDatabaseOptions(options.env),
-  );
+  return runOpenClawStateWriteTransaction(({ db: database }) => {
+    const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
+    const records = executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom("diagnostic_events")
+        .select(["event_key", "payload_json", "created_at"])
+        .where("scope", "=", scope)
+        .orderBy("created_at", "asc")
+        .orderBy("event_key", "asc"),
+    ).rows.flatMap((row) => {
+      const currentPayload = parsePayload(row.payload_json);
+      return currentPayload === undefined
+        ? []
+        : [{ key: row.event_key, payload: currentPayload, createdAt: row.created_at }];
+    });
+    if (!shouldWrite(records)) {
+      return false;
+    }
+    executeSqliteQuerySync(
+      database,
+      db.insertInto("diagnostic_events").values({
+        scope,
+        event_key: key,
+        payload_json: payloadJson,
+        created_at: createdAt,
+      }),
+    );
+    return true;
+  }, stateDatabaseOptions(options.env));
 }
 
 export function deleteControlPlaneDiagnostic(
@@ -162,18 +156,15 @@ export function deleteControlPlaneDiagnostic(
   key: string,
   options: { createdAt?: number; env?: NodeJS.ProcessEnv } = {},
 ): void {
-  runOpenClawStateWriteTransaction(
-    ({ db: database }) => {
-      const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
-      let query = db
-        .deleteFrom("diagnostic_events")
-        .where("scope", "=", scope)
-        .where("event_key", "=", key);
-      if (options.createdAt !== undefined) {
-        query = query.where("created_at", "=", options.createdAt);
-      }
-      executeSqliteQuerySync(database, query);
-    },
-    stateDatabaseOptions(options.env),
-  );
+  runOpenClawStateWriteTransaction(({ db: database }) => {
+    const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
+    let query = db
+      .deleteFrom("diagnostic_events")
+      .where("scope", "=", scope)
+      .where("event_key", "=", key);
+    if (options.createdAt !== undefined) {
+      query = query.where("created_at", "=", options.createdAt);
+    }
+    executeSqliteQuerySync(database, query);
+  }, stateDatabaseOptions(options.env));
 }

@@ -19,9 +19,10 @@ describe("route-args", () => {
       json: true,
       timeoutMs: 10_000,
     });
-    expect(
-      parseDiagnoseRouteArgs(["node", "openclaw", "diagnose", "--timeout", "5000"]),
-    ).toEqual({ json: false, timeoutMs: 5000 });
+    expect(parseDiagnoseRouteArgs(["node", "openclaw", "diagnose", "--timeout", "5000"])).toEqual({
+      json: false,
+      timeoutMs: 5000,
+    });
     expect(parseDiagnoseRouteArgs(["node", "openclaw", "diagnose", "--timeout"])).toBeNull();
   });
 

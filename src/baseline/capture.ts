@@ -115,10 +115,7 @@ export async function captureBaseline(options?: {
   return baseline;
 }
 
-export async function saveBaseline(
-  baseline: BaselineCapture,
-  name: string,
-): Promise<string> {
+export async function saveBaseline(baseline: BaselineCapture, name: string): Promise<string> {
   writeControlPlaneDiagnostic(BASELINE_STORE_SCOPE, name, baseline, {
     createdAt: Date.parse(baseline.timestamp),
   });

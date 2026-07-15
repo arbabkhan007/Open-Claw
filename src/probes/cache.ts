@@ -67,12 +67,10 @@ function readProbeCacheEntry<T>(
 }
 
 function writeProbeCacheEntry<T>(entry: ProbeCacheEntry<T>, env?: NodeJS.ProcessEnv): void {
-  writeControlPlaneDiagnostic(
-    PROBE_CACHE_STORE_SCOPE,
-    probeCacheKey(entry.type, entry.id),
-    entry,
-    { createdAt: Date.parse(entry.timestamp), ...(env ? { env } : {}) },
-  );
+  writeControlPlaneDiagnostic(PROBE_CACHE_STORE_SCOPE, probeCacheKey(entry.type, entry.id), entry, {
+    createdAt: Date.parse(entry.timestamp),
+    ...(env ? { env } : {}),
+  });
 }
 
 function getCachedProbe<T>(
