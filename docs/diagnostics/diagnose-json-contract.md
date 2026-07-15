@@ -43,7 +43,7 @@ Redaction guarantees:
 - Raw gateway authentication is omitted from `status.gateway`.
 - Raw config and raw environment values are not included.
 - Token, password, API key, and URL userinfo material must not be emitted in JSON output.
-- Persistent incident repair details are redacted before write.
+- Persistent incident details are redacted before write.
 
 Persistence behavior:
 

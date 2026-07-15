@@ -1,6 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  clearControlPlaneDiagnostics,
   deleteControlPlaneDiagnostic,
   listControlPlaneDiagnostics,
   readControlPlaneDiagnostic,
@@ -20,11 +19,11 @@ import {
  * - Stale-entry reporting for callers that choose to refresh
  */
 
-export const PROBE_CACHE_TTL_MS = 60_000; // 1 minute default TTL
-export const PROBE_CACHE_STALE_MS = 30_000; // Consider stale after 30s
+const PROBE_CACHE_TTL_MS = 60_000; // 1 minute default TTL
+const PROBE_CACHE_STALE_MS = 30_000; // Consider stale after 30s
 const PROBE_CACHE_STORE_SCOPE = "control-plane-probes";
 
-export type ProbeCacheEntry<T = unknown> = {
+type ProbeCacheEntry<T = unknown> = {
   id: string;
   type: "channel" | "gateway" | "plugin" | "task" | "lock";
   timestamp: string;
@@ -34,7 +33,7 @@ export type ProbeCacheEntry<T = unknown> = {
   durationMs?: number;
 };
 
-export type ProbeCacheOptions = {
+type ProbeCacheOptions = {
   ttlMs?: number;
   env?: NodeJS.ProcessEnv;
 };
@@ -76,7 +75,7 @@ function writeProbeCacheEntry<T>(entry: ProbeCacheEntry<T>, env?: NodeJS.Process
   );
 }
 
-export function getCachedProbe<T>(
+function getCachedProbe<T>(
   type: ProbeCacheEntry["type"],
   id: string,
   env?: NodeJS.ProcessEnv,
@@ -94,7 +93,7 @@ export function getCachedProbe<T>(
   return { entry, isStale };
 }
 
-export function setCachedProbe<T>(
+function setCachedProbe<T>(
   type: ProbeCacheEntry["type"],
   id: string,
   result: T,
@@ -111,26 +110,6 @@ export function setCachedProbe<T>(
   };
   writeProbeCacheEntry(entry, options?.env);
   return entry;
-}
-
-export function clearCachedProbe(
-  type: ProbeCacheEntry["type"],
-  id: string,
-  env?: NodeJS.ProcessEnv,
-): void {
-  deleteControlPlaneDiagnostic(PROBE_CACHE_STORE_SCOPE, probeCacheKey(type, id), {
-    ...(env ? { env } : {}),
-  });
-}
-
-export function clearAllCachedProbes(
-  type?: ProbeCacheEntry["type"],
-  env?: NodeJS.ProcessEnv,
-): void {
-  clearControlPlaneDiagnostics(PROBE_CACHE_STORE_SCOPE, {
-    ...(type ? { keyPrefix: `${type}:` } : {}),
-    ...(env ? { env } : {}),
-  });
 }
 
 export function listCachedProbes(
@@ -164,7 +143,7 @@ export function listCachedProbes(
  * Used to prevent thundering herd on channel probes.
  */
 
-export type StaggerOptions = {
+type StaggerOptions = {
   baseDelayMs?: number;
   maxDelayMs?: number;
   jitterMs?: number;
@@ -177,7 +156,7 @@ const DEFAULT_MAX_DELAY_MS = 10_000;
 const DEFAULT_JITTER_MS = 50;
 const DEFAULT_BACKOFF_FACTOR = 2;
 
-export function calculateStaggerDelay(attempt: number, options?: StaggerOptions): number {
+function calculateStaggerDelay(attempt: number, options?: StaggerOptions): number {
   const baseDelayMs = options?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
   const maxDelayMs = options?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
   const jitterMs = options?.jitterMs ?? DEFAULT_JITTER_MS;
@@ -188,15 +167,9 @@ export function calculateStaggerDelay(attempt: number, options?: StaggerOptions)
   return Math.floor(exponentialDelay + jitter);
 }
 
-export async function staggerDelay(attempt: number, options?: StaggerOptions): Promise<number> {
-  const delayMs = calculateStaggerDelay(attempt, options);
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
-  return delayMs;
-}
+type ProbeExecutor<T> = () => Promise<T>;
 
-export type ProbeExecutor<T> = () => Promise<T>;
-
-export interface ProbeResult<T> {
+interface ProbeResult<T> {
   result: T;
   cached: boolean;
   stale: boolean;
@@ -235,7 +208,9 @@ export async function executeWithCacheAndStagger<T>(
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const delayMs = calculateStaggerDelay(attempt, options);
     if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
 
     try {
@@ -271,53 +246,4 @@ export async function executeWithCacheAndStagger<T>(
   }
 
   throw new Error("Probe execution exhausted without a result");
-}
-
-/**
- * Batch probe executor with concurrency and stagger.
- * Runs probes in parallel batches with stagger between batches.
- */
-
-export async function executeProbesWithStagger<T>(
-  items: Array<{ type: ProbeCacheEntry["type"]; id: string; executor: ProbeExecutor<T> }>,
-  options?: {
-    concurrency?: number;
-    staggerMs?: number;
-    cacheEnv?: NodeJS.ProcessEnv;
-    skipCache?: boolean;
-  },
-): Promise<Map<string, ProbeResult<T>>> {
-  const concurrency = options?.concurrency ?? 5;
-  const staggerMs = options?.staggerMs ?? 100;
-  if (!Number.isInteger(concurrency) || concurrency < 1) {
-    throw new RangeError("Probe concurrency must be a positive integer");
-  }
-
-  const results = new Map<string, ProbeResult<T>>();
-
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-
-    // Execute batch in parallel
-    const batchResults = await Promise.all(
-      batch.map(async (item) => {
-        const result = await executeWithCacheAndStagger(item.type, item.id, item.executor, {
-          env: options?.cacheEnv,
-          forceRefresh: options?.skipCache,
-        });
-        return { key: probeCacheKey(item.type, item.id), result };
-      }),
-    );
-
-    for (const item of batchResults) {
-      results.set(item.key, item.result);
-    }
-
-    // Stagger between batches (but not after last batch)
-    if (i + concurrency < items.length && staggerMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, staggerMs));
-    }
-  }
-
-  return results;
 }

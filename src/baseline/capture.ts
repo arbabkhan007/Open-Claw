@@ -10,12 +10,11 @@ import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plu
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   listControlPlaneDiagnostics,
-  readControlPlaneDiagnostic,
   writeControlPlaneDiagnostic,
 } from "../state/control-plane-diagnostic-store.js";
 
 /**
- * Baseline Capture and Compare
+ * Baseline Capture
  *
  * Captures system state snapshots for regression detection.
  * Used after repairs, upgrades, or configuration changes.
@@ -24,15 +23,15 @@ import {
 
 const BASELINE_STORE_SCOPE = "control-plane-baselines";
 
-export type BaselineSeverity = "pass" | "warn" | "fail";
+type BaselineSeverity = "pass" | "warn" | "fail";
 
-export type ComponentStatus = {
+type ComponentStatus = {
   status: BaselineSeverity;
   message?: string;
   details?: Record<string, unknown>;
 };
 
-export type BaselineCapture = {
+type BaselineCapture = {
   version: string;
   timestamp: string;
   openClawVersion: string;
@@ -57,30 +56,6 @@ export type BaselineCapture = {
     configuredChannels: number;
     enabledPlugins: number;
   };
-};
-
-export type BaselineComparison = {
-  baseline: BaselineCapture;
-  current: BaselineCapture;
-  diff: {
-    components: {
-      gateway?: { baseline: BaselineSeverity; current: BaselineSeverity };
-      channels?: { baseline: BaselineSeverity; current: BaselineSeverity };
-      agents?: { baseline: BaselineSeverity; current: BaselineSeverity };
-      tasks?: { baseline: BaselineSeverity; current: BaselineSeverity };
-      locks?: { baseline: BaselineSeverity; current: BaselineSeverity };
-      plugins?: { baseline: BaselineSeverity; current: BaselineSeverity };
-    };
-    metrics: {
-      sessionCount?: { baseline: number; current: number; delta: number };
-      agentCount?: { baseline: number; current: number; delta: number };
-      channelCount?: { baseline: number; current: number; delta: number };
-      activeTaskCount?: { baseline: number; current: number; delta: number };
-    };
-  };
-  overallStatus: BaselineSeverity;
-  regressions: string[];
-  improvements: string[];
 };
 
 export async function captureBaseline(options?: {
@@ -150,116 +125,10 @@ export async function saveBaseline(
   return name;
 }
 
-export function loadBaseline(name: string): BaselineCapture | null {
-  return readControlPlaneDiagnostic<BaselineCapture>(BASELINE_STORE_SCOPE, name)?.payload ?? null;
-}
-
 export function listBaselines(): string[] {
   return listControlPlaneDiagnostics<BaselineCapture>(BASELINE_STORE_SCOPE).map(
     (record) => record.key,
   );
-}
-
-export async function compareBaseline(
-  baselineName: string,
-  options?: {
-    config?: OpenClawConfig;
-    skipGateway?: boolean;
-    skipPlugins?: boolean;
-    gatewayTimeoutMs?: number;
-  },
-): Promise<BaselineComparison> {
-  const baseline = loadBaseline(baselineName);
-  if (!baseline) {
-    throw new Error(`Baseline not found: ${baselineName}`);
-  }
-
-  const current = await captureBaseline(options);
-
-  const regressions: string[] = [];
-  const improvements: string[] = [];
-
-  const componentDiff: BaselineComparison["diff"]["components"] = {};
-
-  for (const key of Object.keys(baseline.components) as Array<keyof typeof baseline.components>) {
-    const baselineStatus = baseline.components[key].status;
-    const currentStatus = current.components[key].status;
-
-    if (baselineStatus !== currentStatus) {
-      componentDiff[key] = { baseline: baselineStatus, current: currentStatus };
-
-      if (statusToScore(currentStatus) < statusToScore(baselineStatus)) {
-        regressions.push(`${key}: ${baselineStatus} -> ${currentStatus}`);
-      } else {
-        improvements.push(`${key}: ${baselineStatus} -> ${currentStatus}`);
-      }
-    }
-  }
-
-  const metricsDiff: BaselineComparison["diff"]["metrics"] = {};
-
-  if (baseline.metrics.sessionCount !== current.metrics.sessionCount) {
-    metricsDiff.sessionCount = {
-      baseline: baseline.metrics.sessionCount,
-      current: current.metrics.sessionCount,
-      delta: current.metrics.sessionCount - baseline.metrics.sessionCount,
-    };
-  }
-
-  if (baseline.metrics.agentCount !== current.metrics.agentCount) {
-    metricsDiff.agentCount = {
-      baseline: baseline.metrics.agentCount,
-      current: current.metrics.agentCount,
-      delta: current.metrics.agentCount - baseline.metrics.agentCount,
-    };
-  }
-
-  if (baseline.metrics.channelCount !== current.metrics.channelCount) {
-    metricsDiff.channelCount = {
-      baseline: baseline.metrics.channelCount,
-      current: current.metrics.channelCount,
-      delta: current.metrics.channelCount - baseline.metrics.channelCount,
-    };
-  }
-
-  if (baseline.metrics.activeTaskCount !== current.metrics.activeTaskCount) {
-    metricsDiff.activeTaskCount = {
-      baseline: baseline.metrics.activeTaskCount,
-      current: current.metrics.activeTaskCount,
-      delta: current.metrics.activeTaskCount - baseline.metrics.activeTaskCount,
-    };
-  }
-
-  let overallStatus: BaselineSeverity = "pass";
-  if (regressions.length > 0) {
-    overallStatus = "fail";
-  } else if (improvements.length > 0) {
-    overallStatus = "pass";
-  }
-
-  return {
-    baseline,
-    current,
-    diff: {
-      components: componentDiff,
-      metrics: metricsDiff,
-    },
-    overallStatus,
-    regressions,
-    improvements,
-  };
-}
-
-function statusToScore(status: BaselineSeverity): number {
-  switch (status) {
-    case "pass":
-      return 2;
-    case "warn":
-      return 1;
-    case "fail":
-      return 0;
-  }
-  return 0;
 }
 
 function readComponentCount(component: ComponentStatus, field: string): number {

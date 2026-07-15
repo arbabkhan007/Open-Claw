@@ -12,15 +12,15 @@ function stateDatabaseOptions(env: NodeJS.ProcessEnv | undefined) {
   return env ? { env } : {};
 }
 
-export type ControlPlaneDiagnosticRecord<T> = {
+type ControlPlaneDiagnosticRecord<T> = {
   key: string;
   payload: T;
   createdAt: number;
 };
 
-function parsePayload<T>(payloadJson: string): T | undefined {
+function parsePayload(payloadJson: string): unknown {
   try {
-    return JSON.parse(payloadJson) as T;
+    return JSON.parse(payloadJson) as unknown;
   } catch {
     return undefined;
   }
@@ -45,10 +45,10 @@ export function readControlPlaneDiagnostic<T>(
   if (!row) {
     return undefined;
   }
-  const payload = parsePayload<T>(row.payload_json);
+  const payload = parsePayload(row.payload_json);
   return payload === undefined
     ? undefined
-    : { key: row.event_key, payload, createdAt: row.created_at };
+    : { key: row.event_key, payload: payload as T, createdAt: row.created_at };
 }
 
 export function listControlPlaneDiagnostics<T>(
@@ -66,17 +66,17 @@ export function listControlPlaneDiagnostics<T>(
       .orderBy("created_at", "asc")
       .orderBy("event_key", "asc"),
   ).rows.flatMap((row) => {
-    const payload = parsePayload<T>(row.payload_json);
+    const payload = parsePayload(row.payload_json);
     return payload === undefined
       ? []
-      : [{ key: row.event_key, payload, createdAt: row.created_at }];
+      : [{ key: row.event_key, payload: payload as T, createdAt: row.created_at }];
   });
 }
 
-export function writeControlPlaneDiagnostic<T>(
+export function writeControlPlaneDiagnostic(
   scope: string,
   key: string,
-  payload: T,
+  payload: unknown,
   options: { createdAt?: number; env?: NodeJS.ProcessEnv } = {},
 ): void {
   const createdAt = options.createdAt ?? Date.now();
@@ -110,10 +110,10 @@ export function writeControlPlaneDiagnostic<T>(
 }
 
 /** Atomically appends one record only when the current scope still satisfies the predicate. */
-export function writeControlPlaneDiagnosticWhen<T>(
+export function writeControlPlaneDiagnosticWhen(
   scope: string,
   key: string,
-  payload: T,
+  payload: unknown,
   shouldWrite: (records: Array<ControlPlaneDiagnosticRecord<unknown>>) => boolean,
   options: { createdAt?: number; env?: NodeJS.ProcessEnv } = {},
 ): boolean {
@@ -134,7 +134,7 @@ export function writeControlPlaneDiagnosticWhen<T>(
           .orderBy("created_at", "asc")
           .orderBy("event_key", "asc"),
       ).rows.flatMap((row) => {
-        const currentPayload = parsePayload<unknown>(row.payload_json);
+        const currentPayload = parsePayload(row.payload_json);
         return currentPayload === undefined
           ? []
           : [{ key: row.event_key, payload: currentPayload, createdAt: row.created_at }];
@@ -171,23 +171,6 @@ export function deleteControlPlaneDiagnostic(
         .where("event_key", "=", key);
       if (options.createdAt !== undefined) {
         query = query.where("created_at", "=", options.createdAt);
-      }
-      executeSqliteQuerySync(database, query);
-    },
-    stateDatabaseOptions(options.env),
-  );
-}
-
-export function clearControlPlaneDiagnostics(
-  scope: string,
-  options: { keyPrefix?: string; env?: NodeJS.ProcessEnv } = {},
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db: database }) => {
-      const db = getNodeSqliteKysely<DiagnosticStateDatabase>(database);
-      let query = db.deleteFrom("diagnostic_events").where("scope", "=", scope);
-      if (options.keyPrefix !== undefined) {
-        query = query.where("event_key", "like", `${options.keyPrefix}%`);
       }
       executeSqliteQuerySync(database, query);
     },

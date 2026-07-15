@@ -9,7 +9,7 @@ import { executeWithCacheAndStagger, listCachedProbes } from "../probes/cache.js
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { tasksAuditJsonPayloadForDiagnose } from "./tasks-json.js";
 
-export type DiagnoseOptions = {
+type DiagnoseOptions = {
   json?: boolean;
   timeoutMs?: number;
 };
@@ -44,7 +44,7 @@ function summarizeGatewayConfig(gatewayConfig: GatewayConfig | undefined) {
   };
 }
 
-export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
+async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
   const cfg = getRuntimeConfig();
   const pluginContractsProbe = await executeWithCacheAndStagger(
     "plugin",
@@ -122,7 +122,6 @@ export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: Runtime
       count: ledger.incidents.length,
       open: openIncidents.length,
       frozen: ledger.incidents.filter((incident) => incident.status === "frozen").length,
-      repairs: ledger.repairs.length,
       recent: ledger.incidents.slice(-10).map(summarizeIncident),
     },
     actions: {

@@ -65,7 +65,7 @@ type PluginAuthoringBuildOptions = {
   check?: boolean;
 };
 
-export type PluginContractValidateOptions = {
+type PluginContractValidateOptions = {
   json?: boolean;
   strict?: boolean;
 };

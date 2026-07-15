@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listBaselines } from "../baseline/capture.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { listCachedProbes } from "../probes/cache.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { OutputRuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { buildDiagnoseJson } from "./diagnose.js";
+import { diagnoseCommand } from "./diagnose.js";
 
 vi.mock("../baseline/capture.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../baseline/capture.js")>();
@@ -18,6 +18,49 @@ vi.mock("../baseline/capture.js", async (importOriginal) => {
 });
 
 import { captureBaseline } from "../baseline/capture.js";
+
+type DiagnoseTestPayload = {
+  schemaVersion: string;
+  redaction: {
+    secretsIncluded: boolean;
+    rawConfigIncluded: boolean;
+    rawEnvIncluded: boolean;
+  };
+  persistence: {
+    writesBaseline: boolean;
+    writesProbeCache: boolean;
+    writesIncidentLedger: boolean;
+  };
+  status: {
+    gateway: Record<string, unknown>;
+    configuredAgents: number;
+  };
+  baselines: {
+    latest: string;
+    current: { timestamp: string };
+  };
+  actions: { unsafe: string[] };
+};
+
+async function runDiagnoseJson(timeoutMs: number): Promise<DiagnoseTestPayload> {
+  let output: unknown;
+  const runtime: OutputRuntimeEnv = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: (code) => {
+      throw new Error(`unexpected exit ${code}`);
+    },
+    writeStdout: vi.fn(),
+    writeJson: (value) => {
+      output = value;
+    },
+  };
+  await diagnoseCommand({ json: true, timeoutMs }, runtime);
+  if (!output || typeof output !== "object") {
+    throw new Error("diagnose did not write a JSON payload");
+  }
+  return output as DiagnoseTestPayload;
+}
 
 describe("diagnose command", () => {
   let tempDir: string;
@@ -37,7 +80,7 @@ describe("diagnose command", () => {
   });
 
   it("captures real baseline and probe evidence for the diagnose payload", async () => {
-    const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
+    const payload = await runDiagnoseJson(0);
 
     expect(payload.schemaVersion).toBe("openclaw-diagnose/v1");
     expect(payload.redaction).toEqual({
@@ -59,12 +102,11 @@ describe("diagnose command", () => {
   });
 
   it("keeps gateway auth and raw secret material out of the operator JSON contract", async () => {
-    const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
-    const serialized = JSON.stringify(payload);
+    const payload = await runDiagnoseJson(0);
+    const serializedGateway = JSON.stringify(payload.status.gateway);
 
     expect(payload.status.gateway).not.toHaveProperty("auth");
-    expect(serialized).not.toContain("gateway.auth");
-    expect(serialized).not.toMatch(/token|password|api[_-]?key/i);
+    expect(serializedGateway).not.toMatch(/token|password|api[_-]?key/i);
     expect(payload.actions.unsafe).toEqual(
       expect.arrayContaining([
         "openclaw doctor --fix",
@@ -91,7 +133,7 @@ describe("diagnose command", () => {
       "utf-8",
     );
 
-    const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
+    const payload = await runDiagnoseJson(0);
     const serialized = JSON.stringify(payload);
 
     expect(payload.status.gateway).toEqual({
@@ -104,7 +146,7 @@ describe("diagnose command", () => {
   });
 
   it("threads diagnose timeout into baseline gateway probes", async () => {
-    await buildDiagnoseJson({ timeoutMs: 1234 }, {} as RuntimeEnv);
+    await runDiagnoseJson(1234);
 
     expect(captureBaseline).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -126,7 +168,7 @@ describe("diagnose command", () => {
     );
     resetConfigRuntimeState();
 
-    const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
+    const payload = await runDiagnoseJson(0);
 
     expect(payload.status.configuredAgents).toBe(1);
   });

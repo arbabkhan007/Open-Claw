@@ -3,7 +3,7 @@ import type { PluginCandidate } from "./discovery.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
-export type PluginContractValidationFinding = {
+type PluginContractValidationFinding = {
   level: "error" | "warn";
   code:
     | "manifest-diagnostic"
@@ -15,7 +15,7 @@ export type PluginContractValidationFinding = {
   message: string;
 };
 
-export type PluginContractValidationResult = {
+type PluginContractValidationResult = {
   ok: boolean;
   strict: boolean;
   pluginCount: number;
