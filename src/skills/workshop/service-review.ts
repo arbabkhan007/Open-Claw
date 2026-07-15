@@ -16,8 +16,10 @@ import {
   hashSkillProposalContent,
   readProposalSupportFiles,
   SkillProposalIntegrityError,
+  type PreparedSkillProposalSupportFile,
 } from "./store.js";
 import type {
+  SkillProposalReadResult,
   SkillProposalReviewResult,
   SkillProposalSupportFile,
 } from "./types.js";
@@ -44,7 +46,7 @@ export async function reviewSkillProposal(input: {
   env?: NodeJS.ProcessEnv;
   proposalId: string;
 }): Promise<SkillProposalReviewResult> {
-  let read;
+  let read: SkillProposalReadResult;
   try {
     read = await readRequiredProposal(input.proposalId, input.workspaceDir, input.env);
   } catch (error) {
@@ -64,7 +66,7 @@ export async function reviewSkillProposal(input: {
     return { record, mode: "unavailable", reason: "proposal-changed" };
   }
 
-  let supportFiles;
+  let supportFiles: PreparedSkillProposalSupportFile[];
   try {
     supportFiles = await readProposalSupportFiles(record, input.env ? { env: input.env } : {});
   } catch (error) {
