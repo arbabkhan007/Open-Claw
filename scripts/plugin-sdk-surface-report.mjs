@@ -220,7 +220,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
       // +15: AI safety/quality event taxonomy contract types (diagnostic-ai-safety-events).
       // +1: emitPluginSafetyEvent manifest-gated AI safety emission facade (diagnostic-runtime).
-      10711,
+      10628,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -229,7 +229,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
       // +2: emitPluginSafetyEvent (diagnostic-runtime + compat mirror).
-      5384,
+      5346,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
