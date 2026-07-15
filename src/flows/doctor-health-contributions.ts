@@ -29,6 +29,7 @@ type DoctorConfigResult = {
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  skipWizardMetadataForIncludeWrite?: boolean;
 };
 
 export type DoctorHealthFlowContext = {
@@ -1297,10 +1298,12 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
-    ctx.cfg = applyWizardMetadata(ctx.cfg, {
-      command: "doctor",
-      mode: resolveDoctorMode(ctx.cfg),
-    });
+    if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
+      ctx.cfg = applyWizardMetadata(ctx.cfg, {
+        command: "doctor",
+        mode: resolveDoctorMode(ctx.cfg),
+      });
+    }
     if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;

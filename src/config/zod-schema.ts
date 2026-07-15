@@ -413,6 +413,13 @@ const McpServerSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
+    if (Object.hasOwn(data, "disabled")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'MCP servers use "enabled"; set "enabled": false to disable this server',
+        path: ["disabled"],
+      });
+    }
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
     if (
       data.transport === "stdio" &&

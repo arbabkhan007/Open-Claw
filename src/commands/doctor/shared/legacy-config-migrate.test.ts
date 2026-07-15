@@ -1932,6 +1932,46 @@ describe("legacy migrate MCP server type aliases", () => {
   });
 });
 
+describe("legacy migrate MCP server disabled flags", () => {
+  it("inverts disabled into the canonical enabled field", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          stopped: { disabled: true, command: "stopped-mcp" },
+          running: { disabled: false, command: "running-mcp" },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved mcp.servers.stopped.disabled: true → enabled: false.",
+      "Moved mcp.servers.running.disabled: false → enabled: true.",
+    ]);
+    expect(res.config?.mcp?.servers).toEqual({
+      stopped: { enabled: false, command: "stopped-mcp" },
+      running: { enabled: true, command: "running-mcp" },
+    });
+  });
+
+  it("keeps the canonical enabled field when both flags are present", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          mixed: { disabled: true, enabled: true, command: "mixed-mcp" },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed mcp.servers.mixed.disabled (enabled: true already set).",
+    ]);
+    expect(res.config?.mcp?.servers?.mixed).toEqual({
+      enabled: true,
+      command: "mixed-mcp",
+    });
+  });
+});
+
 describe("legacy migrate x_search auth", () => {
   it("moves only legacy x_search auth into plugin-owned xai config", () => {
     const res = migrateLegacyConfigForTest({
