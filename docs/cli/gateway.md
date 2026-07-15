@@ -34,7 +34,7 @@ openclaw gateway run --hosting-profile container --runtime-id tenant-42/scout-pr
 <AccordionGroup>
   <Accordion title="Startup behavior">
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
-    - `--hosting-profile <profile>` selects the hosting profile used by status, health, and readiness. Config can also select the profile with `hosting.profile`; the default is `local`.
+    - `--hosting-profile <profile>` selects the hosting profile used by status, health, and readiness. Config can also select the profile with `hosting.profile`. Profiles are opt-in: when none is selected, OpenClaw preserves the existing Gateway lifecycle readiness baseline.
     - `--runtime-id <id>` identifies the logical runtime across restarts. `--incarnation-id <id>` identifies this process or container execution. OpenClaw defaults to runtime `local` and generates an incarnation id when neither is supplied.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.

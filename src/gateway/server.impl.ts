@@ -1169,23 +1169,25 @@ export async function startGatewayServer(
             connectedNodes: listConnectedNodesForReadiness(),
           })
         : undefined;
-    const profileConditions = buildHostingProfileConditions(
-      profile,
-      {
-        bind: opts.bind ?? config.gateway?.bind ?? "loopback",
-        bindHost,
-        port,
-        authMode: auth.mode,
-        trustedProxyUserHeader: auth.trustedProxy?.userHeader,
-        trustedProxyCount: config.gateway?.trustedProxies?.length ?? 0,
-      },
-      nodeMode,
-    );
+    const profileConditions = profile
+      ? buildHostingProfileConditions(
+          profile,
+          {
+            bind: opts.bind ?? config.gateway?.bind ?? "loopback",
+            bindHost,
+            port,
+            authMode: auth.mode,
+            trustedProxyUserHeader: auth.trustedProxy?.userHeader,
+            trustedProxyCount: config.gateway?.trustedProxies?.length ?? 0,
+          },
+          nodeMode,
+        )
+      : [];
     const additionalConditions = await resolveSelectedReadiness({
       config,
       registry: pluginRegistry,
       env: process.env,
-      additionalRequiredCriteria: requiredCriteriaForHostingProfile(profile),
+      additionalRequiredCriteria: profile ? requiredCriteriaForHostingProfile(profile) : undefined,
     });
     return buildRuntimeReadiness({
       configLoaded: true,
