@@ -518,6 +518,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",
       "openclaw.setup.activate",
@@ -650,6 +651,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.rename",
       "sessions.groups.delete",
       "sessions.dispatch",
+      "sessions.reclaim",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
