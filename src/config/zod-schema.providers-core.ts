@@ -916,6 +916,13 @@ const SlackThreadSchema = z
   })
   .strict();
 
+export const SlackAppHomeSchema = z
+  .object({
+    viewPath: z.string().optional(),
+    view: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 const ReplyToModeByChatTypeSchema = z
   .object({
     direct: ReplyToModeSchema.optional(),
@@ -1017,6 +1024,7 @@ const SlackAccountSchema = z
       })
       .strict()
       .optional(),
+    appHome: SlackAppHomeSchema.optional(),
     // Aliases for channels.slack.dm.policy / channels.slack.dm.allowFrom. Prefer these for
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),

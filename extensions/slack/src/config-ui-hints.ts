@@ -98,6 +98,18 @@ export const slackChannelConfigUiHints = {
     label: "Slack Interactive Replies",
     help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
   },
+  appHome: {
+    label: "Slack App Home",
+    help: "Optional Slack App Home view override. When unset, OpenClaw publishes the built-in safe default Home tab.",
+  },
+  "appHome.viewPath": {
+    label: "Slack App Home View Path",
+    help: "Path to a Block Kit JSON Home view loaded each time Slack opens the Home tab. File edits take effect without restarting the Gateway.",
+  },
+  "appHome.view": {
+    label: "Slack App Home Inline View",
+    help: 'Inline Slack Block Kit Home view object. The view must be type "home" or omit type, and may contain up to 100 blocks.',
+  },
   execApprovals: {
     label: "Slack Exec Approvals",
     help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",

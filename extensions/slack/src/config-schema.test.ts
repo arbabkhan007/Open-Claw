@@ -88,6 +88,43 @@ describe("slack config schema", () => {
     }
   });
 
+  it("accepts App Home view overrides at root and account level", () => {
+    const res = SlackConfigSchema.safeParse({
+      appHome: {
+        viewPath: "/etc/openclaw/slack-home.json",
+      },
+      accounts: {
+        ops: {
+          appHome: {
+            view: {
+              type: "home",
+              callback_id: "ops-home-v1",
+              blocks: [{ type: "section", text: { type: "mrkdwn", text: "Ops" } }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.appHome?.viewPath).toBe("/etc/openclaw/slack-home.json");
+      expect(res.data.accounts?.ops?.appHome?.view).toEqual({
+        type: "home",
+        callback_id: "ops-home-v1",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "Ops" } }],
+      });
+    }
+  });
+
+  it("rejects invalid App Home config shapes", () => {
+    expectSlackConfigIssue({ appHome: { viewPath: 123 } }, "appHome.viewPath");
+    expectSlackConfigIssue(
+      { accounts: { ops: { appHome: { view: [] } } } },
+      "accounts.ops.appHome.view",
+    );
+  });
+
   it("rejects invalid unfurl control types", () => {
     expectSlackConfigIssue({ unfurlLinks: "false" }, "unfurlLinks");
     expectSlackConfigIssue(
