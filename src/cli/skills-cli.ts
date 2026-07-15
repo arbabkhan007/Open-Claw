@@ -20,6 +20,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub.js";
 import { defaultRuntime } from "../runtime.js";
+import { skillsWriteService } from "../skills/api/index.js";
 import {
   installSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
@@ -40,11 +41,8 @@ import {
   unpinCuratedSkill,
 } from "../skills/workshop/curator.js";
 import {
-  applySkillProposal,
   inspectSkillProposal,
   listSkillProposals,
-  proposeCreateSkill,
-  proposeUpdateSkill,
   quarantineSkillProposal,
   readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
@@ -839,7 +837,8 @@ export function registerSkillsCli(program: Command) {
         try {
           const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const draft = await readSkillProposalInput(opts);
-          const proposal = await proposeCreateSkill({
+          const proposal = await skillsWriteService.propose({
+            kind: "create",
             workspaceDir,
             config,
             name: opts.name,
@@ -895,7 +894,8 @@ export function registerSkillsCli(program: Command) {
             opts,
           );
           const draft = await readSkillProposalInput(opts);
-          const proposal = await proposeUpdateSkill({
+          const proposal = await skillsWriteService.propose({
+            kind: "update",
             workspaceDir,
             config,
             agentId,
@@ -982,7 +982,11 @@ export function registerSkillsCli(program: Command) {
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
           const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
+          const applied = await skillsWriteService.applyProposal({
+            workspaceDir,
+            config,
+            proposalId,
+          });
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;
