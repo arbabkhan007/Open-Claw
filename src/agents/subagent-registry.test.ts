@@ -174,6 +174,9 @@ const mocks = vi.hoisted(() => ({
   getSubagentRunsSnapshotForRead: vi.fn(
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),
+  getSubagentRunsSnapshotForChildSession: vi.fn(
+    (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
+  ),
   getSubagentRunsSnapshotForController: vi.fn(
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),
@@ -241,6 +244,7 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 
 vi.mock("./subagent-registry-state.js", () => ({
   clearSubagentRunsReadCacheForTest: mocks.clearSubagentRunsReadCacheForTest,
+  getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
@@ -379,6 +383,42 @@ describe("subagent registry seam flow", () => {
       expect.any(Map),
       controllerSessionKey,
     );
+  });
+
+  it("reads the latest child run through the child snapshot without full hydration", () => {
+    const childSessionKey = "agent:main:subagent:latest";
+    const latest = {
+      runId: "run-latest",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "latest child run",
+      cleanup: "keep" as const,
+      createdAt: Date.now(),
+    };
+    try {
+      mocks.getSubagentRunsSnapshotForRead.mockImplementation(() => {
+        throw new Error("unexpected full registry hydration");
+      });
+      mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(
+        new Map([[latest.runId, latest]]),
+      );
+
+      expect(mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
+      expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
+        expect.any(Map),
+        childSessionKey,
+      );
+    } finally {
+      mocks.getSubagentRunsSnapshotForRead.mockImplementation(
+        (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
+          new Map(runs),
+      );
+      mocks.getSubagentRunsSnapshotForChildSession.mockImplementation(
+        (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
+          new Map(runs),
+      );
+    }
   });
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {

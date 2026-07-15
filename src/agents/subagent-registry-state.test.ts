@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSubagentRunsReadCacheForTest,
+  getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
@@ -10,6 +11,8 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
+  loadSubagentRunsForChildSessionFromSqlite:
+    vi.fn<(childSessionKey: string) => SubagentRunRecord[]>(),
   loadSubagentRunsForControllerFromSqlite:
     vi.fn<(controllerSessionKey: string) => SubagentRunRecord[]>(),
   loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(),
@@ -17,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
+  loadSubagentRunsForChildSessionFromSqlite: mocks.loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite: mocks.loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
@@ -43,6 +47,7 @@ describe("subagent registry state read cache", () => {
     vi.setSystemTime(1_000);
     process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
     clearSubagentRunsReadCacheForTest();
+    mocks.loadSubagentRunsForChildSessionFromSqlite.mockReset();
     mocks.loadSubagentRunsForControllerFromSqlite.mockReset();
     mocks.loadSubagentRegistryFromSqlite.mockReset();
     mocks.saveSubagentRegistryToSqlite.mockReset();
@@ -101,6 +106,85 @@ describe("subagent registry state read cache", () => {
       ...getSubagentRunsSnapshotForController(new Map(), "agent:main:controller").keys(),
     ]).toEqual(["persisted"]);
     expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps controller and child cache entries separate when their keys match", () => {
+    const sessionKey = "agent:main:subagent:shared-key";
+    const controllerRun = createRun("controller-run");
+    controllerRun.controllerSessionKey = sessionKey;
+    const childRun = createRun("child-run");
+    childRun.childSessionKey = sessionKey;
+    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([controllerRun]);
+    mocks.loadSubagentRunsForChildSessionFromSqlite.mockReturnValue([childRun]);
+
+    expect(
+      getSubagentRunsSnapshotForController(new Map(), sessionKey).has(controllerRun.runId),
+    ).toBe(true);
+    expect(getSubagentRunsSnapshotForChildSession(new Map(), sessionKey).has(childRun.runId)).toBe(
+      true,
+    );
+  });
+
+  it("uses isolated child snapshots and overlays matching in-memory runs", () => {
+    const childSessionKey = "agent:main:subagent:child";
+    const persisted = createRun("persisted-child");
+    persisted.childSessionKey = childSessionKey;
+    persisted.task = "persisted task";
+    const inMemory = { ...persisted, task: "in-memory task" };
+    mocks.loadSubagentRunsForChildSessionFromSqlite.mockReturnValue([persisted]);
+
+    const first = getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey);
+    first.get(persisted.runId)!.task = "mutated result";
+    const second = getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey);
+
+    expect(second.get(inMemory.runId)?.task).toBe("persisted task");
+    expect(
+      getSubagentRunsSnapshotForChildSession(
+        new Map([[inMemory.runId, inMemory]]),
+        childSessionKey,
+      ).get(inMemory.runId)?.task,
+    ).toBe("in-memory task");
+    expect(mocks.loadSubagentRunsForChildSessionFromSqlite).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears child snapshots after a successful throwing persistence write", () => {
+    const childSessionKey = "agent:main:subagent:child";
+    const previous = createRun("previous-child");
+    previous.childSessionKey = childSessionKey;
+    const replacement = createRun("replacement-child");
+    replacement.childSessionKey = childSessionKey;
+    mocks.loadSubagentRunsForChildSessionFromSqlite
+      .mockReturnValueOnce([previous])
+      .mockReturnValueOnce([replacement]);
+
+    expect(
+      getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey).has(previous.runId),
+    ).toBe(true);
+    persistSubagentRunsToDiskOrThrow(new Map([[replacement.runId, replacement]]));
+
+    expect([...getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey).keys()]).toEqual([
+      replacement.runId,
+    ]);
+  });
+
+  it("clears child snapshots after a successful best-effort persistence write", () => {
+    const childSessionKey = "agent:main:subagent:child";
+    const previous = createRun("previous-child");
+    previous.childSessionKey = childSessionKey;
+    const replacement = createRun("replacement-child");
+    replacement.childSessionKey = childSessionKey;
+    mocks.loadSubagentRunsForChildSessionFromSqlite
+      .mockReturnValueOnce([previous])
+      .mockReturnValueOnce([replacement]);
+
+    expect(
+      getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey).has(previous.runId),
+    ).toBe(true);
+    persistSubagentRunsToDisk(new Map([[replacement.runId, replacement]]));
+
+    expect([...getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey).keys()]).toEqual([
+      replacement.runId,
+    ]);
   });
 
   it("keeps at most 64 fresh controller snapshots", () => {

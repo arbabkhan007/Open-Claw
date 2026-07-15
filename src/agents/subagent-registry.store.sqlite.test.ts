@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -136,7 +137,7 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("preserves announcedAt for not_required delivery when completion was announced", async () => {
+it("preserves announcedAt for not_required delivery when completion was announced", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
         expectsCompletionMessage: false,
@@ -188,6 +189,30 @@ describe("subagent registry sqlite store", () => {
   });
 
   it("does not read or delete the retired JSON registry at runtime", async () => {
+    await withTempStateEnv(async () => {
+      const legacyRun = createRun({
+        runId: "legacy-run",
+        childSessionKey: "agent:main:subagent:legacy",
+        task: "retired legacy registry",
+      });
+      const registryPath = path.join(tempStateDir!, "subagents", "runs.json");
+      await fs.mkdir(path.dirname(registryPath), { recursive: true });
+      await fs.writeFile(
+        registryPath,
+        `${JSON.stringify({ version: 2, runs: { [legacyRun.runId]: legacyRun } })}\n`,
+        "utf8",
+      );
+
+      const restored = loadSubagentRegistryFromSqlite();
+
+      expect(restored).toEqual(new Map());
+      await expect(fs.stat(registryPath)).resolves.toBeTruthy();
+      expect(
+        openOpenClawStateDatabase().db.prepare("SELECT COUNT(*) AS count FROM subagent_runs").get(),
+      ).toEqual({ count: 0 });
+    });
+  });
+
   it("loads explicit controller rows and null-controller requester fallbacks", async () => {
     await withTempStateEnv(async () => {
       const explicit = createRun({
@@ -221,28 +246,45 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("does not read or delete the retired JSON registry at runtime", async () => {
+  it("loads only one child session in deterministic generation-compatible order", async () => {
     await withTempStateEnv(async () => {
-      const legacyRun = createRun({
-        runId: "legacy-run",
-        childSessionKey: "agent:main:subagent:legacy",
-        task: "retired legacy registry",
+      const childSessionKey = "agent:main:subagent:restarted";
+      const legacy = createRun({
+        runId: "legacy",
+        childSessionKey,
+        createdAt: 300,
+        generation: 1,
       });
-      const registryPath = path.join(tempStateDir!, "subagents", "runs.json");
-      await fs.mkdir(path.dirname(registryPath), { recursive: true });
-      await fs.writeFile(
-        registryPath,
-        `${JSON.stringify({ version: 2, runs: { [legacyRun.runId]: legacyRun } })}\n`,
-        "utf8",
+      const latestGeneration = createRun({
+        runId: "latest-generation",
+        childSessionKey,
+        createdAt: 100,
+        generation: 2,
+      });
+      const sameGenerationLater = createRun({
+        runId: "same-generation-later",
+        childSessionKey,
+        createdAt: 200,
+        generation: 2,
+      });
+      const otherChild = createRun({
+        runId: "other-child",
+        childSessionKey: "agent:main:subagent:other",
+      });
+
+      saveSubagentRegistryToSqlite(
+        new Map(
+          [legacy, latestGeneration, sameGenerationLater, otherChild].map((run) => [
+            run.runId,
+            run,
+          ]),
+        ),
       );
 
-      const restored = loadSubagentRegistryFromSqlite();
-
-      expect(restored).toEqual(new Map());
-      await expect(fs.stat(registryPath)).resolves.toBeTruthy();
       expect(
-        openOpenClawStateDatabase().db.prepare("SELECT COUNT(*) AS count FROM subagent_runs").get(),
-      ).toEqual({ count: 0 });
+        loadSubagentRunsForChildSessionFromSqlite(childSessionKey).map((run) => run.runId),
+      ).toEqual(["legacy", "latest-generation", "same-generation-later"]);
+      expect(loadSubagentRunsForChildSessionFromSqlite("   ")).toEqual([]);
     });
   });
 });

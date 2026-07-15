@@ -4,6 +4,7 @@
  * Merges process-local active runs with persisted SQLite state for cross-process readers.
  */
 import {
+  loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -194,6 +195,39 @@ export function getSubagentRunsSnapshotForController(
   }
   for (const [runId, entry] of inMemoryRuns.entries()) {
     if (resolvesToControllerSessionKey(entry, normalizedControllerSessionKey)) {
+      merged.set(runId, entry);
+    }
+  }
+  return merged;
+}
+
+/** Returns one child session's persisted generations plus matching live in-memory runs. */
+export function getSubagentRunsSnapshotForChildSession(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): Map<string, SubagentRunRecord> {
+  const normalizedChildSessionKey = childSessionKey.trim();
+  const merged = new Map<string, SubagentRunRecord>();
+  if (!normalizedChildSessionKey) {
+    return merged;
+  }
+
+  if (shouldReadPersistedSubagentRuns()) {
+    try {
+      // Controller and child keys share the bounded cache, so prefixes keep
+      // equal session keys from reusing rows selected by the other index.
+      for (const [runId, entry] of loadPersistedSubagentRunsForScopedRead(
+        `child:${normalizedChildSessionKey}`,
+        () => loadSubagentRunsForChildSessionFromSqlite(normalizedChildSessionKey),
+      ).entries()) {
+        merged.set(runId, structuredClone(entry));
+      }
+    } catch {
+      // Ignore disk read failures and fall back to local memory.
+    }
+  }
+  for (const [runId, entry] of inMemoryRuns.entries()) {
+    if (entry.childSessionKey === normalizedChildSessionKey) {
       merged.set(runId, entry);
     }
   }
