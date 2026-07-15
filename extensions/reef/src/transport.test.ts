@@ -451,37 +451,36 @@ describe("ReefInboxConnection response frame bounds", () => {
   });
 });
 
-describe("createReefWebSocket handshake deadline", () => {
-  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
-    const peers = new Set<import("node:net").Socket>();
-    const server = http.createServer();
-    server.on("connection", (socket) => {
-      peers.add(socket);
-      socket.once("close", () => peers.delete(socket));
-    });
-    server.on("upgrade", () => {
-      // Leave the HTTP upgrade pending until the client deadline aborts it.
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    try {
-      const { port } = server.address() as AddressInfo;
-      const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
-        handshakeTimeoutMs: 50,
-      }) as WebSocket;
-      const [error] = await once(socket, "error");
-
-      expect(error).toMatchObject({ message: "Opening handshake has timed out" });
-    } finally {
-      for (const peer of peers) {
-        peer.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+describe("ReefTransportClient relay request timeout", () => {
+  it(
+    "times out when the relay stalls before returning headers",
+    async () => {
+      const server = http.createServer();
+      // Accept the TCP connection but never send an HTTP response.
+      server.on("connection", () => {});
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
       });
-    }
-  });
+
+      try {
+        const { port } = server.address() as AddressInfo;
+        const client = new ReefTransportClient(
+          `http://127.0.0.1:${port}`,
+          "alice",
+          keys,
+          fetch,
+          () => ts,
+        );
+
+        await expect(client.pull(0)).rejects.toMatchObject({ name: "TimeoutError" });
+      } finally {
+        server.closeAllConnections?.();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+    30_000,
+  );
 });
