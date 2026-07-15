@@ -81,6 +81,24 @@ function createApprovalRequestEvent(params: {
   } as EventFrame;
 }
 
+function createToolStartEvent(runId: string, toolCallId: string): EventFrame {
+  return {
+    type: "event",
+    event: "agent",
+    payload: {
+      runId,
+      sessionKey: SESSION_KEY,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: `echo ${toolCallId}` },
+      },
+    },
+  } as EventFrame;
+}
+
 async function createHarness(
   params: {
     allowedDecisions?: string[];
@@ -165,12 +183,16 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = mock.mock.calls[0];
+function callArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const call = (mock.mock.calls as unknown[][])[index];
   if (!call) {
     throw new Error("expected mock call");
   }
   return requireRecord(call[0]);
+}
+
+function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  return callArg(mock);
 }
 
 function requestPermissionPayload(mock: ReturnType<typeof vi.fn>): {
@@ -238,21 +260,7 @@ describe("ACP translator permission relay", () => {
     const harness = await createHarness();
     const approvalId = "approval-raw";
 
-    await harness.agent.handleGatewayEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: harness.runId,
-        sessionKey: SESSION_KEY,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-raw",
-          args: { command: "echo raw" },
-        },
-      },
-    } as EventFrame);
+    await harness.agent.handleGatewayEvent(createToolStartEvent(harness.runId, "tool-raw"));
     await harness.agent.handleGatewayEvent(
       createApprovalRequestEvent({
         approvalId,
@@ -406,7 +414,7 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
-  it("binds structured approvals by tool call id when prompts share a session key", async () => {
+  it("fails closed for duplicate tool call ids and falls back for one pending prompt", async () => {
     const runIds: string[] = [];
     const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
       if (method === "chat.send") {
@@ -447,29 +455,23 @@ describe("ACP translator permission relay", () => {
       expect(runIds).toHaveLength(2);
     });
 
-    const approvalId = "approval-shared";
-    await agent.handleGatewayEvent(createApprovalRequestEvent({ approvalId }));
+    const firstRunId = expectDefined(runIds[0], "runIds[0] test invariant");
+    const secondRunId = expectDefined(runIds[1], "runIds[1] test invariant");
+    await agent.handleGatewayEvent(createToolStartEvent(firstRunId, "tool-ambiguous"));
+    await agent.handleGatewayEvent(createToolStartEvent(secondRunId, "tool-ambiguous"));
+    await agent.handleGatewayEvent(createToolStartEvent(secondRunId, "tool-second"));
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({
+        approvalId: "approval-ambiguous",
+        toolCallId: "tool-ambiguous",
+      }),
+    );
 
     expect(requestPermission).not.toHaveBeenCalled();
     expect(approvalResolveCalls(request)).toHaveLength(0);
 
-    await agent.handleGatewayEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: expectDefined(runIds[1], "runIds[1] test invariant"),
-        sessionKey: SESSION_KEY,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-second",
-          args: { command: "echo second" },
-        },
-      },
-    } as EventFrame);
     await agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId, toolCallId: "tool-second" }),
+      createApprovalRequestEvent({ approvalId: "approval-shared", toolCallId: "tool-second" }),
     );
 
     await vi.waitFor(() => {
@@ -479,13 +481,27 @@ describe("ACP translator permission relay", () => {
 
     expect(firstCallArg(requestPermission).sessionId).toBe(SECOND_SESSION_ID);
     expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: approvalId,
+      id: "approval-shared",
       decision: "allow-once",
     });
 
     await agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
+    await firstPrompt;
+    await agent.handleGatewayEvent(
+      createApprovalRequestEvent({ approvalId: "approval-sole-fallback" }),
+    );
+    await vi.waitFor(() => {
+      expect(requestPermission).toHaveBeenCalledTimes(2);
+      expect(approvalResolveCalls(request)).toHaveLength(2);
+    });
+    expect(callArg(requestPermission, 1).sessionId).toBe(SECOND_SESSION_ID);
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-sole-fallback",
+      decision: "allow-once",
+    });
+
     await agent.cancel({ sessionId: SECOND_SESSION_ID } as CancelNotification);
-    await Promise.all([firstPrompt, secondPrompt]);
+    await secondPrompt;
     sessionStore.clearAllSessionsForTest();
   });
 
