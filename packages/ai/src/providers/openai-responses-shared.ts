@@ -1236,7 +1236,28 @@ export async function processResponsesStream<TApi extends Api>(
       }
     } else if (event.type === "response.completed") {
       if (hasActiveStreamingToolCall()) {
-        throw new Error("Responses stream completed with unresolved tool calls");
+        // Some providers/models (observed with GitHub Copilot's gpt-5.6-sol)
+        // emit `response.completed` while a tool call is still tracked as
+        // active even though its block has already been fully materialized in
+        // `output.content` (its finalize path left the tracking entry behind).
+        // Throwing here discards an otherwise-complete response and produces an
+        // endless `LLM request failed` retry loop. Flush gracefully only when
+        // every pending tool call already has a complete block in the output;
+        // otherwise keep the original throw for genuinely truncated streams.
+        const pendingToolCalls = [
+          ...toolCallsByOutputIndex.values(),
+          ...unindexedToolCalls,
+        ];
+        const flushable = pendingToolCalls.filter(
+          (toolCall) => toolCall.block && output.content.includes(toolCall.block),
+        );
+        if (flushable.length === pendingToolCalls.length) {
+          for (const toolCall of flushable) {
+            forgetStreamingToolCall(toolCall);
+          }
+        } else {
+          throw new Error("Responses stream completed with unresolved tool calls");
+        }
       }
       const response = event.response;
       if (response?.id) {
