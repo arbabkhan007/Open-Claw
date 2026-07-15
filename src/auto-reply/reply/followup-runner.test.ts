@@ -1077,7 +1077,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const pending = runner(
       createQueuedRun({
-        onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+        onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
         run: {
           sessionId: "queued-session",
           sessionKey: "main",
@@ -7126,3 +7126,4 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

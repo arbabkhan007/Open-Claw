@@ -1,4 +1,3 @@
-// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
@@ -2441,6 +2440,7 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -3048,3 +3048,4 @@ export type OpenClawPluginApi = {
 
 // Plugin hook contracts now live in hook-types.ts so hook runners can import a
 // leaf contract surface instead of pulling the full plugin runtime barrel.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
