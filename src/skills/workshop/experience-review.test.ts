@@ -341,3 +341,58 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("[tool call: exec]");
   });
 });
+
+describe("formatSkillExperienceReviewTranscript: UTF-16 safe truncation", () => {
+  const EMOJI = "😀"; // 😀, two UTF-16 code units
+
+  function hasLoneSurrogate(value: string): boolean {
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(i + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          return true;
+        }
+        i += 1;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  it("does not split a surrogate pair at the head truncation boundary", () => {
+    // rendered[0] = "[user]\n" (7) + 5992 "a" + emoji (high @5999, low @6000) + filler.
+    // A raw .slice(0, 6000) keeps the high surrogate and drops its low half.
+    const headMessage = {
+      role: "user",
+      content: "a".repeat(5992) + EMOJI + "b".repeat(2000),
+    };
+    const fillerMessage = {
+      role: "assistant",
+      content: "x".repeat(60_000),
+    };
+    const transcript = formatSkillExperienceReviewTranscript([headMessage, fillerMessage]);
+    expect(hasLoneSurrogate(transcript)).toBe(false);
+  });
+
+  it("does not split a surrogate pair at the tail truncation boundary", () => {
+    // With a short first message the tail slice starts inside the long emoji run;
+    // a raw .slice(-N) can begin on a low surrogate whose high half was excluded.
+    const shortMessage = { role: "user", content: "hi" };
+    const emojiRunMessage = {
+      role: "assistant",
+      content: EMOJI.repeat(30_000),
+    };
+    const transcript = formatSkillExperienceReviewTranscript([shortMessage, emojiRunMessage]);
+    expect(hasLoneSurrogate(transcript)).toBe(false);
+  });
+
+  it("leaves a short transcript with emoji intact", () => {
+    const transcript = formatSkillExperienceReviewTranscript([
+      { role: "user", content: `hello ${EMOJI} world` },
+    ]);
+    expect(transcript).toBe(`[user]\nhello ${EMOJI} world`);
+    expect(hasLoneSurrogate(transcript)).toBe(false);
+  });
+});
