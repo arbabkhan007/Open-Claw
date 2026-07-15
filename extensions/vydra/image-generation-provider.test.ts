@@ -119,13 +119,17 @@ describe("vydra image-generation provider", () => {
     ).rejects.toThrow("vydra.image-generation: JSON response exceeds 16777216 bytes");
   });
 
-  it("passes request SSRF policy to the image creation request", async () => {
+  it("passes request SSRF policy through image creation, polling, and download", async () => {
     stubVydraApiKey();
     const fetchMock = stubFetch(
       jsonResponse({
         jobId: "job-123",
+        status: "queued",
+      }),
+      jsonResponse({
+        jobId: "job-123",
         status: "completed",
-        imageUrl: "https://cdn.vydra.ai/generated/test.png",
+        imageUrl: "https://198.18.0.11/generated/test.png",
       }),
       binaryResponse("png-data", "image/png"),
     );
@@ -140,6 +144,7 @@ describe("vydra image-generation provider", () => {
           providers: {
             vydra: {
               baseUrl: "https://198.18.0.10/api/v1",
+              request: { headers: { "X-Vydra-Policy": "cross-origin" } },
             },
           },
         },
@@ -150,6 +155,15 @@ describe("vydra image-generation provider", () => {
     const createCall = fetchCall(fetchMock);
     expect(createCall[0]).toBe("https://198.18.0.10/api/v1/models/grok-imagine");
     expect(createCall[1].method).toBe("POST");
+    expect(new Headers(createCall[1].headers).get("x-vydra-policy")).toBe("cross-origin");
+    const pollCall = fetchCall(fetchMock, 1);
+    expect(pollCall[0]).toBe("https://198.18.0.10/api/v1/jobs/job-123");
+    expect(new Headers(pollCall[1].headers).get("x-vydra-policy")).toBe("cross-origin");
+    const downloadCall = fetchCall(fetchMock, 2);
+    expect(downloadCall[0]).toBe("https://198.18.0.11/generated/test.png");
+    const downloadHeaders = new Headers(downloadCall[1].headers);
+    expect(downloadHeaders.get("authorization")).toBeNull();
+    expect(downloadHeaders.get("x-vydra-policy")).toBeNull();
   });
 
   it("applies configured request policy to the image creation request", async () => {
@@ -250,9 +264,11 @@ describe("vydra image-generation provider", () => {
         "GET /api/v1/jobs/job-local-image",
         "GET /generated/local-image.png",
       ]);
-      const [createRequest, pollRequest] = server.requests;
+      const [createRequest, pollRequest, assetRequest] = server.requests;
       expect(createRequest?.headers["x-vydra-policy"]).toBe("local-image");
       expect(pollRequest?.headers["x-vydra-policy"]).toBe("local-image");
+      expect(assetRequest?.headers["x-vydra-policy"]).toBe("local-image");
+      expect(assetRequest?.headers.authorization).toBe("Bearer vydra-test-key");
     } finally {
       await server.close();
     }

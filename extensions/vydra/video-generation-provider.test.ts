@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   binaryResponse,
   jsonResponse,
+  startLocalHttpForwardProxy,
   startLocalVydraHttpServer,
   stubFetch,
   stubVydraApiKey,
@@ -33,6 +34,7 @@ describe("vydra video-generation provider", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -122,7 +124,7 @@ describe("vydra video-generation provider", () => {
     expect(headers.get("x-vydra-policy")).toBe("video");
   });
 
-  it("uses configured request policy through a local Vydra-compatible video flow", async () => {
+  it("routes the full local Vydra-compatible video flow through the configured proxy", async () => {
     stubVydraApiKey();
     let assetUrl = "";
     const server = await startLocalVydraHttpServer((_req, res, request) => {
@@ -146,6 +148,15 @@ describe("vydra video-generation provider", () => {
       res.end();
     });
     assetUrl = `${server.baseUrl.replace(/\/api\/v1$/u, "")}/generated/local-video.mp4`;
+    const proxy = await startLocalHttpForwardProxy();
+    vi.stubEnv("HTTP_PROXY", proxy.proxyUrl);
+    vi.stubEnv("http_proxy", proxy.proxyUrl);
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("ALL_PROXY", "");
+    vi.stubEnv("all_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
 
     try {
       const provider = buildVydraVideoGenerationProvider();
@@ -162,6 +173,7 @@ describe("vydra video-generation provider", () => {
                 request: {
                   allowPrivateNetwork: true,
                   headers: { "X-Vydra-Policy": "local-video" },
+                  proxy: { mode: "env-proxy" },
                 },
               },
             },
@@ -177,10 +189,15 @@ describe("vydra video-generation provider", () => {
         "GET /api/v1/jobs/job-local-video",
         "GET /generated/local-video.mp4",
       ]);
-      const [createRequest, pollRequest] = server.requests;
+      const [createRequest, pollRequest, assetRequest] = server.requests;
       expect(createRequest?.headers["x-vydra-policy"]).toBe("local-video");
       expect(pollRequest?.headers["x-vydra-policy"]).toBe("local-video");
+      expect(assetRequest?.headers["x-vydra-policy"]).toBe("local-video");
+      expect(assetRequest?.headers.authorization).toBe("Bearer vydra-test-key");
+      const target = new URL(server.baseUrl).host;
+      expect(proxy.tunnels).toEqual([target, target, target]);
     } finally {
+      await proxy.close();
       await server.close();
     }
   });
