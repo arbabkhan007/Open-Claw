@@ -2249,11 +2249,12 @@ export const dispatchTelegramMessage = async ({
                         return;
                       }
                       const bufferedButtons = resolvePayloadTelegramInlineButtons(buffered.payload);
-                      await deliverFinalAnswerText(
+                      const result = await deliverFinalAnswerText(
                         buffered.payload,
                         buffered.text,
                         bufferedButtons,
                       );
+                      emitPreviewFinalizedHook(result);
                       reasoningStepState.resetForNextStep();
                     };
 
@@ -2448,6 +2449,9 @@ export const dispatchTelegramMessage = async ({
                     };
 
                     if (segments.length > 0) {
+                      if (info.kind === "final") {
+                        await flushBufferedFinalAnswer();
+                      }
                       trackBlockMedia(blockDelivered);
                       return;
                     }
