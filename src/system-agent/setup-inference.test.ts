@@ -1520,6 +1520,10 @@ describe("activateSetupInference", () => {
         sessionId: expect.stringMatching(/^probe-setup-inference-/),
         sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
         lane: "session:probe-setup-inference:anthropic",
+        disableTools: true,
+        // Setup probe must fail closed: no tools, empty allowlist. Defense-in-depth
+        // against the Codex native tool-surface gate (GHSA).
+        toolsAllow: [],
       }),
     );
     const probeCall = runEmbeddedAgent.mock.calls[0]?.[0];
