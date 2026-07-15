@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
+import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -1638,6 +1639,62 @@ describe("loadOpenClawPlugins", () => {
       },
     });
     expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
+  });
+
+  it("restores cleared runtime registrations when an activating reload throws before activation", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "reload-rollback",
+      filename: "reload-rollback.cjs",
+      body: `module.exports = {
+        id: "reload-rollback",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerCommand({
+            name: "pair",
+            description: "Pair device",
+            acceptsArgs: true,
+            handler: async () => ({ text: "paired" }),
+          });
+        },
+      };`,
+    });
+
+    const loadOptions = {
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["reload-rollback"],
+        },
+      },
+      onlyPluginIds: ["reload-rollback"],
+    };
+
+    loadOpenClawPlugins(loadOptions);
+    expect(getRegisteredAgentHarness("codex")).toBeDefined();
+    expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
+
+    const manifestRegistry = await import("./manifest-registry.js");
+    const manifestSpy = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistry")
+      .mockImplementation(() => {
+        throw new Error("corrupt plugin manifest");
+      });
+
+    try {
+      expect(() => loadOpenClawPlugins(loadOptions)).toThrow("corrupt plugin manifest");
+      expect(getRegisteredAgentHarness("codex")).toBeDefined();
+      expect(getPluginCommandSpecs().map((entry) => entry.name)).toEqual(["pair"]);
+    } finally {
+      manifestSpy.mockRestore();
+    }
   });
 
   it("rejects malformed plugin agent harness registrations", () => {

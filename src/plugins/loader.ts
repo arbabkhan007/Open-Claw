@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { clearAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,15 +18,12 @@ import {
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { clearDetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import { clearPluginCommands } from "./command-registry-state.js";
-import { clearCompactionProviders } from "./compaction-provider.js";
 import {
   applyTestPluginDefaults,
   createPluginActivationSource,
@@ -45,12 +41,10 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import { clearEmbeddingProviders } from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { pluginLoaderCacheInstances, type CachedPluginState } from "./loader-cache-instances.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -85,8 +79,6 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
-import { clearMemoryPluginState } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
   fingerprintPluginDiscoveryContext,
@@ -99,6 +91,7 @@ import {
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import {
+  clearActivatedPluginRuntimeState,
   createPluginRegistrationTransaction,
   restorePluginProcessGlobalState,
   snapshotPluginProcessGlobalState,
@@ -365,16 +358,7 @@ function createPluginCandidatesFromManifestRegistry(
     ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
   }));
 }
-export function clearActivatedPluginRuntimeState(): void {
-  clearAgentHarnesses();
-  clearPluginCommands();
-  clearCompactionProviders();
-  clearDetachedTaskLifecycleRuntimeRegistration();
-  clearPluginInteractiveHandlers();
-  clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
-  clearMemoryPluginState();
-}
+export { clearActivatedPluginRuntimeState };
 
 export function clearPluginRegistryLoadCache(): void {
   pluginLoaderCacheState.clearCachedRegistries();
@@ -1517,6 +1501,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
   }
   pluginLoaderCacheState.beginLoad(cacheKey);
+  const activatedRuntimeStateSnapshot = shouldActivate ? snapshotPluginProcessGlobalState() : null;
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
@@ -2565,6 +2550,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
     }
     return registry;
+  } catch (err) {
+    if (activatedRuntimeStateSnapshot) {
+      restorePluginProcessGlobalState(activatedRuntimeStateSnapshot);
+    }
+    throw err;
   } finally {
     pluginLoaderCacheState.finishLoad(cacheKey);
   }
