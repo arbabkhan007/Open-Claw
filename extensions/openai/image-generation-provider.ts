@@ -14,7 +14,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { MAX_IMAGE_BYTES, readChunkWithIdleTimeout } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
   hasConfiguredSecretInput,
@@ -48,6 +48,7 @@ const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant."
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS = 600_000;
+const OPENAI_IMAGE_BODY_IDLE_TIMEOUT_MS = 30_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_OUTPUT_EXTENSION = "png";
 const DEFAULT_SIZE = "1024x1024";
@@ -511,7 +512,12 @@ function inferImageUploadFileName(params: {
   return `image-${params.index + 1}.${ext}`;
 }
 
-async function readResponseBodyText(response: Response): Promise<string> {
+async function readResponseBodyText(
+  response: Response,
+  bodyIdleTimeoutMs: number,
+): Promise<string> {
+  const onIdleTimeout = ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
+    new Error(`OpenAI Codex image generation response body stalled after ${chunkTimeoutMs}ms`);
   if (!response.body) {
     const text = await response.text();
     if (Buffer.byteLength(text, "utf8") > MAX_CODEX_IMAGE_SSE_BYTES) {
@@ -525,7 +531,11 @@ async function readResponseBodyText(response: Response): Promise<string> {
   let byteLength = 0;
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readChunkWithIdleTimeout(
+        reader,
+        bodyIdleTimeoutMs,
+        onIdleTimeout,
+      );
       if (value) {
         byteLength += value.byteLength;
         if (byteLength > MAX_CODEX_IMAGE_SSE_BYTES) {
@@ -810,7 +820,7 @@ async function generateOpenAICodexImage(params: {
       await assertOkOrThrowHttpError(response, "OpenAI Codex image generation failed");
       results.push(
         extractCodexImageGenerationResult({
-          body: await readResponseBodyText(response),
+          body: await readResponseBodyText(response, OPENAI_IMAGE_BODY_IDLE_TIMEOUT_MS),
           model,
           outputFormat: req.outputFormat,
         }),

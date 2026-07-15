@@ -1918,6 +1918,35 @@ describe("openai image generation provider", () => {
     ).rejects.toThrow("OpenAI Codex image generation response exceeded event limit");
   });
 
+  it("rejects Codex image SSE response bodies that stall after sending headers", async () => {
+    mockCodexAuthOnly();
+    // Create a ReadableStream that sends one valid SSE event then stalls forever.
+    const stallStream = new ReadableStream({
+      start(controller) {
+        const event = {
+          type: "response.output_item.done",
+          item: { type: "image_generation_call", result: "stall-test" },
+        };
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+        // Never close or enqueue more — simulate body stall
+      },
+    });
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: new Response(stallStream),
+      release: vi.fn(async () => {}),
+    }));
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw after stalled body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("stalled");
+  });
+
   it("forwards SSRF guard fields to multipart edit requests", async () => {
     mockGeneratedPngResponse();
 
