@@ -10,7 +10,7 @@ import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState } from "./state.js";
-import { onTimer } from "./timer.js";
+import { onTimer } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-backoff-config-readback",
