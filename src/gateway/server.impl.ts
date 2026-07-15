@@ -38,6 +38,16 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
+import {
+  buildHostingProfileConditions,
+  requiredCriteriaForHostingProfile,
+  resolveHostingProfile,
+} from "../hosting/profiles.js";
+import {
+  resolveRuntimeActivationIdentity,
+  type RuntimeActivationIdentity,
+} from "../hosting/runtime-activation.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -64,12 +74,15 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
+  getActivePluginRegistry,
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
+import { createSelectedReadinessResolver } from "../readiness/selection.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -99,6 +112,7 @@ import {
 import { isLoopbackHost } from "./net.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import type { NodeSession } from "./node-registry.js";
 import {
   mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayReloadPluginActivationCandidate,
@@ -146,7 +160,11 @@ import {
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
-import { createReadinessChecker } from "./server/readiness.js";
+import {
+  createReadinessChecker,
+  evaluateCanonicalGatewayReadiness,
+  type CanonicalGatewayReadinessResult,
+} from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
@@ -190,6 +208,26 @@ function approvalRequestTargetsSession(
     (typeof record.sessionId === "string" && record.sessionId === sessionId) ||
     (typeof record.sessionKey === "string" && sessionKeys.has(record.sessionKey))
   );
+}
+
+function buildGatewayPluginReadinessInput(
+  registry: NonNullable<ReturnType<typeof getActivePluginRegistry>>,
+): PluginReadinessInput {
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin): PluginReadinessInput["errors"][number] => {
+      const error: PluginReadinessInput["errors"][number] = {
+        id: plugin.id,
+        activated: plugin.activated === true,
+        error: plugin.error ?? "unknown plugin load error",
+      };
+      if (plugin.activationSource) {
+        error.activationSource = plugin.activationSource;
+      }
+      return error;
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return { errors };
 }
 
 type GatewayStartupChannelPlugin = {
@@ -513,6 +551,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Runtime identity reported through readiness and status. */
+  runtimeActivationIdentity?: RuntimeActivationIdentity;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1
@@ -573,6 +613,9 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  resolveHostingProfile({ env: process.env });
+  const runtimeActivationIdentity =
+    opts.runtimeActivationIdentity ?? resolveRuntimeActivationIdentity({ env: process.env });
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -1101,7 +1144,7 @@ export async function startGatewayServer(
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () => !startupSidecarsReady && sidecarStartup === "start";
-  const getReadiness = createReadinessChecker({
+  const getGatewayReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -1112,6 +1155,53 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
+  const resolveSelectedReadiness = createSelectedReadinessResolver();
+  const resolveNodeModeReadiness = createNodeModeReadinessEvidenceResolver();
+  let listConnectedNodesForReadiness: () => NodeSession[] = () => [];
+  const evaluateRuntimeReadiness = async () => {
+    const config = getRuntimeConfig();
+    const profile = resolveHostingProfile({ config, env: process.env });
+    const auth = getResolvedAuth();
+    const nodeMode =
+      profile === "node-mode"
+        ? await resolveNodeModeReadiness({
+            config,
+            connectedNodes: listConnectedNodesForReadiness(),
+          })
+        : undefined;
+    const profileConditions = profile
+      ? buildHostingProfileConditions(
+          profile,
+          {
+            bind: opts.bind ?? config.gateway?.bind ?? "loopback",
+            bindHost,
+            port,
+            authMode: auth.mode,
+            trustedProxyUserHeader: auth.trustedProxy?.userHeader,
+            trustedProxyCount: config.gateway?.trustedProxies?.length ?? 0,
+          },
+          nodeMode,
+        )
+      : [];
+    const additionalConditions = await resolveSelectedReadiness({
+      config,
+      registry: pluginRegistry,
+      env: process.env,
+      additionalRequiredCriteria: profile ? requiredCriteriaForHostingProfile(profile) : undefined,
+    });
+    return buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: buildGatewayPluginReadinessInput(pluginRegistry),
+      activation: runtimeActivationIdentity,
+      additionalConditions: [...profileConditions, ...additionalConditions],
+    });
+  };
+  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
+    evaluateCanonicalGatewayReadiness({
+      evaluateGateway: getGatewayReadiness,
+      evaluateRuntime: evaluateRuntimeReadiness,
+    });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
   const watchNodeRequestHandler: {
@@ -1198,6 +1288,7 @@ export async function startGatewayServer(
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
   });
+  listConnectedNodesForReadiness = () => nodeRegistry.listConnected();
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -1843,6 +1934,7 @@ export async function startGatewayServer(
           loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot,
           getHealthCache,
+          getReadiness,
           refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
           logHealth,
           logGateway: log,
