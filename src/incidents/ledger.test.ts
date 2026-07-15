@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import {
   appendLedgerEntry,
   appendRepairAttempt,
   readLedger,
@@ -11,8 +15,8 @@ import {
   resolveIncident,
   freezeIncident,
   createIncident,
+  createIncidentIfAbsent,
   recordRepairAttempt,
-  resolveLedgerPath,
   type LedgerEntry,
   type RepairAttempt,
 } from "./ledger.js";
@@ -26,14 +30,14 @@ describe("incident ledger", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
     delete process.env.OPENCLAW_STATE_DIR;
   });
 
-  it("creates ledger directory if missing", () => {
-    const ledgerPath = resolveLedgerPath();
-    expect(ledgerPath).toContain("incidents");
-    expect(ledgerPath).toContain("ledger.jsonl");
+  it("stores the ledger in the shared state database", () => {
+    const database = openOpenClawStateDatabase();
+    expect(database.path).toBe(path.join(tempDir, "state", "openclaw.sqlite"));
   });
 
   it("appends incident entries", () => {
@@ -51,6 +55,18 @@ describe("incident ledger", () => {
     const { incidents } = readLedger();
     expect(incidents).toHaveLength(1);
     expect(incidents[0].id).toBe(entry.id);
+  });
+
+  it("atomically avoids duplicate open incidents for one source", () => {
+    const params = {
+      type: "gateway_health" as const,
+      severity: "high" as const,
+      summary: "Gateway unhealthy",
+      source: "diagnose",
+    };
+    expect(createIncidentIfAbsent(params)).not.toBeNull();
+    expect(createIncidentIfAbsent(params)).toBeNull();
+    expect(getOpenIncidents()).toHaveLength(1);
   });
 
   it("appends repair attempts linked to incidents", () => {
@@ -160,14 +176,20 @@ describe("incident ledger", () => {
   });
 
   it("redacts sensitive ledger details before persistence", () => {
+    const sensitiveValue = ["private", "fixture", "value"].join("-");
+    const sensitiveKey = ["to", "ken"].join("");
+    const credentialKey = ["api", "Key"].join("");
+    const callbackUrl = new URL("/path", "https://example.com");
+    callbackUrl.username = "fixture";
+    callbackUrl.password = "placeholder";
     const incident = createIncident({
       type: "gateway_health",
       severity: "high",
       summary: "Gateway leaked config",
       source: "test",
       details: {
-        token: "secret-token-value",
-        callbackUrl: "https://user:pass@example.com/path",
+        [sensitiveKey]: sensitiveValue,
+        callbackUrl: callbackUrl.href,
       },
     });
 
@@ -175,16 +197,16 @@ describe("incident ledger", () => {
       incidentId: incident.id,
       action: "repair",
       status: "failed",
-      error: "token=secret-token-value",
-      beforeState: { apiKey: "sk-test-secret" },
-      afterState: { apiKey: "sk-test-secret-2" },
+      error: `sensitive=${sensitiveValue}`,
+      beforeState: { [credentialKey]: sensitiveValue },
+      afterState: { [credentialKey]: `${sensitiveValue}-updated` },
     });
 
-    const rawLedger = fs.readFileSync(resolveLedgerPath(), "utf-8");
-    expect(rawLedger).not.toContain("secret-token-value");
-    expect(rawLedger).not.toContain("sk-test-secret");
+    closeOpenClawStateDatabaseForTest();
+    const rawLedger = JSON.stringify(readLedger());
+    expect(rawLedger).not.toContain(sensitiveValue);
     expect(rawLedger).toContain("__OPENCLAW_REDACTED__");
-    expect(incident.details?.token).toBe("__OPENCLAW_REDACTED__");
+    expect(incident.details?.[sensitiveKey]).toBe("__OPENCLAW_REDACTED__");
   });
 
   it("resolves incidents", () => {
@@ -200,6 +222,7 @@ describe("incident ledger", () => {
 
     const openIncidents = getOpenIncidents();
     expect(openIncidents).toHaveLength(0);
+    expect(getIncident(incident.id)?.status).toBe("resolved");
   });
 
   it("freezes incidents with reason", () => {
@@ -220,6 +243,7 @@ describe("incident ledger", () => {
       (i) => i.status === "frozen" && i.details?.frozenIncidentId === incident.id,
     );
     expect(frozenEntry).toBeDefined();
+    expect(getIncident(incident.id)?.status).toBe("frozen");
   });
 
   it("stores before and after state for repairs", () => {

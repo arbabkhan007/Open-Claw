@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  listControlPlaneDiagnostics,
+  readControlPlaneDiagnostic,
+  writeControlPlaneDiagnostic,
+} from "../state/control-plane-diagnostic-store.js";
 
 /**
  * Baseline Capture and Compare
@@ -13,12 +20,9 @@ import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
  * Captures system state snapshots for regression detection.
  * Used after repairs, upgrades, or configuration changes.
  *
- * `openclaw baseline capture` - captures current state
- * `openclaw baseline compare` - compares current state to baseline
  */
 
-export const BASELINE_DIRNAME = "baselines";
-export const BASELINE_FILENAME = "baseline.json";
+const BASELINE_STORE_SCOPE = "control-plane-baselines";
 
 export type BaselineSeverity = "pass" | "warn" | "fail";
 
@@ -79,19 +83,6 @@ export type BaselineComparison = {
   improvements: string[];
 };
 
-function resolveBaselineDir(_config?: OpenClawConfig): string {
-  const stateDir = resolveStateDir();
-  const baselineDir = path.join(stateDir, BASELINE_DIRNAME);
-  if (!fs.existsSync(baselineDir)) {
-    fs.mkdirSync(baselineDir, { recursive: true });
-  }
-  return baselineDir;
-}
-
-function resolveBaselinePath(name: string, config?: OpenClawConfig): string {
-  return path.join(resolveBaselineDir(config), `${name}.json`);
-}
-
 export async function captureBaseline(options?: {
   name?: string;
   config?: OpenClawConfig;
@@ -99,28 +90,23 @@ export async function captureBaseline(options?: {
   skipPlugins?: boolean;
   gatewayTimeoutMs?: number;
 }): Promise<BaselineCapture> {
-  const config = options?.config;
+  const config = options?.config ?? getRuntimeConfig();
   const gatewayTimeoutMs = options?.gatewayTimeoutMs ?? 5000;
   const version = "1.0.0";
 
   const gateway: ComponentStatus = await checkGatewayStatus(options?.skipGateway, gatewayTimeoutMs);
   const channels: ComponentStatus = await checkChannelsStatus(config, gatewayTimeoutMs);
-  const agents: ComponentStatus = await checkAgentsStatus();
+  const agents: ComponentStatus = await checkAgentsStatus(config);
   const tasks: ComponentStatus = await checkTasksStatus(gatewayTimeoutMs);
   const locks: ComponentStatus = await checkLocksStatus();
-  const plugins: ComponentStatus = await checkPluginsStatus(options?.skipPlugins);
+  const plugins: ComponentStatus = await checkPluginsStatus(options?.skipPlugins, config);
 
-  const agentCount = listAgentEntries({}).length;
-  const channelCount = listConfiguredChannelIdsForReadOnlyScope({ config: config ?? {} }).length;
-  const pluginCount = loadPluginManifestRegistry({ config }).plugins.length;
+  const agentCount = readComponentCount(agents, "count");
+  const channelCount = readComponentCount(channels, "total");
+  const pluginCount = readComponentCount(plugins, "count");
+  const taskCount = readComponentCount(tasks, "count");
 
   const sessionCount = await countSessions(gatewayTimeoutMs);
-  let taskCount = 0;
-  try {
-    taskCount = await countActiveTasks(gatewayTimeoutMs);
-  } catch {
-    // task count unknown
-  }
 
   const baseline: BaselineCapture = {
     version,
@@ -144,8 +130,7 @@ export async function captureBaseline(options?: {
     },
   };
 
-  const configBindings = (config as { agents?: { default?: { bindings?: unknown } } })?.agents
-    ?.default?.bindings;
+  const configBindings = config.bindings;
   baseline.config = {
     agentBindings: Array.isArray(configBindings) ? configBindings.length : 0,
     configuredChannels: channelCount,
@@ -158,30 +143,21 @@ export async function captureBaseline(options?: {
 export async function saveBaseline(
   baseline: BaselineCapture,
   name: string,
-  config?: OpenClawConfig,
 ): Promise<string> {
-  const baselinePath = resolveBaselinePath(name, config);
-  fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 2), "utf-8");
-  return baselinePath;
+  writeControlPlaneDiagnostic(BASELINE_STORE_SCOPE, name, baseline, {
+    createdAt: Date.parse(baseline.timestamp),
+  });
+  return name;
 }
 
-export function loadBaseline(name: string, config?: OpenClawConfig): BaselineCapture | null {
-  const baselinePath = resolveBaselinePath(name, config);
-  if (!fs.existsSync(baselinePath)) {
-    return null;
-  }
-  const content = fs.readFileSync(baselinePath, "utf-8");
-  try {
-    return JSON.parse(content) as BaselineCapture;
-  } catch {
-    return null;
-  }
+export function loadBaseline(name: string): BaselineCapture | null {
+  return readControlPlaneDiagnostic<BaselineCapture>(BASELINE_STORE_SCOPE, name)?.payload ?? null;
 }
 
-export function listBaselines(config?: OpenClawConfig): string[] {
-  const baselineDir = resolveBaselineDir(config);
-  const files = fs.readdirSync(baselineDir).filter((f) => f.endsWith(".json"));
-  return files.map((f) => path.basename(f, ".json"));
+export function listBaselines(): string[] {
+  return listControlPlaneDiagnostics<BaselineCapture>(BASELINE_STORE_SCOPE).map(
+    (record) => record.key,
+  );
 }
 
 export async function compareBaseline(
@@ -193,7 +169,7 @@ export async function compareBaseline(
     gatewayTimeoutMs?: number;
   },
 ): Promise<BaselineComparison> {
-  const baseline = loadBaseline(baselineName, options?.config);
+  const baseline = loadBaseline(baselineName);
   if (!baseline) {
     throw new Error(`Baseline not found: ${baselineName}`);
   }
@@ -286,6 +262,11 @@ function statusToScore(status: BaselineSeverity): number {
   return 0;
 }
 
+function readComponentCount(component: ComponentStatus, field: string): number {
+  const value = component.details?.[field];
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
 async function checkGatewayStatus(skip?: boolean, timeoutMs = 5000): Promise<ComponentStatus> {
   if (skip) {
     return { status: "pass", message: "Skipped" };
@@ -307,7 +288,7 @@ async function checkGatewayStatus(skip?: boolean, timeoutMs = 5000): Promise<Com
       },
     };
   } catch (err) {
-    return { status: "fail", message: err instanceof Error ? err.message : "Unknown error" };
+    return { status: "fail", message: formatErrorMessage(err) };
   }
 }
 
@@ -452,20 +433,20 @@ async function checkChannelsStatus(
       details: { connected, total },
     };
   } catch (err) {
-    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+    return { status: "warn", message: formatErrorMessage(err) };
   }
 }
 
-async function checkAgentsStatus(): Promise<ComponentStatus> {
+async function checkAgentsStatus(config?: OpenClawConfig): Promise<ComponentStatus> {
   try {
-    const entries = listAgentEntries({});
+    const entries = listAgentEntries(config ?? {});
     return {
       status: "pass",
       message: `${entries.length} agents`,
       details: { count: entries.length },
     };
   } catch (err) {
-    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+    return { status: "warn", message: formatErrorMessage(err) };
   }
 }
 
@@ -474,7 +455,7 @@ async function checkTasksStatus(timeoutMs = 5000): Promise<ComponentStatus> {
     const count = await countActiveTasks(timeoutMs);
     return { status: "pass", message: `${count} active tasks`, details: { count } };
   } catch (err) {
-    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+    return { status: "warn", message: formatErrorMessage(err) };
   }
 }
 
@@ -495,21 +476,22 @@ async function checkLocksStatus(): Promise<ComponentStatus> {
       details: { files: lockFiles },
     };
   } catch (err) {
-    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+    return { status: "warn", message: formatErrorMessage(err) };
   }
 }
 
-async function checkPluginsStatus(skip?: boolean): Promise<ComponentStatus> {
+async function checkPluginsStatus(
+  skip: boolean | undefined,
+  config: OpenClawConfig,
+): Promise<ComponentStatus> {
   if (skip) {
     return { status: "pass", message: "Skipped" };
   }
 
   try {
-    const count = loadPluginManifestRegistry().plugins.length;
+    const count = loadPluginManifestRegistry({ config }).plugins.length;
     return { status: "pass", message: `${count} plugins loaded`, details: { count } };
   } catch (err) {
-    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+    return { status: "warn", message: formatErrorMessage(err) };
   }
 }
-
-export { resolveBaselineDir, resolveBaselinePath };

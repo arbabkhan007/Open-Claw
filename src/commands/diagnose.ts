@@ -1,8 +1,10 @@
 import { captureBaseline, listBaselines, saveBaseline } from "../baseline/capture.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { redactConfigObject } from "../config/redact-snapshot.js";
-import { createIncident, getOpenIncidents, readLedger } from "../incidents/ledger.js";
+import type { GatewayConfig } from "../config/types.gateway.js";
+import { createIncidentIfAbsent, getOpenIncidents, readLedger } from "../incidents/ledger.js";
 import { validatePluginContracts } from "../plugins/contract-validator.js";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { executeWithCacheAndStagger, listCachedProbes } from "../probes/cache.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { tasksAuditJsonPayloadForDiagnose } from "./tasks-json.js";
@@ -33,24 +35,25 @@ function summarizeIncident(incident: {
   };
 }
 
-function summarizeGatewayConfig(gatewayConfig: Record<string, unknown>) {
-  const { auth: _auth, ...safeGatewayConfig } = gatewayConfig;
-  return safeGatewayConfig;
+function summarizeGatewayConfig(gatewayConfig: GatewayConfig | undefined) {
+  return {
+    ...(gatewayConfig?.mode ? { mode: gatewayConfig.mode } : {}),
+    ...(gatewayConfig?.bind ? { bind: gatewayConfig.bind } : {}),
+    ...(gatewayConfig?.port !== undefined ? { port: gatewayConfig.port } : {}),
+    remoteConfigured: Boolean(gatewayConfig?.remote?.url),
+  };
 }
 
 export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
   const cfg = getRuntimeConfig();
-  const redactedGatewayConfig = redactConfigObject(cfg.gateway ?? {});
   const pluginContractsProbe = await executeWithCacheAndStagger(
     "plugin",
     "contracts",
     async () => validatePluginContracts({ config: cfg, strict: true }),
     {
-      config: cfg,
       forceRefresh: true,
       baseDelayMs: 0,
       jitterMs: 0,
-      ttlMs: opts.timeoutMs,
     },
   );
   const pluginContracts = pluginContractsProbe.result;
@@ -60,31 +63,23 @@ export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: Runtime
     skipGateway: opts.timeoutMs === 0,
     gatewayTimeoutMs: opts.timeoutMs,
   });
-  await saveBaseline(currentBaseline, DIAGNOSE_BASELINE_NAME, cfg);
+  await saveBaseline(currentBaseline, DIAGNOSE_BASELINE_NAME);
   if (!pluginContracts.ok || tasks.summary.combined.errors > 0) {
-    const existing = getOpenIncidents(cfg).some(
-      (incident) => incident.type === "gateway_health" && incident.source === "diagnose",
-    );
-    if (!existing) {
-      createIncident(
-        {
-          type: "gateway_health",
-          severity: pluginContracts.ok ? "medium" : "high",
-          summary: "Control-plane diagnose detected failing checks",
-          source: "diagnose",
-          details: {
-            pluginContractFindings: pluginContracts.findingCount,
-            taskErrors: tasks.summary.combined.errors,
-          },
-        },
-        cfg,
-      );
-    }
+    createIncidentIfAbsent({
+      type: "gateway_health",
+      severity: pluginContracts.ok ? "medium" : "high",
+      summary: "Control-plane diagnose detected failing checks",
+      source: "diagnose",
+      details: {
+        pluginContractFindings: pluginContracts.findingCount,
+        taskErrors: tasks.summary.combined.errors,
+      },
+    });
   }
-  const ledger = readLedger(cfg);
-  const openIncidents = getOpenIncidents(cfg);
-  const baselines = listBaselines(cfg);
-  const probeCache = listCachedProbes(cfg);
+  const ledger = readLedger();
+  const openIncidents = getOpenIncidents();
+  const baselines = listBaselines();
+  const probeCache = listCachedProbes();
   return {
     schemaVersion: DIAGNOSE_SCHEMA_VERSION,
     ok: pluginContracts.ok && tasks.summary.combined.errors === 0 && openIncidents.length === 0,
@@ -100,9 +95,9 @@ export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: Runtime
       writesIncidentLedger: true,
     },
     status: {
-      gateway: summarizeGatewayConfig(redactedGatewayConfig),
-      configuredChannels: Object.keys(cfg.channels ?? {}).length,
-      configuredAgents: Object.keys(cfg.agents ?? {}).length,
+      gateway: summarizeGatewayConfig(cfg.gateway),
+      configuredChannels: listConfiguredChannelIdsForReadOnlyScope({ config: cfg }).length,
+      configuredAgents: listAgentEntries(cfg).length,
     },
     plugins: {
       contracts: pluginContracts,

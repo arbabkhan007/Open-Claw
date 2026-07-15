@@ -1,7 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  clearControlPlaneDiagnostics,
+  deleteControlPlaneDiagnostic,
+  listControlPlaneDiagnostics,
+  readControlPlaneDiagnostic,
+  writeControlPlaneDiagnostic,
+} from "../state/control-plane-diagnostic-store.js";
 
 /**
  * Probe Cache - Isolated storage for channel/health probe results.
@@ -13,12 +17,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
  * - Separate from gateway readiness checks
  * - TTL-based expiration
  * - Non-blocking: cached results returned immediately if available
- * - Background refresh for stale entries
+ * - Stale-entry reporting for callers that choose to refresh
  */
 
-export const PROBE_CACHE_DIRNAME = "probe-cache";
 export const PROBE_CACHE_TTL_MS = 60_000; // 1 minute default TTL
 export const PROBE_CACHE_STALE_MS = 30_000; // Consider stale after 30s
+const PROBE_CACHE_STORE_SCOPE = "control-plane-probes";
 
 export type ProbeCacheEntry<T = unknown> = {
   id: string;
@@ -32,63 +36,55 @@ export type ProbeCacheEntry<T = unknown> = {
 
 export type ProbeCacheOptions = {
   ttlMs?: number;
-  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 };
 
-function resolveProbeCacheDir(_config?: OpenClawConfig): string {
-  const stateDir = resolveStateDir();
-  const cacheDir = path.join(stateDir, PROBE_CACHE_DIRNAME);
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
-  }
-  return cacheDir;
-}
-
-function resolveProbeCachePath(type: string, id: string, config?: OpenClawConfig): string {
-  const cacheDir = resolveProbeCacheDir(config);
-  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(cacheDir, `${type}-${safeId}.json`);
+function probeCacheKey(type: ProbeCacheEntry["type"], id: string): string {
+  return `${type}:${id}`;
 }
 
 function readProbeCacheEntry<T>(
-  type: string,
+  type: ProbeCacheEntry["type"],
   id: string,
-  config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): ProbeCacheEntry<T> | null {
-  const cachePath = resolveProbeCachePath(type, id, config);
-  if (!fs.existsSync(cachePath)) {
+  const record = readControlPlaneDiagnostic<ProbeCacheEntry<T>>(
+    PROBE_CACHE_STORE_SCOPE,
+    probeCacheKey(type, id),
+    env,
+  );
+  if (!record) {
     return null;
   }
-  try {
-    const content = fs.readFileSync(cachePath, "utf-8");
-    const entry = JSON.parse(content) as ProbeCacheEntry<T>;
-    const timestamp = new Date(entry.timestamp).getTime();
-    const age = Date.now() - timestamp;
-    if (age > entry.ttlMs) {
-      // Expired - remove and return null
-      fs.unlinkSync(cachePath);
-      return null;
-    }
-    return entry;
-  } catch {
+  const timestamp = Date.parse(record.payload.timestamp);
+  if (!Number.isFinite(timestamp) || Date.now() - timestamp > record.payload.ttlMs) {
+    deleteControlPlaneDiagnostic(PROBE_CACHE_STORE_SCOPE, record.key, {
+      createdAt: record.createdAt,
+      ...(env ? { env } : {}),
+    });
     return null;
   }
+  return record.payload;
 }
 
-function writeProbeCacheEntry<T>(entry: ProbeCacheEntry<T>, config?: OpenClawConfig): void {
-  const cachePath = resolveProbeCachePath(entry.type, entry.id, config);
-  fs.writeFileSync(cachePath, JSON.stringify(entry, null, 2), "utf-8");
+function writeProbeCacheEntry<T>(entry: ProbeCacheEntry<T>, env?: NodeJS.ProcessEnv): void {
+  writeControlPlaneDiagnostic(
+    PROBE_CACHE_STORE_SCOPE,
+    probeCacheKey(entry.type, entry.id),
+    entry,
+    { createdAt: Date.parse(entry.timestamp), ...(env ? { env } : {}) },
+  );
 }
 
 export function getCachedProbe<T>(
   type: ProbeCacheEntry["type"],
   id: string,
-  config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): {
   entry: ProbeCacheEntry<T> | null;
   isStale: boolean;
 } {
-  const entry = readProbeCacheEntry<T>(type, id, config);
+  const entry = readProbeCacheEntry<T>(type, id, env);
   if (!entry) {
     return { entry: null, isStale: false };
   }
@@ -113,67 +109,54 @@ export function setCachedProbe<T>(
     error: options?.error,
     durationMs: options?.durationMs,
   };
-  writeProbeCacheEntry(entry, options?.config);
+  writeProbeCacheEntry(entry, options?.env);
   return entry;
 }
 
 export function clearCachedProbe(
   type: ProbeCacheEntry["type"],
   id: string,
-  config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): void {
-  const cachePath = resolveProbeCachePath(type, id, config);
-  if (fs.existsSync(cachePath)) {
-    fs.unlinkSync(cachePath);
-  }
+  deleteControlPlaneDiagnostic(PROBE_CACHE_STORE_SCOPE, probeCacheKey(type, id), {
+    ...(env ? { env } : {}),
+  });
 }
 
 export function clearAllCachedProbes(
   type?: ProbeCacheEntry["type"],
-  config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): void {
-  const cacheDir = resolveProbeCacheDir(config);
-  const files = fs.readdirSync(cacheDir);
-  for (const file of files) {
-    if (type) {
-      if (file.startsWith(`${type}-`)) {
-        fs.unlinkSync(path.join(cacheDir, file));
-      }
-    } else {
-      fs.unlinkSync(path.join(cacheDir, file));
-    }
-  }
+  clearControlPlaneDiagnostics(PROBE_CACHE_STORE_SCOPE, {
+    ...(type ? { keyPrefix: `${type}:` } : {}),
+    ...(env ? { env } : {}),
+  });
 }
 
 export function listCachedProbes(
-  config?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): Array<{ type: string; id: string; timestamp: string; stale: boolean }> {
-  const cacheDir = resolveProbeCacheDir(config);
-  const files = fs.readdirSync(cacheDir);
-  const results: Array<{ type: string; id: string; timestamp: string; stale: boolean }> = [];
-  for (const file of files) {
-    const match = file.match(/^([a-z]+)-(.+)\.json$/);
-    if (!match) {
-      continue;
-    }
-    const [, type, id] = match;
-    const cachePath = path.join(cacheDir, file);
-    try {
-      const content = fs.readFileSync(cachePath, "utf-8");
-      const entry = JSON.parse(content) as ProbeCacheEntry;
-      const timestamp = new Date(entry.timestamp).getTime();
-      const age = Date.now() - timestamp;
-      results.push({
-        type,
-        id,
-        timestamp: entry.timestamp,
-        stale: age > PROBE_CACHE_STALE_MS,
-      });
-    } catch {
-      // ignore parse errors
-    }
-  }
-  return results;
+  return listControlPlaneDiagnostics<ProbeCacheEntry>(PROBE_CACHE_STORE_SCOPE, env).flatMap(
+    (record) => {
+      const entry = record.payload;
+      const timestamp = Date.parse(entry.timestamp);
+      if (!Number.isFinite(timestamp) || Date.now() - timestamp > entry.ttlMs) {
+        deleteControlPlaneDiagnostic(PROBE_CACHE_STORE_SCOPE, record.key, {
+          createdAt: record.createdAt,
+          ...(env ? { env } : {}),
+        });
+        return [];
+      }
+      return [
+        {
+          type: entry.type,
+          id: entry.id,
+          timestamp: entry.timestamp,
+          stale: Date.now() - timestamp > PROBE_CACHE_STALE_MS,
+        },
+      ];
+    },
+  );
 }
 
 /**
@@ -228,7 +211,7 @@ export async function executeWithCacheAndStagger<T>(
 ): Promise<ProbeResult<T>> {
   // Check cache first (unless force refresh)
   if (!options?.forceRefresh) {
-    const { entry, isStale } = getCachedProbe<T>(type, id, options?.config);
+    const { entry, isStale } = getCachedProbe<T>(type, id, options?.env);
     if (entry) {
       if (entry.error) {
         throw new Error(`Cached ${type} probe ${id} failed: ${entry.error}`);
@@ -243,46 +226,51 @@ export async function executeWithCacheAndStagger<T>(
     }
   }
 
-  // Calculate stagger delay based on channel/probe type
-  const attempt = 1;
-  const delayMs = calculateStaggerDelay(attempt, options);
-
-  // Apply stagger delay before executing
-  if (delayMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  const maxAttempts = options?.maxAttempts ?? 1;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new RangeError("Probe maxAttempts must be a positive integer");
   }
 
   const startTime = Date.now();
-  try {
-    const result = await executor();
-    const durationMs = Date.now() - startTime;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const delayMs = calculateStaggerDelay(attempt, options);
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
 
-    // Cache successful result
-    setCachedProbe(type, id, result, {
-      ...options,
-      durationMs,
-    });
+    try {
+      const result = await executor();
+      const durationMs = Date.now() - startTime;
 
-    return {
-      result,
-      cached: false,
-      stale: false,
-      durationMs,
-    };
-  } catch (err) {
-    const durationMs = Date.now() - startTime;
-    const error = err instanceof Error ? err.message : String(err);
+      setCachedProbe(type, id, result, {
+        ...options,
+        durationMs,
+      });
 
-    // Cache error result with shorter TTL
-    setCachedProbe(type, id, null as T, {
-      ...options,
-      ttlMs: Math.min(5000, options?.ttlMs ?? PROBE_CACHE_TTL_MS),
-      error,
-      durationMs,
-    });
+      return {
+        result,
+        cached: false,
+        stale: false,
+        durationMs,
+      };
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        continue;
+      }
+      const durationMs = Date.now() - startTime;
+      const error = formatErrorMessage(err);
 
-    throw err;
+      setCachedProbe(type, id, null as T, {
+        ...options,
+        ttlMs: Math.min(5000, options?.ttlMs ?? PROBE_CACHE_TTL_MS),
+        error,
+        durationMs,
+      });
+      throw err;
+    }
   }
+
+  throw new Error("Probe execution exhausted without a result");
 }
 
 /**
@@ -295,12 +283,15 @@ export async function executeProbesWithStagger<T>(
   options?: {
     concurrency?: number;
     staggerMs?: number;
-    cacheConfig?: OpenClawConfig;
+    cacheEnv?: NodeJS.ProcessEnv;
     skipCache?: boolean;
   },
 ): Promise<Map<string, ProbeResult<T>>> {
   const concurrency = options?.concurrency ?? 5;
   const staggerMs = options?.staggerMs ?? 100;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError("Probe concurrency must be a positive integer");
+  }
 
   const results = new Map<string, ProbeResult<T>>();
 
@@ -308,31 +299,18 @@ export async function executeProbesWithStagger<T>(
     const batch = items.slice(i, i + concurrency);
 
     // Execute batch in parallel
-    const batchResults = await Promise.allSettled(
+    const batchResults = await Promise.all(
       batch.map(async (item) => {
         const result = await executeWithCacheAndStagger(item.type, item.id, item.executor, {
-          config: options?.cacheConfig,
+          env: options?.cacheEnv,
           forceRefresh: options?.skipCache,
         });
-        return { id: item.id, result };
+        return { key: probeCacheKey(item.type, item.id), result };
       }),
     );
 
-    for (const [idx, settled] of batchResults.entries()) {
-      if (settled.status === "fulfilled") {
-        results.set(settled.value.id, settled.value.result);
-      } else {
-        const item = batch[idx];
-        if (!item) {
-          continue;
-        }
-        results.set(item.id, {
-          result: null as T,
-          cached: false,
-          stale: false,
-          durationMs: 0,
-        });
-      }
+    for (const item of batchResults) {
+      results.set(item.key, item.result);
     }
 
     // Stagger between batches (but not after last batch)
@@ -343,5 +321,3 @@ export async function executeProbesWithStagger<T>(
 
   return results;
 }
-
-export { resolveProbeCacheDir };

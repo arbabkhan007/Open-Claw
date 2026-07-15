@@ -623,6 +623,7 @@ export function createSessionsSendTool(opts?: {
         sourceSessionKey: requesterSessionKey,
         sourceChannel: requesterChannel,
         handoffId,
+        replyTo: requesterSessionKey,
         sourceTool: "sessions_send",
       };
       const sendParams = {

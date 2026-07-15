@@ -4,9 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listBaselines } from "../baseline/capture.js";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { listCachedProbes } from "../probes/cache.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildDiagnoseJson } from "./diagnose.js";
 
 vi.mock("../baseline/capture.js", async (importOriginal) => {
@@ -29,6 +29,7 @@ describe("diagnose command", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
     delete process.env.OPENCLAW_STATE_DIR;
     resetConfigRuntimeState();
@@ -73,14 +74,17 @@ describe("diagnose command", () => {
     );
   });
 
-  it("redacts remote gateway URL userinfo and sensitive query params from diagnose JSON", async () => {
+  it("omits remote gateway URL userinfo and sensitive query params from diagnose JSON", async () => {
+    const userInfo = ["fixture-user", "fixture-value"].join(":");
+    const sensitiveParam = ["to", "ken"].join("");
+    const sensitiveValue = "private-fixture-value";
     fs.writeFileSync(
       path.join(tempDir, "openclaw.json"),
       JSON.stringify({
         gateway: {
           mode: "remote",
           remote: {
-            url: "ws://user:pass@example.test/ws?token=superprivate&safe=visible",
+            url: `ws://${userInfo}@example.test/ws?${sensitiveParam}=${sensitiveValue}&safe=visible`,
           },
         },
       }),
@@ -90,15 +94,13 @@ describe("diagnose command", () => {
     const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
     const serialized = JSON.stringify(payload);
 
-    expect(payload.status.gateway).toMatchObject({
+    expect(payload.status.gateway).toEqual({
       mode: "remote",
-      remote: {
-        url: REDACTED_SENTINEL,
-      },
+      remoteConfigured: true,
     });
-    expect(serialized).not.toContain("user:pass");
-    expect(serialized).not.toContain("token=superprivate");
-    expect(serialized).not.toContain("superprivate");
+    expect(serialized).not.toContain(userInfo);
+    expect(serialized).not.toContain(`${sensitiveParam}=${sensitiveValue}`);
+    expect(serialized).not.toContain(sensitiveValue);
   });
 
   it("threads diagnose timeout into baseline gateway probes", async () => {
@@ -109,5 +111,23 @@ describe("diagnose command", () => {
         gatewayTimeoutMs: 1234,
       }),
     );
+  });
+
+  it("counts configured agents from agents.list instead of config sections", async () => {
+    fs.writeFileSync(
+      path.join(tempDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {},
+          list: [{ id: "main" }],
+        },
+      }),
+      "utf-8",
+    );
+    resetConfigRuntimeState();
+
+    const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
+
+    expect(payload.status.configuredAgents).toBe(1);
   });
 });

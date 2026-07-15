@@ -1,7 +1,23 @@
-# Diagnose JSON Contract
+---
+summary: "Operator contract for `openclaw diagnose` control-plane reports"
+read_when:
+  - You need a versioned control-plane report for automation or support
+  - You need to understand diagnose redaction and SQLite persistence
+title: "Diagnose JSON contract"
+---
+
+# Diagnose JSON contract
 
 `openclaw diagnose --json` emits an operator-facing snapshot for control-plane triage. The
 payload is a stable contract, not a raw dump of local configuration or runtime state.
+
+```bash
+openclaw diagnose
+openclaw diagnose --json
+openclaw diagnose --json --timeout 5000
+```
+
+`--timeout <ms>` sets the Gateway probe timeout and defaults to `10000`.
 
 The current schema is `openclaw-diagnose/v1`. Consumers should check `schemaVersion` before
 depending on field names or nested shapes.
@@ -12,7 +28,7 @@ Top-level fields:
 - `ok`: true only when plugin contract validation, task audit, and open-incident checks are clean.
 - `timestamp`: ISO-8601 generation time.
 - `redaction`: explicit guarantees for omitted sensitive material.
-- `persistence`: explicit declaration of state written while building the report.
+- `persistence`: explicit declaration of shared SQLite state written while building the report.
 - `status`: redacted gateway summary plus configured channel and agent counts.
 - `plugins.contracts`: strict plugin contract validation result.
 - `tasks`: task audit summary intended for diagnose output.
@@ -31,8 +47,8 @@ Redaction guarantees:
 
 Persistence behavior:
 
-- `diagnose --json` may write a latest baseline snapshot.
-- It may refresh probe-cache entries for diagnostic probes.
-- It may create a summarized incident ledger entry when checks fail.
+- `diagnose --json` may write a latest baseline snapshot to the shared state database.
+- It may refresh shared-state probe-cache entries for diagnostic probes.
+- It may create a summarized shared-state incident ledger entry when checks fail.
 - It must not run repair commands, restart the gateway, update plugins, rotate credentials, or start
   live channels. Unsafe actions are listed only so an operator can choose an explicit next step.

@@ -188,8 +188,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .description("Emit a unified control-plane diagnosis payload")
     .option("--json", "Output JSON instead of text", false)
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
-    .option("--verbose", "Verbose logging", false)
-    .option("--debug", "Alias for --verbose", false)
     .addHelpText(
       "after",
       () =>

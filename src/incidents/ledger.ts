@@ -1,21 +1,21 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import {
+  listControlPlaneDiagnostics,
+  writeControlPlaneDiagnostic,
+  writeControlPlaneDiagnosticWhen,
+} from "../state/control-plane-diagnostic-store.js";
 
 /**
  * Incident Ledger - Persistent audit trail for repairs and incidents.
  *
- * Stores JSONL records for each repair attempt, enabling:
+ * Stores records in the shared state database for each repair attempt, enabling:
  * - Repair audit trails with timestamps and outcomes
  * - Circuit breaker pattern for repeated failures
  * - Delta reports comparing before/after state
  */
 
-export const LEDGER_DIRNAME = "incidents";
-export const LEDGER_FILENAME = "ledger.jsonl";
+const INCIDENT_LEDGER_STORE_SCOPE = "control-plane-incidents";
 
 export type IncidentSeverity = "low" | "medium" | "high" | "critical";
 export type IncidentStatus = "open" | "resolved" | "frozen";
@@ -63,33 +63,22 @@ export type IncidentWithRepairs = LedgerEntry & {
   circuitBreakerTripped: boolean;
 };
 
-function resolveLedgerDir(_config?: OpenClawConfig): string {
-  const stateDir = resolveStateDir();
-  const ledgerDir = path.join(stateDir, LEDGER_DIRNAME);
-  if (!fs.existsSync(ledgerDir)) {
-    fs.mkdirSync(ledgerDir, { recursive: true });
-  }
-  return ledgerDir;
+let lastLedgerTimestampMs = 0;
+
+function nextLedgerTimestampMs(): number {
+  lastLedgerTimestampMs = Math.max(Date.now(), lastLedgerTimestampMs + 1);
+  return lastLedgerTimestampMs;
 }
 
-function resolveLedgerPath(config?: OpenClawConfig): string {
-  return path.join(resolveLedgerDir(config), LEDGER_FILENAME);
-}
-
-function generateId(): string {
-  const timestamp = Date.now().toString(36);
+function generateId(timestampMs: number): string {
+  const timestamp = timestampMs.toString(36);
   const random = Math.random().toString(36).slice(2, 10);
   return `${timestamp}-${random}`;
 }
 
-function parseJsonlLine(line: string): LedgerEntry | RepairAttempt | null {
-  try {
-    const parsed = JSON.parse(line);
-    if (parsed && typeof parsed === "object" && "id" in parsed && "timestamp" in parsed) {
-      return parsed as LedgerEntry | RepairAttempt;
-    }
-  } catch {
-    // ignore parse errors
+function parseLedgerRecord(value: unknown): LedgerEntry | RepairAttempt | null {
+  if (value && typeof value === "object" && "id" in value && "timestamp" in value) {
+    return value as LedgerEntry | RepairAttempt;
   }
   return null;
 }
@@ -116,57 +105,117 @@ function redactLedgerRecord<T extends Record<string, unknown>>(record: T): T {
   return redactLedgerValue(redactConfigObject(record)) as T;
 }
 
+function buildLedgerEntry(entry: Omit<LedgerEntry, "id" | "timestamp">): {
+  entry: LedgerEntry;
+  timestampMs: number;
+} {
+  const timestampMs = nextLedgerTimestampMs();
+  return {
+    entry: {
+      ...entry,
+      details: entry.details ? redactLedgerRecord(entry.details) : undefined,
+      id: generateId(timestampMs),
+      timestamp: new Date(timestampMs).toISOString(),
+    },
+    timestampMs,
+  };
+}
+
 export function appendLedgerEntry(
   entry: Omit<LedgerEntry, "id" | "timestamp">,
-  config?: OpenClawConfig,
 ): LedgerEntry {
-  const ledgerPath = resolveLedgerPath(config);
-  const fullEntry: LedgerEntry = {
-    ...entry,
-    details: entry.details ? redactLedgerRecord(entry.details) : undefined,
-    id: generateId(),
-    timestamp: new Date().toISOString(),
-  };
-  fs.appendFileSync(ledgerPath, JSON.stringify(fullEntry) + "\n", "utf-8");
+  const { entry: fullEntry, timestampMs } = buildLedgerEntry(entry);
+  writeControlPlaneDiagnostic(
+    INCIDENT_LEDGER_STORE_SCOPE,
+    `incident:${fullEntry.id}`,
+    fullEntry,
+    { createdAt: timestampMs },
+  );
   return fullEntry;
+}
+
+function listClosedIncidentIds(incidents: LedgerEntry[]): Set<string> {
+  return new Set(
+    incidents
+      .filter((incident) => incident.status === "resolved" || incident.status === "frozen")
+      .map((incident) => {
+        const details = incident.details ?? {};
+        return typeof details.resolvedIncidentId === "string"
+          ? details.resolvedIncidentId
+          : typeof details.frozenIncidentId === "string"
+            ? details.frozenIncidentId
+            : undefined;
+      })
+      .filter((id): id is string => Boolean(id)),
+  );
+}
+
+function resolveIncidentStatus(incident: LedgerEntry, incidents: LedgerEntry[]): IncidentStatus {
+  const marker = incidents.toReversed().find((candidate) => {
+    const details = candidate.details ?? {};
+    return (
+      details.resolvedIncidentId === incident.id || details.frozenIncidentId === incident.id
+    );
+  });
+  return marker?.status ?? incident.status;
+}
+
+export function createIncidentIfAbsent(
+  params: Omit<LedgerEntry, "id" | "timestamp" | "status">,
+): LedgerEntry | null {
+  const { entry, timestampMs } = buildLedgerEntry({ ...params, status: "open" });
+  const written = writeControlPlaneDiagnosticWhen(
+    INCIDENT_LEDGER_STORE_SCOPE,
+    `incident:${entry.id}`,
+    entry,
+    (records) => {
+      const incidents = records.flatMap((record) => {
+        const parsed = parseLedgerRecord(record.payload);
+        return parsed && !("incidentId" in parsed) ? [parsed] : [];
+      });
+      const closedIncidentIds = listClosedIncidentIds(incidents);
+      return !incidents.some(
+        (incident) =>
+          incident.status === "open" &&
+          !closedIncidentIds.has(incident.id) &&
+          incident.type === params.type &&
+          incident.source === params.source,
+      );
+    },
+    { createdAt: timestampMs },
+  );
+  return written ? entry : null;
 }
 
 export function appendRepairAttempt(
   repair: Omit<RepairAttempt, "id" | "timestamp">,
-  config?: OpenClawConfig,
 ): RepairAttempt {
-  const ledgerPath = resolveLedgerPath(config);
+  const timestampMs = nextLedgerTimestampMs();
   const fullRepair: RepairAttempt = {
     ...repair,
     error: repair.error ? REDACTED_SENTINEL : undefined,
     beforeState: repair.beforeState ? redactLedgerRecord(repair.beforeState) : undefined,
     afterState: repair.afterState ? redactLedgerRecord(repair.afterState) : undefined,
-    id: generateId(),
-    timestamp: new Date().toISOString(),
+    id: generateId(timestampMs),
+    timestamp: new Date(timestampMs).toISOString(),
   };
-  fs.appendFileSync(ledgerPath, JSON.stringify(fullRepair) + "\n", "utf-8");
+  writeControlPlaneDiagnostic(
+    INCIDENT_LEDGER_STORE_SCOPE,
+    `repair:${fullRepair.id}`,
+    fullRepair,
+    { createdAt: timestampMs },
+  );
   return fullRepair;
 }
 
-export function readLedger(config?: OpenClawConfig): {
+export function readLedger(): {
   incidents: LedgerEntry[];
   repairs: RepairAttempt[];
 } {
-  const ledgerPath = resolveLedgerPath(config);
   const incidents: LedgerEntry[] = [];
   const repairs: RepairAttempt[] = [];
-
-  if (!fs.existsSync(ledgerPath)) {
-    return { incidents, repairs };
-  }
-
-  const content = fs.readFileSync(ledgerPath, "utf-8");
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const parsed = parseJsonlLine(trimmed);
+  for (const record of listControlPlaneDiagnostics<unknown>(INCIDENT_LEDGER_STORE_SCOPE)) {
+    const parsed = parseLedgerRecord(record.payload);
     if (!parsed) {
       continue;
     }
@@ -181,14 +230,11 @@ export function readLedger(config?: OpenClawConfig): {
   return { incidents, repairs };
 }
 
-export function getIncident(id: string, config?: OpenClawConfig): IncidentWithRepairs | null {
-  const { incidents, repairs } = readLedger(config);
-  const incident = incidents.find((i) => i.id === id);
-  if (!incident) {
-    return null;
-  }
-
-  const incidentRepairs = repairs.filter((r) => r.incidentId === id);
+function buildIncidentWithRepairs(
+  incident: LedgerEntry,
+  repairs: RepairAttempt[],
+): IncidentWithRepairs {
+  const incidentRepairs = repairs.filter((repair) => repair.incidentId === incident.id);
   const attemptCount = incidentRepairs.length;
   const lastAttemptAt =
     incidentRepairs.length > 0 ? incidentRepairs[incidentRepairs.length - 1].timestamp : undefined;
@@ -210,29 +256,27 @@ export function getIncident(id: string, config?: OpenClawConfig): IncidentWithRe
   };
 }
 
-export function getOpenIncidents(config?: OpenClawConfig): IncidentWithRepairs[] {
-  const { incidents } = readLedger(config);
-  const closedIncidentIds = new Set(
-    incidents
-      .filter((incident) => incident.status === "resolved" || incident.status === "frozen")
-      .map((incident) => {
-        const details = incident.details ?? {};
-        return typeof details.resolvedIncidentId === "string"
-          ? details.resolvedIncidentId
-          : typeof details.frozenIncidentId === "string"
-            ? details.frozenIncidentId
-            : undefined;
-      })
-      .filter((id): id is string => Boolean(id)),
-  );
-  return incidents
-    .filter((i) => i.status === "open" && !closedIncidentIds.has(i.id))
-    .map((i) => getIncident(i.id, config))
-    .filter((i): i is IncidentWithRepairs => i !== null);
+export function getIncident(id: string): IncidentWithRepairs | null {
+  const { incidents, repairs } = readLedger();
+  const incident = incidents.find((entry) => entry.id === id);
+  return incident
+    ? buildIncidentWithRepairs(
+        { ...incident, status: resolveIncidentStatus(incident, incidents) },
+        repairs,
+      )
+    : null;
 }
 
-export function resolveIncident(id: string, config?: OpenClawConfig): boolean {
-  const incident = getIncident(id, config);
+export function getOpenIncidents(): IncidentWithRepairs[] {
+  const { incidents, repairs } = readLedger();
+  const closedIncidentIds = listClosedIncidentIds(incidents);
+  return incidents
+    .filter((i) => i.status === "open" && !closedIncidentIds.has(i.id))
+    .map((incident) => buildIncidentWithRepairs(incident, repairs));
+}
+
+export function resolveIncident(id: string): boolean {
+  const incident = getIncident(id);
   if (!incident) {
     return false;
   }
@@ -246,13 +290,12 @@ export function resolveIncident(id: string, config?: OpenClawConfig): boolean {
       source: "incident-ledger",
       details: { resolvedIncidentId: id },
     },
-    config,
   );
   return true;
 }
 
-export function freezeIncident(id: string, reason: string, config?: OpenClawConfig): boolean {
-  const incident = getIncident(id, config);
+export function freezeIncident(id: string, reason: string): boolean {
+  const incident = getIncident(id);
   if (!incident) {
     return false;
   }
@@ -266,7 +309,6 @@ export function freezeIncident(id: string, reason: string, config?: OpenClawConf
       source: "incident-ledger",
       details: { frozenIncidentId: id, reason },
     },
-    config,
   );
   return true;
 }
@@ -281,14 +323,12 @@ export function createIncident(
     sessionId?: string;
     source: string;
   },
-  config?: OpenClawConfig,
 ): LedgerEntry {
   return appendLedgerEntry(
     {
       ...params,
       status: "open",
     },
-    config,
   );
 }
 
@@ -302,9 +342,6 @@ export function recordRepairAttempt(
     beforeState?: Record<string, unknown>;
     afterState?: Record<string, unknown>;
   },
-  config?: OpenClawConfig,
 ): RepairAttempt {
-  return appendRepairAttempt(params, config);
+  return appendRepairAttempt(params);
 }
-
-export { resolveLedgerDir, resolveLedgerPath };

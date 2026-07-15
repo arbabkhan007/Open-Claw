@@ -136,9 +136,10 @@ const isDistRootAlias = __filename.includes(
 // source root alias with dist compat/runtime shims can split singleton deps
 // (for example matrix-js-sdk) across two module graphs.
 const shouldPreferSourceGraph =
-  process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1" ||
-  Boolean(process.env.VITEST) ||
-  (!isDistRootAlias && process.env.NODE_ENV !== "production");
+  !isDistRootAlias &&
+  (process.env.NODE_ENV !== "production" ||
+    Boolean(process.env.VITEST) ||
+    process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
 
 function emptyPluginConfigSchema() {
   function error(message) {

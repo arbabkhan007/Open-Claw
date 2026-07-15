@@ -4,6 +4,7 @@ import {
   parseAgentsListRouteArgs,
   parseConfigGetRouteArgs,
   parseConfigUnsetRouteArgs,
+  parseDiagnoseRouteArgs,
   parseGatewayStatusRouteArgs,
   parseHealthRouteArgs,
   parseModelsListRouteArgs,
@@ -13,6 +14,17 @@ import {
 } from "./route-args.js";
 
 describe("route-args", () => {
+  it("parses diagnose timeout consistently with the Commander default", () => {
+    expect(parseDiagnoseRouteArgs(["node", "openclaw", "diagnose", "--json"])).toEqual({
+      json: true,
+      timeoutMs: 10_000,
+    });
+    expect(
+      parseDiagnoseRouteArgs(["node", "openclaw", "diagnose", "--timeout", "5000"]),
+    ).toEqual({ json: false, timeoutMs: 5000 });
+    expect(parseDiagnoseRouteArgs(["node", "openclaw", "diagnose", "--timeout"])).toBeNull();
+  });
+
   it("parses health and status route args", () => {
     expect(
       parseHealthRouteArgs(["node", "openclaw", "health", "--json", "--timeout", "5000"]),

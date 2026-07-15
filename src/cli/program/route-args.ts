@@ -85,7 +85,7 @@ export function parseDiagnoseRouteArgs(argv: string[]) {
   }
   return {
     json: hasFlag(argv, "--json"),
-    timeoutMs,
+    timeoutMs: timeoutMs ?? 10_000,
   };
 }
 

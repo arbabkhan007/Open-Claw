@@ -46,6 +46,7 @@ openclaw plugins doctor
 openclaw plugins init <id> [--name <name>] [--type tool|provider] [--directory <path>]
 openclaw plugins build [--entry <path>] [--check]
 openclaw plugins validate [--entry <path>]
+openclaw plugins contracts validate [--strict] [--json]
 openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
 openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
@@ -498,6 +499,17 @@ See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capabil
 <Note>
 The `--json` flag outputs a machine-readable report suitable for scripting and auditing. `inspect --all` renders a fleet-wide table with shape, capability kinds, compatibility notices, bundle capabilities, and hook summary columns. `info` is an alias for `inspect`.
 </Note>
+
+## Contract validation
+
+```bash
+openclaw plugins contracts validate
+openclaw plugins contracts validate --strict --json
+```
+
+Contract validation reads plugin manifests without loading plugin runtime code. It reports manifest
+diagnostics and mismatches between `toolMetadata` and `contracts.tools`. `--strict` also warns when a
+declared tool contract has no matching metadata; errors still determine the command exit status.
 
 ## Doctor
 

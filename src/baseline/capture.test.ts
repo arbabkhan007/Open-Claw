@@ -56,6 +56,7 @@ describe("captureBaseline", () => {
 
   it("uses supported gateway contracts and applies the requested gateway timeout", async () => {
     const baseline = await captureBaseline({
+      config: {},
       gatewayTimeoutMs: 1234,
       skipPlugins: true,
     });
@@ -74,8 +75,6 @@ describe("captureBaseline", () => {
       { method: "tasks.list", timeoutMs: 1234 },
       { method: "tasks.list", timeoutMs: 1234 },
       { method: "sessions.list", timeoutMs: 1234 },
-      { method: "tasks.list", timeoutMs: 1234 },
-      { method: "tasks.list", timeoutMs: 1234 },
     ]);
     expect(baseline.metrics.sessionCount).toBe(3);
     expect(baseline.metrics.activeTaskCount).toBe(3);
@@ -87,5 +86,27 @@ describe("captureBaseline", () => {
       status: "warn",
       message: "1/2 channels connected",
     });
+  });
+
+  it("redacts sensitive gateway failures from captured component messages", async () => {
+    const sensitiveValue = ["private", "fixture", "value"].join("-");
+    callGatewayMock.mockImplementation(
+      async ({ method }: { method: string; params?: Record<string, unknown> }) => {
+        if (method === "status") {
+          throw new Error(`Authorization: Bearer ${sensitiveValue}`);
+        }
+        if (method === "channels.status") {
+          return {};
+        }
+        if (method === "sessions.list" || method === "tasks.list") {
+          return {};
+        }
+        throw new Error(`unexpected gateway method: ${method}`);
+      },
+    );
+
+    const baseline = await captureBaseline({ config: {}, skipPlugins: true });
+    expect(baseline.components.gateway.message).toContain("Authorization: Bearer");
+    expect(baseline.components.gateway.message).not.toContain(sensitiveValue);
   });
 });
