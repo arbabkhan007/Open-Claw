@@ -91,6 +91,7 @@ type TelegramReplyQuoteForSend = {
 type TelegramDeliveryTextChunk = {
   text: string;
   plainText: string;
+  sourcePlainText?: string;
   textMode: "html";
 };
 
@@ -237,7 +238,7 @@ async function deliverTextReply(params: {
     markDelivered,
     sendChunk: async ({ chunk, isFirstChunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
       const includeQuoteMetadata = params.quoteOnlyOnFirstChunk !== true || isFirstChunk;
-      const messageId = await sendTelegramText(
+      const { messageId, deliveredText } = await sendTelegramText(
         params.bot,
         params.chatId,
         chunk.text,
@@ -251,6 +252,7 @@ async function deliverTextReply(params: {
           thread: params.thread,
           textMode: chunk.textMode,
           plainText: chunk.plainText,
+          sourcePlainText: chunk.sourcePlainText,
           richMessages: params.richMessages,
           linkPreview: params.linkPreview,
           tableMode: params.tableMode,
@@ -261,7 +263,7 @@ async function deliverTextReply(params: {
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
-      await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
+      await params.progress.promptContext?.accept({ messageId, text: deliveredText });
     },
   });
   return firstDeliveredMessageId;

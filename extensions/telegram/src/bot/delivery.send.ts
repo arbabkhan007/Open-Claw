@@ -100,13 +100,14 @@ export async function sendTelegramText(
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
+    sourcePlainText?: string;
     richMessages?: boolean;
     linkPreview?: boolean;
     tableMode?: MarkdownTableMode;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<{ messageId: number; deliveredText: string }> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteMessageId: opts?.replyQuoteMessageId,
@@ -122,6 +123,7 @@ export async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
+  const sourcePlainText = opts?.sourcePlainText ?? fallbackText;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async (plainText: string = fallbackText) => {
     const res = await sendTelegramWithThreadFallback({
@@ -137,7 +139,7 @@ export async function sendTelegramText(
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
-    return res.message_id;
+    return { messageId: res.message_id, deliveredText: plainText };
   };
 
   if (opts?.richMessages === true) {
@@ -175,10 +177,11 @@ export async function sendTelegramText(
           }),
       });
       runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-      return res.message_id;
+      return { messageId: res.message_id, deliveredText: fallbackText };
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
         html: richPlan.richMessage.html,
+        sourcePlainText,
         err,
         context: "sendRichMessage",
         warn: (message) => runtime.log?.(message),
@@ -216,7 +219,7 @@ export async function sendTelegramText(
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
+    return { messageId: res.message_id, deliveredText: fallbackText };
   } catch (err) {
     const errText = formatErrorMessage(err);
     if (isTelegramHtmlParseError(err) || EMPTY_TEXT_ERR_RE.test(errText)) {

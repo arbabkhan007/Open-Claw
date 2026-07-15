@@ -1437,6 +1437,64 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
   });
 
+  it("uses the source chunk and preserves options when rich reply parse fallback sends plain text", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 17,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createHtmlParseError("sendRichMessage"));
+    const text = [
+      "Вот что я бы ему рекомендовал, если задача именно понять, есть ли превышения.",
+      "",
+      "**[Narda AMS-8061](https://www.narda-sts.com/en/products/emf-monitors/ams-8061/)** или **[Wavecontrol MonitEM-IoT](https://wavecontrol.cn/en/products/monitem-iot/)**.",
+    ].join("\n");
+
+    await deliverWith({
+      replies: [
+        {
+          text,
+          replyToId: "77",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Open", url: "https://example.com" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+      linkPreview: false,
+      silent: true,
+      replyToMode: "all",
+      replyQuoteMessageId: 77,
+      replyQuoteText: "quoted opening",
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+    expect(firstSendText(sendMessage).startsWith("Вот что")).toBe(true);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      link_preview_options: { is_disabled: true },
+      disable_notification: true,
+      message_thread_id: 42,
+      reply_parameters: {
+        message_id: 77,
+        quote: "quoted opening",
+        allow_sending_without_reply: true,
+      },
+      reply_markup: {
+        inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+      },
+    });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+  });
+
   it("falls back to plain text when a rich message is rejected for empty rich content", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -1472,12 +1530,12 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage });
     Object.assign(bot.api.raw, { sendRichMessage });
 
-    const messageId = await sendTelegramText(bot, "123", "#", runtime, {
+    const result = await sendTelegramText(bot, "123", "#", runtime, {
       richMessages: true,
       textMode: "markdown",
     });
 
-    expect(messageId).toBe(16);
+    expect(result).toEqual({ messageId: 16, deliveredText: "#" });
     expect(sendRichMessage).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
@@ -2147,6 +2205,30 @@ describe("deliverReplies", () => {
     await promptContextSequence.finish();
 
     expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
+  });
+
+  it("records the source text after rich parse fallback sends a plain reply", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 305, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createHtmlParseError("sendRichMessage"));
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    const text = "**hi**";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstSendText(sendMessage)).toBe(text);
+    expect(observer).toHaveBeenCalledWith({ messageId: 305, text });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

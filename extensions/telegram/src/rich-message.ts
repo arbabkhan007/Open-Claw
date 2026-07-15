@@ -57,6 +57,7 @@ export type TelegramRichTextChunk = {
   text: string;
   textMode: "html";
   plainText: string;
+  sourcePlainText?: string;
   skipEntityDetection: boolean;
   degradationReasons: readonly TelegramRichHtmlDegradationReason[];
 };
@@ -456,19 +457,28 @@ export function splitTelegramRichMessageTextChunks(params: {
             rendered: renderRichChunk(chunk, "markdown"),
           }),
         );
-  return richChunks.flatMap(({ source, rendered }) =>
-    splitPreparedTelegramRichHtml({
+  return richChunks.flatMap(({ source, rendered }) => {
+    const sourcePlainText =
+      params.textMode === "html" ? telegramHtmlToPlainTextFallback(source) : source;
+    const htmlChunks = splitPreparedTelegramRichHtml({
       html: rendered.normalized.html,
       sourceFallback: source,
       textLimit: params.textLimit,
-    }).map((chunk, index) => ({
-      text: chunk,
-      textMode: "html",
-      plainText: telegramHtmlToPlainTextFallback(chunk),
-      skipEntityDetection: shouldSkipTelegramRichEntityDetection(chunk, {
-        skipEntityDetection: params.skipEntityDetection,
-      }),
-      degradationReasons: index === 0 ? rendered.normalized.degradationReasons : [],
-    })),
-  );
+    });
+    return htmlChunks.map((chunk, index) => {
+      const richChunk: TelegramRichTextChunk = {
+        text: chunk,
+        textMode: "html",
+        plainText: telegramHtmlToPlainTextFallback(chunk),
+        skipEntityDetection: shouldSkipTelegramRichEntityDetection(chunk, {
+          skipEntityDetection: params.skipEntityDetection,
+        }),
+        degradationReasons: index === 0 ? rendered.normalized.degradationReasons : [],
+      };
+      if (htmlChunks.length === 1) {
+        richChunk.sourcePlainText = sourcePlainText;
+      }
+      return richChunk;
+    });
+  });
 }
