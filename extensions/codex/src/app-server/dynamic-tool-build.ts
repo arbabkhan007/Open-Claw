@@ -493,6 +493,13 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
+  // Fail closed when the run explicitly disables tools (e.g. the setup probe).
+  // The Codex native tool surface is gated separately from OpenClaw tools, so
+  // without this check a disableTools run could still expose native shell/file
+  // capability whenever toolsAllow is undefined and no sandbox is active.
+  if (params.disableTools === true) {
+    return false;
+  }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
