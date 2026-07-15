@@ -78,6 +78,17 @@ export function parseHealthRouteArgs(argv: string[]) {
   };
 }
 
+export function parseDiagnoseRouteArgs(argv: string[]) {
+  const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
+  if (timeoutMs === null) {
+    return null;
+  }
+  return {
+    json: hasFlag(argv, "--json"),
+    timeoutMs: timeoutMs ?? 10_000,
+  };
+}
+
 /** Parse `openclaw status` flags without registering the full command tree. */
 export function parseStatusRouteArgs(argv: string[]) {
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");

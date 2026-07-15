@@ -1769,6 +1769,7 @@
                       "cli/fleet",
                       "cli/gateway",
                       "cli/health",
+                      "diagnostics/diagnose-json-contract",
                       "cli/logs",
                       "cli/migrate",
                       "cli/onboard",

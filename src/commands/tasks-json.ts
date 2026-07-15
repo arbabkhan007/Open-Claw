@@ -70,7 +70,7 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   };
 }
 
-function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
+export function tasksAuditJsonPayloadForDiagnose(opts: TasksAuditJsonArgs) {
   const severityFilter = normalizeOptionalString(opts.severity) as
     | TaskSystemAuditSeverity
     | undefined;
@@ -99,5 +99,5 @@ export async function tasksAuditJsonCommand(
   opts: TasksAuditJsonArgs,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  writeRuntimeJson(runtime, buildTasksAuditJsonPayload(opts));
+  writeRuntimeJson(runtime, tasksAuditJsonPayloadForDiagnose(opts));
 }

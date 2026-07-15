@@ -1,0 +1,191 @@
+import { listAgentEntries } from "../agents/agent-scope.js";
+import { captureBaseline, listBaselines, saveBaseline } from "../baseline/capture.js";
+import { getRuntimeConfig } from "../config/config.js";
+import type { GatewayConfig } from "../config/types.gateway.js";
+import { clearIncident, getOpenIncidents, readLedger, setIncident } from "../incidents/ledger.js";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
+import { validatePluginContracts } from "../plugins/contract-validator.js";
+import { executeWithCacheAndStagger, listCachedProbes } from "../probes/cache.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { tasksAuditJsonPayloadForDiagnose } from "./tasks-json.js";
+
+type DiagnoseOptions = {
+  json?: boolean;
+  timeoutMs?: number;
+};
+
+const DIAGNOSE_BASELINE_NAME = "diagnose-latest";
+const DIAGNOSE_SCHEMA_VERSION = "openclaw-diagnose/v1";
+
+const BASELINE_INCIDENTS = [
+  { component: "gateway", type: "gateway_health", source: "diagnose:baseline:gateway" },
+  { component: "channels", type: "channel_connectivity", source: "diagnose:baseline:channels" },
+  { component: "agents", type: "custom", source: "diagnose:baseline:agents" },
+  { component: "tasks", type: "task_flow_stuck", source: "diagnose:baseline:tasks" },
+  { component: "locks", type: "custom", source: "diagnose:baseline:locks" },
+  { component: "plugins", type: "plugin_failure", source: "diagnose:baseline:plugins" },
+] as const;
+
+function summarizeIncident(incident: {
+  id: string;
+  timestamp: string;
+  type: string;
+  severity: string;
+  status: string;
+  source: string;
+}) {
+  return {
+    id: incident.id,
+    timestamp: incident.timestamp,
+    type: incident.type,
+    severity: incident.severity,
+    status: incident.status,
+    source: incident.source,
+  };
+}
+
+function summarizeGatewayConfig(gatewayConfig: GatewayConfig | undefined) {
+  return {
+    ...(gatewayConfig?.mode ? { mode: gatewayConfig.mode } : {}),
+    ...(gatewayConfig?.bind ? { bind: gatewayConfig.bind } : {}),
+    ...(gatewayConfig?.port !== undefined ? { port: gatewayConfig.port } : {}),
+    remoteConfigured: Boolean(gatewayConfig?.remote?.url),
+  };
+}
+
+function syncIncident(active: boolean, params: Parameters<typeof setIncident>[0]): void {
+  if (active) {
+    setIncident(params);
+  } else {
+    clearIncident(params.type, params.source);
+  }
+}
+
+async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: RuntimeEnv) {
+  const cfg = getRuntimeConfig();
+  const pluginContractsProbe = await executeWithCacheAndStagger(
+    "plugin",
+    "contracts",
+    async () => validatePluginContracts({ config: cfg, strict: true }),
+    {
+      forceRefresh: true,
+      baseDelayMs: 0,
+      jitterMs: 0,
+    },
+  );
+  const pluginContracts = pluginContractsProbe.result;
+  const tasks = tasksAuditJsonPayloadForDiagnose({});
+  const currentBaseline = await captureBaseline({
+    config: cfg,
+    skipGateway: opts.timeoutMs === 0,
+    gatewayTimeoutMs: opts.timeoutMs,
+  });
+  await saveBaseline(currentBaseline, DIAGNOSE_BASELINE_NAME);
+  syncIncident(!pluginContracts.ok, {
+    type: "plugin_failure",
+    severity: "high",
+    summary: "Plugin contract validation failed",
+    source: "diagnose:plugin-contracts",
+    details: { findingCount: pluginContracts.findingCount },
+  });
+  syncIncident(tasks.summary.combined.errors > 0, {
+    type: "task_flow_stuck",
+    severity: "high",
+    summary: "Task audit detected errors",
+    source: "diagnose:task-audit",
+    details: { errorCount: tasks.summary.combined.errors },
+  });
+  const baselineFailures = BASELINE_INCIDENTS.flatMap((spec) => {
+    const component = currentBaseline.components[spec.component];
+    const active = component.status !== "pass";
+    syncIncident(active, {
+      type: spec.type,
+      severity: component.status === "fail" ? "high" : "medium",
+      summary: `${spec.component} baseline check ${component.status}`,
+      source: spec.source,
+      details: {
+        status: component.status,
+        ...(component.message ? { message: component.message } : {}),
+      },
+    });
+    return active ? [spec.component] : [];
+  });
+  const ledger = readLedger();
+  const openIncidents = getOpenIncidents();
+  const baselines = listBaselines();
+  const probeCache = listCachedProbes();
+  return {
+    schemaVersion: DIAGNOSE_SCHEMA_VERSION,
+    ok:
+      pluginContracts.ok &&
+      tasks.summary.combined.errors === 0 &&
+      baselineFailures.length === 0 &&
+      openIncidents.length === 0,
+    timestamp: new Date().toISOString(),
+    redaction: {
+      secretsIncluded: false,
+      rawConfigIncluded: false,
+      rawEnvIncluded: false,
+    },
+    persistence: {
+      writesBaseline: true,
+      writesProbeCache: true,
+      writesIncidentLedger: true,
+    },
+    status: {
+      gateway: summarizeGatewayConfig(cfg.gateway),
+      configuredChannels: listConfiguredChannelIdsForReadOnlyScope({ config: cfg }).length,
+      configuredAgents: listAgentEntries(cfg).length,
+    },
+    plugins: {
+      contracts: pluginContracts,
+    },
+    tasks,
+    baselines: {
+      count: baselines.length,
+      latest: DIAGNOSE_BASELINE_NAME,
+      current: {
+        timestamp: currentBaseline.timestamp,
+        components: currentBaseline.components,
+        metrics: currentBaseline.metrics,
+      },
+      recent: baselines.slice(-10),
+    },
+    probeCache: {
+      count: probeCache.length,
+      stale: probeCache.filter((probe) => probe.stale).length,
+      recent: probeCache.slice(-10),
+    },
+    incidents: {
+      count: ledger.incidents.length,
+      open: openIncidents.length,
+      frozen: ledger.incidents.filter((incident) => incident.status === "frozen").length,
+      recent: ledger.incidents.slice(-10).map(summarizeIncident),
+    },
+    actions: {
+      safe: [
+        "openclaw health --json",
+        "openclaw gateway status --json",
+        "openclaw tasks audit --json",
+        "openclaw plugins contracts validate --strict --json",
+      ],
+      unsafe: [
+        "openclaw doctor --fix",
+        "openclaw gateway restart",
+        "openclaw plugins update --all",
+      ],
+    },
+  };
+}
+
+export async function diagnoseCommand(opts: DiagnoseOptions, runtime: RuntimeEnv) {
+  const payload = await buildDiagnoseJson(opts, runtime);
+  if (opts.json === true) {
+    writeRuntimeJson(runtime, payload);
+    return;
+  }
+  runtime.log(`Control-plane diagnosis: ${payload.ok ? "ok" : "attention needed"}`);
+  runtime.log(`Open incidents: ${payload.incidents.open}`);
+  runtime.log(`Plugin contract findings: ${payload.plugins.contracts.findingCount}`);
+  runtime.log(`Task audit findings: ${payload.tasks.count}`);
+}

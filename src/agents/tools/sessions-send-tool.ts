@@ -617,10 +617,13 @@ export function createSessionsSendTool(opts?: {
         requesterChannel,
         targetSessionKey: displayKey,
       });
+      const handoffId = crypto.randomUUID();
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: requesterSessionKey,
         sourceChannel: requesterChannel,
+        handoffId,
+        replyTo: requesterSessionKey,
         sourceTool: "sessions_send",
       };
       const sendParams = {

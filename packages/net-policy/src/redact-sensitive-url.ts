@@ -118,6 +118,9 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
 
 /** True for config paths whose URL values may contain credentials or secret query params. */
 export function isSensitiveUrlConfigPath(path: string): boolean {
+  if (path === "gateway.remote.url" || path === "remote.url") {
+    return true;
+  }
   if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
     return true;
   }

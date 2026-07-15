@@ -7,6 +7,7 @@ import {
   parseChannelsStatusRouteArgs,
   parseConfigGetRouteArgs,
   parseConfigUnsetRouteArgs,
+  parseDiagnoseRouteArgs,
   parseGatewayStatusRouteArgs,
   parseHealthRouteArgs,
   parseModelsListRouteArgs,
@@ -81,6 +82,13 @@ function loadTasksJsonCommand(): Promise<TasksJsonCommandModule> {
 
 /** Route id to lazy parser/runner definition. */
 export const routedCommandDefinitions = {
+  diagnose: defineRoutedCommand({
+    parseArgs: parseDiagnoseRouteArgs,
+    runParsedArgs: async (args) => {
+      const { diagnoseCommand } = await import("../../commands/diagnose.js");
+      await diagnoseCommand(args, defaultRuntime);
+    },
+  }),
   health: defineRoutedCommand({
     parseArgs: parseHealthRouteArgs,
     runParsedArgs: async (args) => {

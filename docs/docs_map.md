@@ -1869,6 +1869,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Uninstall
   - H2: Update
   - H2: Inspect
+  - H2: Contract validation
   - H2: Doctor
   - H2: Registry
   - H2: Marketplace
@@ -3071,6 +3072,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Workarounds (if the crash returns)
   - H2: References
   - H2: Related
+
+## diagnostics/diagnose-json-contract.md
+
+- Route: /diagnostics/diagnose-json-contract
+- Headings:
+  - H1: Diagnose JSON contract
 
 ## diagnostics/flags.md
 
