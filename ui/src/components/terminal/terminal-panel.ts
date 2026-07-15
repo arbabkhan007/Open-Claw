@@ -18,6 +18,7 @@ import {
 import {
   TerminalConnection,
   type TerminalGatewayClient,
+  TerminalOpenTimeoutError,
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import { terminalPanelStyles } from "./terminal-panel-styles.ts";
@@ -35,19 +36,24 @@ import {
   persistTerminalSessionIds,
 } from "./terminal-session-storage.ts";
 import { createTerminalStartupInput, type StartupInputBuffer } from "./terminal-startup-input.ts";
+import {
+  TerminalTabReadinessController,
+  type TerminalTabReadinessState,
+} from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
 type TerminalDock = DockPanelSide;
-type TerminalTabState = TerminalPanelTab & {
-  gatewaySessionId: string;
-  pendingInput: StartupInputBuffer;
-  controller: GhosttyTerminalController;
-  shell: string;
-  host: HTMLDivElement;
-  /** Why an in-flight open/attach must not adopt this disposed terminal. */
-  cancelled?: "close" | "lifecycle";
-};
+type TerminalTabState = TerminalPanelTab &
+  TerminalTabReadinessState & {
+    gatewaySessionId: string;
+    pendingInput: StartupInputBuffer;
+    controller: GhosttyTerminalController;
+    shell: string;
+    host: HTMLDivElement;
+    /** Why an in-flight open/attach must not adopt this disposed terminal. */
+    cancelled?: "close" | "lifecycle";
+  };
 
 type TerminalOperation = {
   generation: number;
@@ -72,6 +78,15 @@ const panelLayout = createDockPanelLayout({
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
+const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
+
+function forceTerminalRender(controller: GhosttyTerminalController): void {
+  const term = controller.terminal;
+  if (term.renderer && term.wasmTerm) {
+    // An omitted opacity defaults to 1; repaint without inventing a visible scrollbar.
+    term.renderer.render(term.wasmTerm, true, term.viewportY, term, 0);
+  }
+}
 
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement {
@@ -123,6 +138,21 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   });
   private readonly bootQueue = new TerminalTaskQueue();
   protected createTerminal = createIsolatedGhosttyTerminal;
+  protected catalogReadyTimeoutMs = CATALOG_TERMINAL_READY_TIMEOUT_MS;
+  private readonly readiness = new TerminalTabReadinessController<TerminalTabState>({
+    timeoutMs: () => this.catalogReadyTimeoutMs,
+    isCurrent: (tab) => this.tabs.includes(tab),
+    onReady: () => {
+      this.tabs = [...this.tabs];
+      this.persistLiveSessions();
+    },
+    onTimeout: (tab) => {
+      this.errorText = t("terminal.connectionTimedOut");
+      void this.connection?.close(tab.gatewaySessionId);
+      this.dropFailedTab(tab);
+      this.persistLiveSessions();
+    },
+  });
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   // Re-clamp a dock sized on a larger window so the header/resizer never end
@@ -190,7 +220,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         const term = tab.controller.terminal;
         if (term.renderer && term.wasmTerm) {
           term.renderer.setTheme(theme);
-          term.renderer.render(term.wasmTerm, true, term.viewportY, term);
+          forceTerminalRender(tab.controller);
         }
       }
     }
@@ -205,7 +235,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
             viewport.append(tab.host);
           }
         }
-        this.tabs.find((tab) => tab.id === this.activeId)?.controller.fit();
+        const activeTab = this.tabs.find((tab) => tab.id === this.activeId);
+        if (activeTab) {
+          activeTab.controller.fit();
+          // FitAddon skips unchanged dimensions; force dirty-row rendering to
+          // repair a canvas that was detached while the panel was hidden.
+          forceTerminalRender(activeTab.controller);
+        }
       }
     }
     this.syncLayoutReservation();
@@ -461,7 +497,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   /** Boots a tab with a libterminal controller, ready for an open or attach RPC. */
-  private async bootTab(operation: TerminalOperation): Promise<{
+  private async bootTab(
+    operation: TerminalOperation,
+    options: { awaitFirstOutput?: boolean } = {},
+  ): Promise<{
     tab: TerminalTabState;
     connection: TerminalConnection;
     cols: number;
@@ -528,7 +567,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       cwd: null,
       controller,
       host,
-      status: "live",
+      status: "connecting",
+      awaitFirstOutput: options.awaitFirstOutput === true,
+      readyTimer: null,
     };
     tabRef.current = tab;
     this.tabs = [...this.tabs, tab];
@@ -545,6 +586,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       onData: (data: string) => {
         if (!tab.cancelled) {
           tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
+          if (data.length > 0) {
+            this.readiness.markReady(tab);
+          }
         }
       },
       // A replay is authoritative. Reset parser, screen, and scrollback so a
@@ -554,10 +598,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           tab.controller.terminal.reset();
           if (data) {
             tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
+            this.readiness.markReady(tab);
           }
         }
       },
-      onExit: (info: { reason?: string; exitCode: number | null }) => this.handleExit(tab.id, info),
+      onExit: (info: { reason?: string; exitCode: number | null; error?: string }) =>
+        this.handleExit(tab.id, info),
     };
   }
 
@@ -577,6 +623,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     void this.connection?.resize(result.sessionId, cols || 80, rows || 24);
     for (const data of tab.pendingInput.drain()) {
       void this.connection?.input(result.sessionId, data);
+    }
+
+    if (tab.status === "connecting") {
+      if (tab.awaitFirstOutput) {
+        this.readiness.arm(tab);
+      } else {
+        this.readiness.markReady(tab);
+      }
     }
 
     this.tabs = [...this.tabs];
@@ -608,7 +662,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalTabState | undefined;
     try {
-      const boot = await this.bootTab(operation);
+      const boot = await this.bootTab(operation, { awaitFirstOutput: Boolean(catalog) });
       createdTab = boot.tab;
       const result = await boot.connection.open(
         { agentId, cols: boot.cols, rows: boot.rows, ...(catalog ? { catalog } : {}) },
@@ -637,7 +691,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       if (!this.isTerminalOperationCurrent(operation)) {
         return;
       }
-      this.errorText = err instanceof Error ? err.message : String(err);
+      this.errorText =
+        err instanceof TerminalOpenTimeoutError
+          ? t("terminal.connectionTimedOut")
+          : err instanceof Error
+            ? err.message
+            : String(err);
     } finally {
       if (this.isTerminalOperationCurrent(operation)) {
         this.booting = false;
@@ -677,14 +736,21 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private handleExit(tabId: string, info: { reason?: string; exitCode: number | null }): void {
+  private handleExit(
+    tabId: string,
+    info: { reason?: string; exitCode: number | null; error?: string },
+  ): void {
     const tab = this.tabs.find((entry) => entry.id === tabId);
     if (!tab) {
       return;
     }
+    this.readiness.stop(tab);
     tab.status = "exited";
     tab.exitReason = info.reason;
     tab.exitCode = info.exitCode;
+    if (info.error?.trim()) {
+      this.errorText = info.error.trim();
+    }
     // The connection drops its own sink on exit delivery, so no release() here —
     // the session id may not be recorded yet when an early exit is replayed.
     this.tabs = [...this.tabs];
@@ -697,9 +763,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       return;
     }
     this.upload.cancelForTab(tab);
-    if (tab.gatewaySessionId && tab.status === "live") {
+    if (tab.gatewaySessionId && tab.status !== "exited") {
       void this.connection?.close(tab.gatewaySessionId);
-    } else if (!tab.gatewaySessionId && tab.status === "live") {
+    } else if (!tab.gatewaySessionId && tab.status !== "exited") {
       // Open still in flight: no session id to close yet. Flag it so the open
       // continuation closes the server session as soon as the RPC resolves.
       tab.cancelled = "close";
@@ -721,10 +787,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private switchTo(tabId: string): void {
     this.activeId = tabId;
     const tab = this.tabs.find((entry) => entry.id === tabId);
-    // Refit after the container becomes visible so cols/rows match the viewport.
+    // Refit and repaint after the container becomes visible. A same-size tab
+    // switch otherwise leaves the newly shown canvas without dirty rows.
     void this.updateComplete.then(() => {
-      tab?.controller.fit();
-      tab?.controller.terminal.focus();
+      if (tab) {
+        tab.controller.fit();
+        forceTerminalRender(tab.controller);
+        tab.controller.terminal.focus();
+      }
     });
   }
 
@@ -760,6 +830,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private disposeTab(tab: TerminalTabState): void {
+    this.readiness.stop(tab);
     try {
       tab.controller.dispose();
     } catch {
@@ -893,6 +964,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       : this.dock === "bottom"
         ? `height:${this.height}px;--tp-panel-height:${this.height}px`
         : `width:${this.width}px`;
+    const activeTab = this.tabs.find((tab) => tab.id === this.activeId);
+    const connecting =
+      (this.booting && this.tabs.length === 0) || activeTab?.status === "connecting";
     return html`
       <section class="tp tp--${mode}" style=${style} aria-label=${t("terminal.title")}>
         ${this.fullscreen
@@ -950,8 +1024,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           @dragleave=${this.upload.handleDragLeave}
           @drop=${this.upload.handleDrop}
         >
-          ${this.booting && this.tabs.length === 0
-            ? html`<div class="tp-empty">${t("terminal.starting")}</div>`
+          ${connecting
+            ? html`<div class="tp-connecting" role="status">
+                <span class="tp-connecting__spinner" aria-hidden="true"></span>
+                <span>${t("terminal.connecting")}</span>
+              </div>`
             : nothing}
           ${renderTerminalUploadLayer(this.upload)}
         </wa-tab-panel>

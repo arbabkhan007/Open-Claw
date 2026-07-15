@@ -1,28 +1,6 @@
 {
   "fallbacks": {
-    "terminal.uploadFailed": [
-      "ar",
-      "de",
-      "es",
-      "fa",
-      "fr",
-      "hi",
-      "id",
-      "it",
-      "ja-JP",
-      "ko",
-      "nl",
-      "pl",
-      "pt-BR",
-      "ru",
-      "th",
-      "tr",
-      "uk",
-      "vi",
-      "zh-CN",
-      "zh-TW"
-    ],
-    "terminal.uploadProgress": [
+    "newSession.cloudSyncsFolder": [
       "ar",
       "de",
       "es",
@@ -45,6 +23,6 @@
       "zh-TW"
     ]
   },
-  "sourceHash": "992598ed12490183d850a23a1f1e02d933c4638e69801b875fb95807b41c2e88",
+  "sourceHash": "bd7720cbb311b6d966553d28ed5a01d4badd6edf08980b1c7824328f1533b8fd",
   "version": 1
 }

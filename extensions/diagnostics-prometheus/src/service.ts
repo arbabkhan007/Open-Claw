@@ -1086,9 +1086,4 @@ export function createDiagnosticsPrometheusExporter() {
   };
 }
 
-export const testApi = {
-  createPrometheusMetricStore,
-  recordDiagnosticEvent,
-  renderPrometheusMetrics,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1611,8 +1611,8 @@ export const de: TranslationMap = {
     addFiles: "Dateien zum Terminal hinzufügen",
     dropFiles: "Dateien hier ablegen, um sie hinzuzufügen",
     uploading: "Dateien werden hochgeladen…",
-    uploadProgress: "Uploading {current} of {total}",
-    uploadFailed: "Upload failed",
+    uploadProgress: "{current} von {total} werden hochgeladen",
+    uploadFailed: "Upload fehlgeschlagen",
     retryUpload: "Erneut versuchen",
     closeSession: "Close terminal session",
     sessions: "Terminalsitzungen",
@@ -1624,6 +1624,9 @@ export const de: TranslationMap = {
     attachSession: "Sitzung verbinden",
     attachFailed: "Terminalsitzung konnte nicht verbunden werden",
     starting: "Starting terminal…",
+    connecting: "Verbindung zur Sitzung wird hergestellt…",
+    connectionTimedOut:
+      "Die Verbindung zur Sitzung wurde nicht innerhalb von 30 Sekunden hergestellt.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
     exited: "exited",
@@ -1713,7 +1716,6 @@ export const de: TranslationMap = {
     memoryImport: "Speicher importieren",
     debug: "Debug",
     logs: "Protokolle",
-    safety: "Safety",
     plugin: "Plugin",
   },
   subtitles: {
@@ -1746,7 +1748,6 @@ export const de: TranslationMap = {
     memoryImport: "Codex- und Claude Code-Speicher in einen Agenten-Arbeitsbereich importieren.",
     debug: "Gateway-Snapshots, Ereignisse und manuelle RPC-Aufrufe.",
     logs: "Live-Verfolgung der Gateway-Protokolldateien.",
-    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Vom Plugin bereitgestelltes Panel.",
   },
   memoryImport: {
@@ -3503,6 +3504,8 @@ export const de: TranslationMap = {
     },
     sidebar: {
       updateAvailable: "Update verfügbar",
+      updateMacAndGateway: "Mac-App + Gateway aktualisieren",
+      updateGateway: "Gateway aktualisieren",
       allSessions: "Alle Sitzungen",
       chats: "Chats",
       openSessionMenu: "Open session menu",
