@@ -12,11 +12,13 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { buildConfiguredModelCatalog } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -26,7 +28,11 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  resolveSupportedThinkingLevel,
+  type ThinkLevel,
+  type ThinkingCatalogEntry,
+} from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -68,6 +74,55 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "openai",
 ]);
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
+
+function findCatalogModelEntry(
+  catalog: ThinkingCatalogEntry[] | undefined,
+  provider: string,
+  model: string,
+): ThinkingCatalogEntry | undefined {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedModel = model.trim();
+  return catalog?.find(
+    (entry) =>
+      entry.provider.trim().toLowerCase() === normalizedProvider && entry.id === normalizedModel,
+  );
+}
+
+/**
+ * Resolve the model catalog used for status-card thinking display.
+ * Prefer configured rows with known reasoning metadata; otherwise hydrate the
+ * runtime catalog so live-discovered / plugin-registered models keep their
+ * thinking levels on generic text status surfaces (e.g. WhatsApp).
+ */
+async function resolveStatusThinkingCatalog(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<ThinkingCatalogEntry[] | undefined> {
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const configuredSelected = findCatalogModelEntry(
+    configuredCatalog,
+    params.provider,
+    params.model,
+  );
+  const needsRuntimeCatalog =
+    configuredCatalog.length === 0 ||
+    !configuredSelected ||
+    configuredSelected.reasoning === undefined;
+  if (!needsRuntimeCatalog) {
+    return configuredCatalog.length > 0 ? configuredCatalog : undefined;
+  }
+  try {
+    const runtimeCatalog = await loadModelCatalog({ config: params.cfg, readOnly: true });
+    const runtimeSelected = findCatalogModelEntry(runtimeCatalog, params.provider, params.model);
+    if (runtimeSelected || configuredCatalog.length === 0) {
+      return runtimeCatalog.length > 0 ? runtimeCatalog : configuredCatalog;
+    }
+  } catch {
+    // Status should still render if discovery is unavailable.
+  }
+  return configuredCatalog.length > 0 ? configuredCatalog : undefined;
+}
 
 function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
@@ -597,10 +652,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     (await resolveDefaultThinkingLevel()) ??
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
     "off";
+  // Status cards previously remapped thinking solely against policy profiles and
+  // configured catalog rows, so live-discovered Ollama (reasoning: true) models
+  // looked like off-only (/think menu + Think: line) even when session state and
+  // Reasoning were high. Mirror the runtime thinking-catalog resolution so
+  // configured then runtime/discovered metadata reaches resolveSupportedThinkingLevel.
+  const thinkingCatalog = await resolveStatusThinkingCatalog({
+    cfg,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
+  });
   const effectiveThinkLevel = resolveSupportedThinkingLevel({
     provider: selectedLookupProvider,
     model: selectedLookupModel,
     level: requestedThinkLevel,
+    catalog: thinkingCatalog,
     agentRuntime: effectiveHarness,
   });
   return buildStatusMessage({

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionCostSummariesFromCache: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
+  loadModelCatalog: vi.fn(),
 }));
 
 vi.mock("../infra/session-cost-usage.js", async (importOriginal) => {
@@ -21,6 +24,14 @@ vi.mock("../infra/provider-usage.js", async (importOriginal) => {
   return {
     ...actual,
     loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+  };
+});
+
+vi.mock("../agents/model-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-catalog.js")>();
+  return {
+    ...actual,
+    loadModelCatalog: mocks.loadModelCatalog,
   };
 });
 
@@ -305,5 +316,83 @@ describe("session status cost line", () => {
     await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
       "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
+  });
+});
+
+describe("buildStatusText thinking catalog", () => {
+  beforeEach(() => {
+    mocks.loadModelCatalog.mockReset();
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("keeps high thinking levels for discovered Ollama reasoning models on WhatsApp status", async () => {
+    const registry = createTestRegistry();
+    registry.providers.push({
+      pluginId: "ollama",
+      source: "test",
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        resolveThinkingProfile: ({ reasoning }: { reasoning?: boolean }) => ({
+          levels:
+            reasoning === true
+              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+              : [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    } as never);
+    setActivePluginRegistry(registry);
+    mocks.loadModelCatalog.mockResolvedValue([
+      {
+        provider: "ollama",
+        id: "glm-5.2:cloud",
+        name: "GLM 5.2 Cloud",
+        reasoning: true,
+      },
+    ]);
+
+    const text = await buildStatusText({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "ollama/glm-5.2:cloud",
+            thinkingDefault: "high",
+            models: { "ollama/*": {} },
+          },
+        },
+      } as never,
+      sessionEntry: {
+        sessionId: "wa-ollama-think",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        reasoningLevel: "on",
+        modelOverride: "glm-5.2:cloud",
+        providerOverride: "ollama",
+      },
+      sessionKey: "agent:main:main",
+      statusChannel: "whatsapp",
+      provider: "ollama",
+      model: "glm-5.2:cloud",
+      resolvedHarness: "openclaw",
+      resolvedThinkLevel: "high",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "on",
+      resolveDefaultThinkingLevel: async () => "high",
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      pluginHealthLineOverride: "Plugins: test",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+      modelAuthOverride: "local",
+      activeModelAuthOverride: "local",
+      includeTranscriptUsage: false,
+    });
+
+    expect(text).toContain("Think: high");
+    expect(text).not.toMatch(/Think:\s*off\b/);
   });
 });
