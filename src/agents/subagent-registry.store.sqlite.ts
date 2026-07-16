@@ -378,7 +378,7 @@ export function loadSubagentRunsForChildSessionFromSqlite(
       const run = rowToSubagentRunRecord(row);
       return run ? [run] : [];
     })
-    .sort(compareSubagentRunGeneration);
+    .toSorted(compareSubagentRunGeneration);
   return runs;
 }
 

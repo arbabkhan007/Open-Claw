@@ -137,7 +137,7 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-it("preserves announcedAt for not_required delivery when completion was announced", async () => {
+  it("preserves announcedAt for not_required delivery when completion was announced", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
         expectsCompletionMessage: false,
