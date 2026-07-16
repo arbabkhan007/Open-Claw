@@ -660,6 +660,14 @@ describe("skill_workshop tool", () => {
     expect((second.content[0] as { text: string }).text).toContain("Page: 2/2");
     expect((second.content[0] as { text: string }).text).toContain("END_OF_REVIEW");
     await expect(
+      tool.execute("call-review-name-only-second", {
+        action: "review",
+        name: "Long Review",
+        page: 2,
+        proposal_version: "v1",
+      }),
+    ).rejects.toThrow("proposal_id required for review pages after page 1");
+    await expect(
       tool.execute("call-review-invalid", {
         action: "review",
         proposal_id: proposalId,

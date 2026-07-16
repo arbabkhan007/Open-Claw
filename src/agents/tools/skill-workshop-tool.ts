@@ -92,7 +92,7 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=review, action=revise, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=review, action=revise, action=apply, action=reject, or action=quarantine. Required for review pages after page 1.",
         }),
       ),
       name: Type.Optional(
@@ -258,6 +258,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
 
       if (action === "review") {
         const page = readReviewPageParam(params);
+        const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
+        if (page > 1 && !proposalId) {
+          throw new ToolInputError("proposal_id required for review pages after page 1");
+        }
         const expectedVersion = readProposalVersionParam(params);
         if (page > 1 && !expectedVersion) {
           throw new ToolInputError("proposal_version required for review pages after page 1");
@@ -266,7 +270,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           config: options.config,
           env: options.env,
-          proposalId: await resolveProposalIdForRead(params, options.workspaceDir, options.env),
+          proposalId:
+            proposalId ??
+            (await resolveProposalIdForRead(params, options.workspaceDir, options.env)),
         });
         if (expectedVersion && expectedVersion !== review.record.proposedVersion) {
           throw new ToolInputError(

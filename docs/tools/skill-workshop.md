@@ -128,13 +128,14 @@ changed or disappeared since an update proposal was created, review returns an
 unavailable reason and leaves the proposal unchanged. Applying or revising the
 same proposal revalidates it and may fail or mark it stale under the existing
 lifecycle rules.
-Long reviews are paginated; pass the first page's `proposal_version` when
-requesting each later `page` so revisions cannot mix pages. Pass the same value
-with any lifecycle action so Skill Workshop rejects the decision if the proposal
-was revised in between. Reviews are capped at 16 pages; larger projections
-return `output-limit`. Oversized or computationally expensive diffs, including
-a single line too long to paginate without losing its diff marker, return a
-bounded `diff-limit` result instead of partial output.
+Long reviews are paginated; pass the first page's `proposal_id` and
+`proposal_version` when requesting each later `page` so pages cannot switch
+proposals and revisions cannot mix pages. Pass the same version with any lifecycle
+action so Skill Workshop rejects the decision if the proposal was revised in
+between. Reviews are capped at 16 pages; larger projections return
+`output-limit`. Oversized or computationally expensive diffs, including a single
+line too long to paginate without losing its diff marker, return a bounded
+`diff-limit` result instead of partial output.
 
 Existing ID-only lifecycle calls remain valid. With pending approval, Skill
 Workshop snapshots the current version into the approval request; passing the
@@ -241,7 +242,7 @@ Other parameters apply depending on the action:
 | `proposal_content`         | `create`, `update`, `revise`                                   | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
 | `support_files`            | `create`, `update`, `revise`                                   | Array of `{ path, content }`                                         |
 | `goal`, `evidence`         | `create`, `update`, `revise`                                   | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `review`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
+| `proposal_id`              | `inspect`, `review`, `revise`, `apply`, `reject`, `quarantine` | Target proposal; required after review page 1                        |
 | `page`                     | `review`                                                       | One-based output page; defaults to 1                                 |
 | `proposal_version`         | `review`, `apply`, `reject`, `quarantine`                      | Required after page 1; binds lifecycle decisions to the review       |
 | `reason`                   | `apply`, `reject`, `quarantine`                                | Optional                                                             |
