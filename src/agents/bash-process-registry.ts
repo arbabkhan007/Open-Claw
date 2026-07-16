@@ -142,8 +142,29 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
-/** Removes visible session records without changing live-process activity. */
+/** Removes session records and kills any still-running child process to prevent zombie leaks. */
 export function deleteSession(id: string) {
+  const session = runningSessions.get(id);
+  if (session?.child) {
+    session.child.stdin?.destroy?.();
+    session.child.stdout?.destroy?.();
+    session.child.stderr?.destroy?.();
+    session.child.removeAllListeners();
+    try {
+      session.child.kill();
+    } catch {
+      // Process may have already exited; kill is safe to ignore.
+    }
+    delete session.child;
+  }
+  if (session?.stdin) {
+    if (typeof session.stdin.destroy === "function") {
+      session.stdin.destroy();
+    } else if (typeof session.stdin.end === "function") {
+      session.stdin.end();
+    }
+    delete session.stdin;
+  }
   runningSessions.delete(id);
   finishedSessions.delete(id);
 }
