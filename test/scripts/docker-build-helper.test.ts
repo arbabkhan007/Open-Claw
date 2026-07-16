@@ -3412,6 +3412,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(dockerfile).toContain("procps");
   });
 
+  it("caches package downloads across prepared Docker E2E image builds", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+
+    expect(dockerfile).toContain(
+      "--mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locked",
+    );
+  });
+
   it("keeps onboarding Docker E2E resource-guarded", () => {
     const runner = readFileSync(ONBOARD_DOCKER_E2E_PATH, "utf8");
 
@@ -4340,8 +4348,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash');
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash');
+    expect(runner).toContain('OPENCLAW_BETA=1 bash "$installer"');
+    expect(runner).toContain('OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"');
     expect(runner).not.toContain('OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash');
     expect(runner).not.toContain(
       'OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash',
