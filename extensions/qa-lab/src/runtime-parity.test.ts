@@ -67,6 +67,7 @@ async function captureRuntimeParityWithMockRequests(params: {
   messages?: Array<Record<string, unknown>>;
   requests: Array<Record<string, unknown>>;
   scenarioResult?: Parameters<typeof captureRuntimeParityCell>[0]["scenarioResult"];
+  responseMode?: "normal" | "oversized" | "stalled";
 }) {
   const parentPrompt = "Delegate one bounded QA task to a subagent.";
   const tempRoot = await seedRuntimeParityTranscript({
@@ -86,6 +87,14 @@ async function captureRuntimeParityWithMockRequests(params: {
       return;
     }
     response.setHeader("Content-Type", "application/json");
+    if (params.responseMode === "oversized") {
+      response.end(JSON.stringify([{ padding: "x".repeat(1024 * 1024) }]));
+      return;
+    }
+    if (params.responseMode === "stalled") {
+      response.write("[");
+      return;
+    }
     response.end(JSON.stringify(requests));
   });
   await new Promise<void>((resolve) => {
@@ -101,6 +110,7 @@ async function captureRuntimeParityWithMockRequests(params: {
       wallClockMs: 10,
     });
   } finally {
+    server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -127,6 +137,19 @@ function makeRuntimeParityCell(
 }
 
 describe("runtime parity", () => {
+  it.each(["oversized", "stalled"] as const)(
+    "ignores %s mock request responses within a bounded read",
+    async (responseMode) => {
+      const cell = await captureRuntimeParityWithMockRequests({
+        requests: [],
+        responseMode,
+      });
+
+      expect(cell.toolCalls).toEqual([]);
+    },
+    10_000,
+  );
+
   it("captures tool results from the canonical SQLite session transcript", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "capability-flip",
