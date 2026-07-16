@@ -132,7 +132,7 @@ function boundReviewForTool(review: SkillProposalReviewResult): SkillProposalRev
 function paginateReviewText(text: string, requestedPage: number): ReviewTextPage {
   const pages: string[] = [];
   let page = "";
-  for (let start = 0; start < text.length; ) {
+  for (let start = 0; start < text.length;) {
     const newline = text.indexOf("\n", start);
     const end = newline === -1 ? text.length : newline + 1;
     let line = text.slice(start, end);
