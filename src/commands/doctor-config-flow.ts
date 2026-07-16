@@ -2,7 +2,7 @@
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -21,6 +21,7 @@ import {
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
+import { maybeMigratePluginsAllowForExtensions } from "./doctor/shared/migrate-plugins-allow-extensions.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
@@ -139,6 +140,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const stateDir = resolveStateDir();
   const preflight = await runDoctorConfigPreflight({
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
@@ -389,6 +391,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   if (unknownStep.warnings.length > 0) {
     note(unknownStep.warnings.join("\n"), "Doctor warnings");
+  }
+
+  const pluginsAllowMigration = await maybeMigratePluginsAllowForExtensions({
+    cfg: candidate,
+    stateDir,
+  });
+  if (pluginsAllowMigration.changes.length > 0) {
+    emitDoctorChangesPanel(pluginsAllowMigration.changes, shouldRepair);
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: pluginsAllowMigration,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+    }));
   }
 
   const finalized = await finalizeDoctorConfigFlow({
