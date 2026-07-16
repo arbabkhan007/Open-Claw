@@ -68,15 +68,48 @@ function downgradeUnsupportedImages<TApi extends Api>(
   });
 }
 
+/** Default-mode normalizer: receives the source assistant message alongside the id. */
+type SourceAwareToolCallIdNormalizer<TApi extends Api> = (
+  id: string,
+  model: Model<TApi>,
+  source: AssistantMessage,
+) => string;
+
+/**
+ * Target-safe normalizer: a source-independent scrub (e.g. a charset scrub idempotent on the
+ * target's own native ids). Required for `targetSafeToolCallIds` because that mode also
+ * normalizes orphaned results, which have no source assistant message to pass.
+ */
+type TargetSafeToolCallIdNormalizer<TApi extends Api> = (id: string, model: Model<TApi>) => string;
+
 /**
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
  * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
+ *
+ * `plugin-sdk/llm` re-exports this helper, so the default overload keeps the required-`source`
+ * contract that existing provider plugins already implement. `targetSafeToolCallIds` is an
+ * additive opt-in (default off) whose overload requires a source-independent normalizer: it is
+ * applied to every tool id reaching the target — same-model-tagged calls and orphaned results
+ * included — so other providers' non-idempotent/source-aware normalizers never rewrite valid
+ * native same-model ids (#95623).
  */
 export function transformMessages<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
-  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+  normalizeToolCallId?: SourceAwareToolCallIdNormalizer<TApi>,
+): Message[];
+export function transformMessages<TApi extends Api>(
+  messages: Message[],
+  model: Model<TApi>,
+  normalizeToolCallId: TargetSafeToolCallIdNormalizer<TApi>,
+  targetSafeToolCallIds: true,
+): Message[];
+export function transformMessages<TApi extends Api>(
+  messages: Message[],
+  model: Model<TApi>,
+  normalizeToolCallId?: SourceAwareToolCallIdNormalizer<TApi>,
+  targetSafeToolCallIds = false,
 ): Message[] {
   // Build a map of original tool call IDs to normalized IDs
   const toolCallIdMap = new Map<string, string>();
@@ -89,9 +122,19 @@ export function transformMessages<TApi extends Api>(
       return msg;
     }
 
-    // Handle toolResult messages - normalize toolCallId if we have a mapping
+    // Handle toolResult messages - normalize toolCallId from the map, or
+    // (target-safe) scrub directly when the paired call is absent (orphan result).
     if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
+      const mappedId = toolCallIdMap.get(msg.toolCallId);
+      // The target-safe overload only accepts a source-independent normalizer, so this
+      // narrowing restates the public contract: when targetSafeToolCallIds is true the
+      // callback never reads `source`, and an orphaned result with no paired assistant
+      // call can be normalized without one. Default mode never reaches this branch.
+      const scrubOrphanId = targetSafeToolCallIds
+        ? (normalizeToolCallId as TargetSafeToolCallIdNormalizer<TApi> | undefined)
+        : undefined;
+      const normalizedId =
+        mappedId ?? (scrubOrphanId ? scrubOrphanId(msg.toolCallId, model) : undefined);
       if (normalizedId && normalizedId !== msg.toolCallId) {
         return Object.assign({}, msg, { toolCallId: normalizedId });
       }
@@ -176,7 +219,7 @@ export function transformMessages<TApi extends Api>(
             delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
           }
 
-          if (!isSameModel && normalizeToolCallId) {
+          if ((targetSafeToolCallIds || !isSameModel) && normalizeToolCallId) {
             const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
             if (normalizedId !== toolCall.id) {
               toolCallIdMap.set(toolCall.id, normalizedId);
