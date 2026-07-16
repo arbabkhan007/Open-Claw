@@ -79,6 +79,7 @@ export type {
   PluginFormat,
 } from "./manifest-types.js";
 export type { PluginKind } from "./plugin-kind.types.js";
+export type { MemoryPluginRole } from "./memory-role.contract.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
 export type {
   ProviderApplyConfigDefaultsContext,

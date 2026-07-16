@@ -101,6 +101,7 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as OpenClawSchemaType } from "../config/config.js";
+export type { MemoryPluginRole } from "../plugins/memory-role.contract.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,

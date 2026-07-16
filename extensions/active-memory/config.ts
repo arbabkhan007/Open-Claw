@@ -25,7 +25,6 @@ import {
   DEFAULT_SETUP_GRACE_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_TRANSCRIPT_DIR,
-  LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
   MAX_ACTIVE_MEMORY_TOOLS_ALLOW,
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
@@ -120,16 +119,12 @@ function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
   return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
 }
 
-function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
-  return cfg?.plugins?.slots?.memory === "memory-lancedb"
-    ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
-    : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+function resolveDefaultToolsAllow(): string[] {
+  return [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
 }
 
-function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawConfig }): string[] {
-  return (
-    normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow(params.cfg)
-  );
+function resolveToolsAllow(params: { pluginToolsAllow: unknown }): string[] {
+  return normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow();
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {
@@ -212,10 +207,7 @@ function isMissingRegisteredMemoryToolsError(
   return sourceParts.includes(runtimeSource);
 }
 
-function normalizePluginConfig(
-  pluginConfig: unknown,
-  cfg?: OpenClawConfig,
-): ResolvedActiveRecallPluginConfig {
+function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
@@ -242,7 +234,7 @@ function normalizePluginConfig(
     thinking: resolveThinkingLevel(raw.thinking),
     fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
-    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
+    toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
     promptAppend: normalizePromptConfigText(raw.promptAppend),
     timeoutMs: clampInt(

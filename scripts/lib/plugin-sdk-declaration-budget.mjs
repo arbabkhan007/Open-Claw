@@ -1,5 +1,7 @@
-// Raised for the plugins.uninstall/catalog actions and current session/plugin protocol surfaces;
-// the cap exists to force a conscious decision on published declaration growth.
+// Raised for plugins.uninstall/catalog actions, sessions.search protocol surfaces,
+// SQLite pairing migration public entrypoint growth, and plugin-sdk memory role
+// contract growth; the cap exists to force a conscious decision on published
+// declaration growth.
 export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_200_000;
 // Private-only entrypoints reshape chunks reachable from public roots but are never published.
 // Bound that topology overhead without counting local-only declarations as package surface.

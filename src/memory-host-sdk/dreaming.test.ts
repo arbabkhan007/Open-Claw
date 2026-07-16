@@ -249,27 +249,43 @@ describe("memory dreaming host helpers", () => {
     ).toBe(true);
   });
 
-  it("resolves the configured memory-slot plugin id", () => {
+  it("resolves the configured memory.dreaming slot plugin id", () => {
     expect(
       resolveMemoryDreamingPluginId({
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            "memory.dreaming": "memory-dreamer",
+            "memory.recall": "memory-recall",
+            memory: "legacy-memory",
           },
         },
       } as OpenClawConfig),
-    ).toBe("memos-local-openclaw-plugin");
+    ).toBe("memory-dreamer");
   });
 
-  it("reads dreaming config from the configured memory-slot owner", () => {
+  it("falls back to memory.recall before the legacy memory slot for dreaming", () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            "memory.recall": "memory-recall",
+            memory: "legacy-memory",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-recall");
+  });
+
+  it("reads dreaming config from the configured memory.dreaming owner", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            "memory.dreaming": "memory-dreamer",
+            "memory.recall": "memory-recall",
           },
           entries: {
-            "memos-local-openclaw-plugin": {
+            "memory-dreamer": {
               config: {
                 dreaming: {
                   enabled: true,
@@ -286,12 +302,47 @@ describe("memory dreaming host helpers", () => {
     });
   });
 
-  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
+  it("routes dreaming config through the selected per-agent memory.dreaming slot", () => {
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.dreaming": "global-dreamer",
+        },
+        entries: {
+          "global-dreamer": {
+            config: { dreaming: { enabled: true, frequency: "0 1 * * *" } },
+          },
+          "agent-dreamer": {
+            config: { dreaming: { enabled: true, frequency: "0 2 * * *" } },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            plugins: {
+              slots: {
+                "memory.dreaming": "agent-dreamer",
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingPluginId(cfg, { agentId: "alpha" })).toBe("agent-dreamer");
+    expect(resolveMemoryDreamingPluginConfig(cfg, { agentId: "alpha" })).toEqual({
+      dreaming: { enabled: true, frequency: "0 2 * * *" },
+    });
+  });
+
+  it("reads dreaming config from memory.recall when no memory.dreaming slot is configured", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
           slots: {
-            memory: "memory-lancedb",
+            "memory.recall": "memory-lancedb",
           },
           entries: {
             "memory-lancedb": {
@@ -335,12 +386,12 @@ describe("memory dreaming host helpers", () => {
     });
   });
 
-  it('falls back to memory-core when memory slot is "none" or blank', () => {
+  it("does not use legacy memory slot as the dreaming owner", () => {
     expect(
       resolveMemoryDreamingPluginId({
         plugins: {
           slots: {
-            memory: "none",
+            memory: "legacy-memory",
           },
         },
       } as OpenClawConfig),
@@ -350,9 +401,16 @@ describe("memory dreaming host helpers", () => {
       resolveMemoryDreamingPluginConfig({
         plugins: {
           slots: {
-            memory: "   ",
+            memory: "legacy-memory",
           },
           entries: {
+            "legacy-memory": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
             "memory-core": {
               config: {
                 dreaming: {
@@ -368,5 +426,44 @@ describe("memory dreaming host helpers", () => {
         enabled: true,
       },
     });
+  });
+
+  it("does not use legacy memory fallback for dreaming when canonical recall is disabled", () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            memory: "legacy-memory",
+            "memory.recall": "none",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-core");
+  });
+
+  it("disables dreaming when the dedicated dreaming slot is none", () => {
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.dreaming": "none",
+          "memory.recall": "memory-recall",
+        },
+        entries: {
+          "memory-recall": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingPluginId(cfg)).toBeNull();
+    expect(resolveMemoryDreamingPluginConfig(cfg)).toBeUndefined();
+    expect(
+      resolveMemoryDreamingConfig({ pluginConfig: resolveMemoryDreamingPluginConfig(cfg) }).enabled,
+    ).toBe(false);
   });
 });

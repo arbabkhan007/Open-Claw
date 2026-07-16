@@ -10,6 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  hasConfiguredPluginSlot,
+  resolveMemoryRoleSlot,
+  resolvePluginSlot,
+} from "../plugins/slot-resolution.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -317,6 +322,14 @@ function normalizePathForComparison(input: string): string {
   return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
+function normalizeConfiguredPluginSlot(value: unknown): string | null | undefined {
+  const configuredSlot = normalizeTrimmedString(value);
+  if (!configuredSlot) {
+    return undefined;
+  }
+  return normalizeLowercaseStringOrEmpty(configuredSlot) === "none" ? null : configuredSlot;
+}
+
 function formatLocalIsoDay(epochMs: number): string {
   const date = new Date(epochMs);
   const year = date.getFullYear();
@@ -327,24 +340,63 @@ function formatLocalIsoDay(epochMs: number): string {
 
 export function resolveMemoryDreamingPluginId(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
-): string {
-  const root = asNullableRecord(cfg);
-  const plugins = asNullableRecord(root?.plugins);
-  const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
-    return configuredSlot;
+  options: { agentId?: string } = {},
+): string | null {
+  if (!cfg) {
+    return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
   }
+
+  if (
+    hasConfiguredPluginSlot({
+      cfg: cfg as OpenClawConfig,
+      slotKey: "memory.dreaming",
+      agentId: options.agentId,
+    })
+  ) {
+    return (
+      normalizeConfiguredPluginSlot(
+        resolveMemoryRoleSlot({
+          cfg: cfg as OpenClawConfig,
+          role: "dreaming",
+          agentId: options.agentId,
+        }),
+      ) ?? null
+    );
+  }
+
+  if (
+    hasConfiguredPluginSlot({
+      cfg: cfg as OpenClawConfig,
+      slotKey: "memory.recall",
+      agentId: options.agentId,
+    })
+  ) {
+    const recallSlot = normalizeConfiguredPluginSlot(
+      resolvePluginSlot({
+        cfg: cfg as OpenClawConfig,
+        slotKey: "memory.recall",
+        agentId: options.agentId,
+      }),
+    );
+    if (recallSlot) {
+      return recallSlot;
+    }
+  }
+
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
 }
 
 export function resolveMemoryDreamingPluginConfig(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
+  options: { agentId?: string } = {},
 ): Record<string, unknown> | undefined {
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const entries = asNullableRecord(plugins?.entries);
-  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  const pluginId = resolveMemoryDreamingPluginId(cfg, options);
+  if (!pluginId) {
+    return undefined;
+  }
   const memoryPlugin = asNullableRecord(entries?.[pluginId]);
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }

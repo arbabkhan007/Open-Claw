@@ -380,8 +380,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: strictBundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
+      "browser-bridge.ts!",
       "browser-control-auth.ts!",
       "browser-config.ts!",
+      "browser-cdp.ts!",
       "browser-doctor.ts!",
       "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
@@ -398,8 +400,9 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: strictBundledPluginWorkspace([
-      // Channel package-state probes resolve this module from package metadata.
+      // Loaded via package metadata/specifier and deprecated SDK package bridges.
       "configured-state.ts!",
+      "timeouts.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/featherless`]: strictBundledPluginWorkspace(),
@@ -420,7 +423,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/mistral`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/moonshot`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: strictBundledPluginWorkspace([
+      // Provider runtime registration is loaded by package bridge convention.
+      "register.runtime.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: strictBundledPluginWorkspace(),
@@ -428,8 +434,9 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace([
-      // The plugin-SDK QA Lab facade resolves this CLI surface by basename.
+      // Private SDK/release tooling resolves these package bridge artifacts by basename.
       "cli.ts!",
+      "model-selection.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),

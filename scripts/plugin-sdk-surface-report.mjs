@@ -112,7 +112,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 425,
+  "config-types": 426,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -221,9 +221,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +3: multi-slot memory role contract/plugin SDK surfaces.
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -6.
-      10606,
+      10609,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

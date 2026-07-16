@@ -10,3 +10,5 @@ export {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
+
+export type { MemoryPluginRole } from "../plugins/memory-role.contract.js";

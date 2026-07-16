@@ -10,14 +10,16 @@ import {
 
 export * from "./memory-state.js";
 
+const TEST_MEMORY_PLUGIN_ID = "memory-core";
+
 export function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
-  registerMemoryPromptSectionForPlugin("test-memory", builder);
+  registerMemoryPromptSectionForPlugin(TEST_MEMORY_PLUGIN_ID, builder);
 }
 
 export function registerMemoryFlushPlanResolver(resolver: MemoryFlushPlanResolver): void {
-  registerMemoryFlushPlanResolverForPlugin("test-memory", resolver);
+  registerMemoryFlushPlanResolverForPlugin(TEST_MEMORY_PLUGIN_ID, resolver);
 }
 
 export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
-  registerMemoryRuntimeForPlugin("test-memory", runtime);
+  registerMemoryRuntimeForPlugin(TEST_MEMORY_PLUGIN_ID, runtime);
 }

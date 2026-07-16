@@ -2,6 +2,7 @@
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
@@ -133,6 +134,7 @@ export async function delegateCompactionToRuntime(
 export function buildMemorySystemPromptAddition(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  cfg?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -140,6 +142,7 @@ export function buildMemorySystemPromptAddition(params: {
   const lines = buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
+    cfg: params.cfg,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
