@@ -135,6 +135,85 @@ async function isCorePackage(root: string): Promise<boolean> {
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
 
+function normalizeGitRemoteUrl(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const scpLike = /^(?:[^@/:]+@)?([^@/:]+):(?!\/)(.+)$/u.exec(trimmed);
+  let host: string;
+  let repoPath: string;
+  if (scpLike) {
+    host = scpLike[1] ?? "";
+    repoPath = scpLike[2] ?? "";
+  } else {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return null;
+    }
+    host = parsed.hostname;
+    repoPath = parsed.pathname;
+  }
+  const normalizedHost = host.toLowerCase();
+  const normalizedPath = repoPath
+    .replace(/^\/+/u, "")
+    .replace(/\/+$/u, "")
+    .replace(/\.git$/u, "")
+    .toLowerCase();
+  if (!normalizedHost || !normalizedPath) {
+    return null;
+  }
+  return `${normalizedHost}/${normalizedPath}`;
+}
+
+function isCanonicalRepoUrl(url: string): boolean {
+  const normalized = normalizeGitRemoteUrl(url);
+  return normalized !== null && normalized === normalizeGitRemoteUrl(OPENCLAW_REPO_URL);
+}
+
+async function readGitRemotes(params: {
+  dir: string;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<Array<{ name: string; url: string }>> {
+  const res = await runCommandWithTimeout(
+    ["git", "-C", params.dir, "config", "--get-regexp", String.raw`^remote\..*\.url$`],
+    { env: params.env, timeoutMs: params.timeoutMs },
+  );
+  if (res.code !== 0) {
+    return [];
+  }
+  const remotes: Array<{ name: string; url: string }> = [];
+  for (const line of res.stdout.split("\n")) {
+    const match = /^remote\.(.+)\.url\s+(.+)$/u.exec(line.trim());
+    if (match?.[1] && match[2]) {
+      remotes.push({ name: match[1], url: match[2].trim() });
+    }
+  }
+  return remotes;
+}
+
+async function assertCanonicalCheckoutRemotes(params: {
+  dir: string;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const remotes = await readGitRemotes(params);
+  if (remotes.length === 0) {
+    throw new Error(
+      `OPENCLAW_GIT_DIR points at a checkout with no git remote: ${params.dir}. Source updates only build from ${OPENCLAW_REPO_URL}. Set OPENCLAW_GIT_DIR to an empty folder or a clone of ${OPENCLAW_REPO_URL}.`,
+    );
+  }
+  const foreign = remotes.find((remote) => !isCanonicalRepoUrl(remote.url));
+  if (foreign) {
+    throw new Error(
+      `OPENCLAW_GIT_DIR points at a checkout with an unexpected git remote: ${params.dir} (remote "${foreign.name}" is ${foreign.url}). Source updates only build from ${OPENCLAW_REPO_URL}. Set OPENCLAW_GIT_DIR to an empty folder or a clone of ${OPENCLAW_REPO_URL}.`,
+    );
+  }
+}
+
 /** Return true only for existing directories with no entries. */
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
@@ -279,6 +358,12 @@ export async function ensureGitCheckout(params: {
   if (!(await isCorePackage(params.dir))) {
     throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
   }
+
+  await assertCanonicalCheckoutRemotes({
+    dir: params.dir,
+    timeoutMs: params.timeoutMs,
+    env: gitEnv,
+  });
 
   return null;
 }
