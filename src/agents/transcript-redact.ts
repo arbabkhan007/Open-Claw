@@ -673,7 +673,12 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
+      // Completions and Anthropic transports tag pre-tool narration with the
+      // same v1 phase signature; stripping it here would resurface suppressed
+      // commentary for history-backed consumers (Control UI reload, resume).
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isOpenAICompletionsRoute(currentAssistantRoute) ||
+        isAnthropicReasoningRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "text" &&
       key === "textSignature" &&
