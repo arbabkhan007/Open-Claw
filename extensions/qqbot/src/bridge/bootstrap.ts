@@ -59,8 +59,15 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
+      // Keep adapter.downloadFile on the same media timeout policy as fetchMedia /
+      // file-utils.downloadFile so a stalled body cannot hang forever.
       const readRemoteMediaBuffer = await loadReadRemoteMediaBuffer();
-      const result = await readRemoteMediaBuffer({ url, filePathHint: filename });
+      const result = await readRemoteMediaBuffer({
+        url,
+        filePathHint: filename,
+        responseHeaderTimeoutMs: 120_000,
+        readIdleTimeoutMs: 30_000,
+      });
       const fs = await import("node:fs");
       const path = await import("node:path");
       if (!fs.existsSync(destDir)) {
@@ -80,6 +87,7 @@ function createBuiltinAdapter(): PlatformAdapter {
         maxRedirects: options.maxRedirects,
         timeoutMs: options.timeoutMs,
         responseHeaderTimeoutMs: options.responseHeaderTimeoutMs,
+        readIdleTimeoutMs: options.readIdleTimeoutMs,
         ssrfPolicy: options.ssrfPolicy,
         requestInit: options.requestInit,
       });
