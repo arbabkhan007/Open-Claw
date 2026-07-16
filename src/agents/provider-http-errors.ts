@@ -7,7 +7,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
-import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
+import {
+  type ReadResponseTextPrefixOptions,
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -38,11 +42,21 @@ function redactProviderErrorBody(body: string): string {
 export async function readResponseTextLimited(
   response: Response,
   limitBytes = 16 * 1024,
+  opts?: ReadResponseTextPrefixOptions,
 ): Promise<string> {
   if (limitBytes <= 0) {
     return "";
   }
-  return (await readResponseTextPrefix(response, limitBytes)).text;
+  return (
+    await readResponseTextPrefix(response, limitBytes, {
+      chunkTimeoutMs: opts?.chunkTimeoutMs ?? 10_000,
+      onIdleTimeout:
+        opts?.onIdleTimeout ??
+        (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
+      timeoutMs: opts?.timeoutMs,
+      onTimeout: opts?.onTimeout,
+    })
+  ).text;
 }
 
 /** Reads a successful provider text response under a byte cap. */

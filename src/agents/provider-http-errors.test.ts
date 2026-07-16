@@ -358,4 +358,53 @@ describe("provider error utils", () => {
 
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
+
+  it("rejects stalled non-2xx error body read after chunk idle timeout", async () => {
+    // Non-2xx error path (assertOkOrThrowProviderError → extractProviderErrorInfo
+    // → readResponseTextLimited) must also time out when the provider sends headers
+    // and a partial body then stalls mid-error-body.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"error": {"message": "par'));
+        // never close — simulates stall
+      },
+    });
+    const response = new Response(stream, {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+
+    // Uses the 10 000 ms default from readResponseTextLimited; override with
+    // a short timeout so the test completes quickly.
+    await expect(assertOkOrThrowProviderError(response, "stalled-error")).rejects.toThrow(
+      "stalled-error (502)",
+    );
+  });
+
+  it("proves idle timeout with a real TCP server that stalls mid-JSON-body", async () => {
+    // Local HTTP server that sends headers and a partial JSON body then stalls.
+    // This exercises the real fetch → ReadableStream → reader.read() path to
+    // prove that chunkTimeoutMs terminates a hanging provider connection.
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"status": "par');
+      // Intentionally never call res.end() — the server stalls here.
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
+    const port = (server.address() as import("node:net").AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://localhost:${port}/test`);
+      await expect(
+        readProviderJsonResponse(response, "tcp-stall", { chunkTimeoutMs: 100 }),
+      ).rejects.toThrow("tcp-stall: response body stalled for 100ms");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 });
