@@ -40,7 +40,11 @@ export { encodePngRgba, fillPixel } from "../media/png-encode.ts";
 export { renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } from "../media/qr-image.ts";
 export { renderQrTerminal } from "../media/qr-terminal.ts";
 
-export { readResponseTextSnippet, readResponseWithLimit } from "../infra/http-body.js";
+export {
+  readChunkWithIdleTimeout,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "../infra/http-body.js";
 export { ensureMediaDir, extractOriginalFilename, saveMediaSource } from "../media/store.js";
 export type { SavedMedia } from "../media/store.js";
 export { unlinkIfExists } from "../media/temp-files.js";
