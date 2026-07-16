@@ -3746,10 +3746,34 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("keeps owning context-engine compaction primary for legacy Codex native sessions", async () => {
     const successorSessionId = "engine-successor-session";
+    const lifecycleOrder: string[] = [];
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "codex",
       runtimeSource: "model",
     } as never);
+    performGatewaySessionResetMock.mockImplementationOnce(async (params: { key: string }) => {
+      lifecycleOrder.push("reset");
+      return {
+        ok: true as const,
+        key: params.key,
+        entry: { sessionId: "reset-session" },
+      };
+    });
+    hookRunner.hasHooks.mockImplementation((hookName) => hookName === "after_compaction");
+    (hookRunner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, context: unknown) => {
+        lifecycleOrder.push("hook");
+        const hookContext = context as {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        };
+        await expect(hookContext.api?.resetSession?.("reset")).resolves.toMatchObject({
+          ok: true,
+          key: TEST_SESSION_KEY,
+          deferred: true,
+        });
+        expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
+      },
+    );
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
       compacted: true,
@@ -3762,20 +3786,23 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         sessionId: successorSessionId,
       },
     } as never);
-    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "",
-        firstKeptEntryId: "",
-        tokensBefore: 333,
-        details: {
-          backend: "codex-app-server",
-          signal: "thread/compact/start",
-          pending: false,
-          completed: true,
+    maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async () => {
+      lifecycleOrder.push("native");
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "",
+          firstKeptEntryId: "",
+          tokensBefore: 333,
+          details: {
+            backend: "codex-app-server",
+            signal: "thread/compact/start",
+            pending: false,
+            completed: true,
+          },
         },
-      },
+      };
     });
 
     const result = await compactEmbeddedAgentSession(
@@ -3807,6 +3834,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         "maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0] test invariant",
       ),
     );
+    expect(lifecycleOrder).toEqual(["hook", "native", "reset"]);
+    expect(performGatewaySessionResetMock).toHaveBeenCalledWith({
+      key: TEST_SESSION_KEY,
+      agentId: "main",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
+    });
     const details = result.result?.details as
       | { codexNativeCompaction?: Record<string, unknown> }
       | undefined;

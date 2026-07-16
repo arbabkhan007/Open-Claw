@@ -15,6 +15,7 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
+  type DeferEmbeddedHookSessionReset,
 } from "../embedded-agent-runner/compaction-hooks.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -196,7 +197,15 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   if (!hookRunner?.hasHooks("after_compaction")) {
     return;
   }
-  const resetQueue = createEmbeddedHookSessionResetQueue();
+  const resetQueue = params.ctx.deferEmbeddedHookSessionReset
+    ? null
+    : createEmbeddedHookSessionResetQueue();
+  const deferResetSession =
+    params.ctx.deferEmbeddedHookSessionReset ??
+    (resetQueue
+      ? (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
+          resetQueue.deferResetSession(request)
+      : undefined);
   try {
     await hookRunner.runAfterCompaction(
       {
@@ -209,13 +218,13 @@ export async function runAgentHarnessAfterCompactionHook(params: {
         api: buildEmbeddedHookApi({
           agentId: params.ctx.agentId,
           sessionKey: params.ctx.sessionKey,
-          deferResetSession: (request) => resetQueue.deferResetSession(request),
+          ...(deferResetSession ? { deferResetSession } : {}),
         }),
       },
     );
   } catch (error) {
     log.warn(`after_compaction hook failed: ${String(error)}`);
   } finally {
-    await resetQueue.flush();
+    await resetQueue?.flush();
   }
 }

@@ -66,6 +66,7 @@ import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
   runPostCompactionSideEffects,
+  type DeferEmbeddedHookSessionReset,
 } from "./compaction-hooks.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
@@ -712,7 +713,15 @@ async function compactResolvedContextEngine(
           agentId: params.agentId,
         });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-        const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
+        const hookSessionResetQueue = params.deferEmbeddedHookSessionReset
+          ? null
+          : createEmbeddedHookSessionResetQueue();
+        const deferHookResetSession =
+          params.deferEmbeddedHookSessionReset ??
+          (hookSessionResetQueue
+            ? (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
+                hookSessionResetQueue.deferResetSession(request)
+            : undefined);
         const hookCtx = {
           sessionId: params.sessionId,
           agentId: sessionAgentId,
@@ -910,7 +919,7 @@ async function compactResolvedContextEngine(
               api: buildEmbeddedHookApi({
                 agentId: sessionAgentId,
                 sessionKey: hookSessionKey,
-                deferResetSession: (request) => hookSessionResetQueue.deferResetSession(request),
+                ...(deferHookResetSession ? { deferResetSession: deferHookResetSession } : {}),
               }),
             };
             await hookRunner.runAfterCompaction(
@@ -929,8 +938,6 @@ async function compactResolvedContextEngine(
             log.warn("after_compaction hook failed", {
               errorMessage: formatErrorMessage(err),
             });
-          } finally {
-            await hookSessionResetQueue.flush();
           }
         }
         let secondaryNativeHarnessCompaction: EmbeddedAgentCompactResult | undefined;
@@ -975,6 +982,7 @@ async function compactResolvedContextEngine(
             });
           }
         }
+        await hookSessionResetQueue?.flush();
         const secondaryNativeDetailsKey =
           normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
             ? "codexNativeCompaction"

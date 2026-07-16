@@ -71,6 +71,9 @@ export function createEmbeddedHookSessionResetQueue() {
     async flush(): Promise<void> {
       const requests = Array.from(pending.values());
       pending.clear();
+      if (requests.length === 0) {
+        return;
+      }
       const { performGatewaySessionReset } = await import("../../gateway/session-reset-service.js");
       for (const request of requests) {
         try {

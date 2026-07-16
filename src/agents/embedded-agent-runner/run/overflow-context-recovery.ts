@@ -9,6 +9,7 @@ import {
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
+import type { DeferEmbeddedHookSessionReset } from "../compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -75,6 +76,7 @@ export async function recoverEmbeddedRunOverflow(input: {
   thinkLevel: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   authProfileId?: string;
   authProfileIdSource: "auto" | "user";
+  deferEmbeddedHookSessionReset: DeferEmbeddedHookSessionReset;
   resolveContextEnginePluginId: () => string | undefined;
   buildRuntimeSettings: (settings: {
     tokenBudget?: number | null;
@@ -232,6 +234,7 @@ export async function recoverEmbeddedRunOverflow(input: {
           purpose: "context-engine.overflow-compaction",
         }),
         onCompactionHookMessages: input.onCompactionHookMessages,
+        deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset,
         ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
         runId: runParams.runId,
         trigger: "overflow",
