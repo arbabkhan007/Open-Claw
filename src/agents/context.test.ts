@@ -81,6 +81,63 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("gpt-5.4")).toBe(272_000);
   });
 
+  it("keeps verified provider budgets ahead of bundled static fallbacks", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { provider: "github-copilot", id: "gpt-5.6-sol", contextTokens: 922_000 },
+        { provider: "github-copilot", id: "claude-opus-4.8", contextTokens: 936_000 },
+        {
+          provider: "github-copilot",
+          id: "mai-code-1-flash-picker",
+          contextTokens: 128_000,
+        },
+      ],
+    });
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { provider: "github-copilot", id: "gpt-5.6-sol", contextWindow: 128_000 },
+        { provider: "github-copilot", id: "claude-opus-4.8", contextWindow: 128_000 },
+        {
+          provider: "github-copilot",
+          id: "mai-code-1-flash-picker",
+          contextWindow: 64_000,
+        },
+      ],
+      mode: "fallback",
+    });
+
+    expect(cache.get(providerContextTokenCacheKey("github-copilot", "gpt-5.6-sol"))).toBe(922_000);
+    expect(cache.get(providerContextTokenCacheKey("github-copilot", "claude-opus-4.8"))).toBe(
+      936_000,
+    );
+    expect(
+      cache.get(providerContextTokenCacheKey("github-copilot", "mai-code-1-flash-picker")),
+    ).toBe(128_000);
+  });
+
+  it("uses bundled static fallback budgets when provider discovery is absent", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { provider: "github-copilot", id: "offline-model", contextWindow: 128_000 },
+        {
+          provider: "github-copilot",
+          id: "github-copilot/offline-model",
+          contextWindow: 64_000,
+        },
+      ],
+      mode: "fallback",
+    });
+
+    expect(cache.get(providerContextTokenCacheKey("github-copilot", "offline-model"))).toBe(64_000);
+    expect(cache.get("offline-model")).toBe(128_000);
+    expect(cache.get("github-copilot/offline-model")).toBe(64_000);
+  });
+
   it("upgrades claude-cli GA 1M variants when discovery still reports 200k", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
