@@ -2826,7 +2826,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.readRestartSentinel.mockResolvedValue({
       version: 1,
       payload,
-    });
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -2848,7 +2848,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.readRestartSentinel.mockResolvedValue({
       version: 1,
       payload,
-    });
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
 
     await expect(refreshLatestUpdateRestartSentinel()).resolves.toEqual(payload);
 

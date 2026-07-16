@@ -262,6 +262,27 @@ function restoreCanonicalSecretRefs(
   return projectCanonicalSecretRefsOntoRuntime(sourceConfig, runtimeConfig) as OpenClawConfig;
 }
 
+function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): boolean {
+  return path === `channels.${channel}.channelConfigUpdatedAt`;
+}
+
+function isChannelPath(path: string, channel: ChannelKind): boolean {
+  const channelPrefix = `channels.${channel}`;
+  return path === channelPrefix || path.startsWith(`${channelPrefix}.`);
+}
+
+function shouldIncludeKnownAccountsForAccountIndexReload(
+  changedPaths: readonly string[],
+  channel: ChannelKind,
+): boolean {
+  return (
+    changedPaths.some((path) => isChannelAccountIndexReloadPath(path, channel)) &&
+    !changedPaths.some(
+      (path) => isChannelPath(path, channel) && !isChannelAccountIndexReloadPath(path, channel),
+    )
+  );
+}
+
 function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
   clearCurrentProviderAuthState();
@@ -737,7 +758,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            await runOutsideGatewayRootWorkAdmission(() =>
+              params.startChannel(channel, undefined, { includeKnownAccounts: true }),
+            );
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
@@ -785,7 +808,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             }
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
-            await params.stopChannel(channel, undefined, { manual: false });
+            const stopOptions = getChannelAutostartSuppression()
+              ? { manual: false, restartPending: false }
+              : { manual: false };
+            await params.stopChannel(channel, undefined, stopOptions);
             if (isPluginReloadAborted()) {
               pluginReloadAborted = true;
             }
@@ -966,7 +992,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
                 return;
               }
               params.logChannels.info(`stopping ${channel} channel before suppressed hot reload`);
-              await params.stopChannel(channel, undefined, { manual: false });
+              await params.stopChannel(channel, undefined, {
+                manual: false,
+                restartPending: false,
+              });
             },
             onFailure: (channel, err) => {
               params.logChannels.error(
@@ -990,6 +1019,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
               return;
             }
+            const includeKnownAccounts =
+              (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
+              (!plan.reloadPlugins &&
+                shouldIncludeKnownAccountsForAccountIndexReload(plan.changedPaths, name));
             params.logChannels.info(`restarting ${name} channel`);
             if (!channelsStoppedBeforePluginReload.has(name)) {
               await params.stopChannel(name, undefined, { manual: false });
@@ -997,7 +1030,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
               return;
             }
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+            if (includeKnownAccounts) {
+              await runOutsideGatewayRootWorkAdmission(() =>
+                params.startChannel(name, undefined, { includeKnownAccounts: true }),
+              );
+            } else {
+              await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+            }
           };
           const restartFailures = await collectChannelOperationFailures({
             channels: channelsToRestart,
