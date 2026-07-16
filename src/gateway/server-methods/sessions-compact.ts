@@ -5,6 +5,7 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hooks.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   resolveSessionWorkStartError,
@@ -343,6 +344,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               reason,
             });
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
+          const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
           try {
             result = await runGatewaySessionCompaction({
               cfg,
@@ -352,6 +354,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionKey: target.canonicalKey,
               sessionStoreKey: compactTarget.primaryKey,
               storePath,
+              deferEmbeddedHookSessionReset: (request) =>
+                hookSessionResetQueue.deferResetSession(request),
             });
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));
@@ -424,6 +428,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionId: result.result?.sessionId ?? sessionId,
               agentId: target.agentId ?? requestedAgentId,
             });
+            await hookSessionResetQueue.flush();
           }
 
           emitCompactionEnd(result.ok && result.compacted, result.reason);

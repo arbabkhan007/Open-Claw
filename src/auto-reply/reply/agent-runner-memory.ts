@@ -10,6 +10,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hooks.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -965,6 +966,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
+    const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
@@ -1007,6 +1009,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
+      deferEmbeddedHookSessionReset: (request) => hookSessionResetQueue.deferResetSession(request),
       abortSignal: params.replyOperation.abortSignal,
     });
 
@@ -1049,6 +1052,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       followupRun: params.followupRun,
     });
     await notifyTerminalCompaction("end");
+    await hookSessionResetQueue.flush();
     entry = params.sessionStore?.[params.sessionKey] ?? entry;
     if (entry) {
       const previousSessionId = params.followupRun.run.sessionId;

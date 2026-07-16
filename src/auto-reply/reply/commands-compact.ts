@@ -7,6 +7,7 @@ import {
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hooks.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -242,6 +243,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
+  const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
     sessionId,
@@ -294,6 +296,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     customInstructions,
     trigger: "manual",
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+    deferEmbeddedHookSessionReset: (request) => hookSessionResetQueue.deferResetSession(request),
   });
 
   const compactLabel =
@@ -318,6 +321,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
     });
+    await hookSessionResetQueue.flush();
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;

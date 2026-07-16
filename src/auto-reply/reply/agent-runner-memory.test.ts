@@ -143,6 +143,12 @@ type CompactEmbeddedAgentSessionParams = {
   cwd?: string;
   force?: boolean;
   forcePreflight?: boolean;
+  deferEmbeddedHookSessionReset?: (request: {
+    key: string;
+    agentId?: string;
+    reason: "new" | "reset";
+    commandSource: string;
+  }) => void;
   modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
@@ -1254,6 +1260,9 @@ describe("runMemoryFlushIfNeeded", () => {
       agentHarnessId: "openclaw",
       modelSelectionLocked: true,
     });
+    expect(typeof requireCompactEmbeddedAgentSessionCall().deferEmbeddedHookSessionReset).toBe(
+      "function",
+    );
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
