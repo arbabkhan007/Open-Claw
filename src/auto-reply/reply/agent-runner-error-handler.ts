@@ -20,6 +20,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -35,6 +36,7 @@ import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
   buildRateLimitCooldownMessage,
+  buildStalledRunReplyPayload,
   hasBillingAttemptSummary,
   isNonDirectConversationContext,
   isPureTransientRateLimitSummary,
@@ -45,10 +47,12 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 import {
   buildRestartLifecycleReplyText,
   isReplyOperationRestartAbort,
+  isReplyOperationStalled,
   isReplyOperationUserAbort,
   resolveRestartLifecycleError,
 } from "./reply-operation-abort.js";
@@ -153,6 +157,13 @@ export async function handleAgentExecutionError(params: {
           ? { text: SILENT_REPLY_TOKEN }
           : markAgentRunFailureReplyPayload({ text: buildRestartLifecycleReplyText() }),
     };
+  }
+  // Stale recovery records run_stalled before aborting this operation.
+  // Handle it before the broad user-abort predicate so the interruption remains visible.
+  if (isReplyOperationStalled(turn.replyOperation)) {
+    takePendingLifecycleTerminal()?.emit("error", err);
+    await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
+    return { kind: "final", payload: buildStalledRunReplyPayload(turn.isHeartbeat) };
   }
   if (isReplyOperationUserAbort(turn.replyOperation)) {
     takePendingLifecycleTerminal()?.emit("error", err);
