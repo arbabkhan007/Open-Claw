@@ -48,17 +48,18 @@ function encodeAssistantTextSignatureV1(id: string, phase?: "commentary" | "fina
  * already-tagged text blocks first so generated ids stay unique and repeated
  * calls stay idempotent.
  */
+function isTaggableTextBlock(
+  block: unknown,
+): block is { type: "text"; text: string; textSignature?: string } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as { type?: unknown; text?: unknown };
+  return record.type === "text" && typeof record.text === "string";
+}
+
 export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): void {
-  const isTextBlock = (
-    block: unknown,
-  ): block is { type: "text"; text: string; textSignature?: string } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    return record.type === "text" && typeof record.text === "string";
-  };
-  const textBlocks = content.filter(isTextBlock);
+  const textBlocks = content.filter(isTaggableTextBlock);
   let commentaryTextIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
   for (const block of textBlocks) {
     if (block.text.trim().length > 0 && block.textSignature === undefined) {
@@ -67,6 +68,29 @@ export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): void 
         "commentary",
       );
       commentaryTextIndex += 1;
+    }
+  }
+}
+
+/**
+ * Rolls back transport-generated provisional commentary tags. Needed when a
+ * turn provisionally tagged at a tool-call boundary resolves as a plain text
+ * reply (spurious tool calls stripped) — leaving the tag would silence the
+ * legitimate answer. Only `commentary-<n>` ids are cleared, so item-scoped
+ * signatures from other transports are never touched.
+ */
+export function clearPendingCommentaryText(content: ReadonlyArray<unknown>): void {
+  for (const block of content.filter(isTaggableTextBlock)) {
+    if (typeof block.textSignature !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.textSignature) as { v?: unknown; id?: unknown };
+      if (parsed.v === 1 && typeof parsed.id === "string" && parsed.id.startsWith("commentary-")) {
+        delete block.textSignature;
+      }
+    } catch {
+      // Non-JSON signatures are legacy item ids owned by other transports.
     }
   }
 }

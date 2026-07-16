@@ -765,7 +765,7 @@ describe("openai transport stream", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
-  it("tags pre-tool narration as commentary when the turn stops for tool calls", async () => {
+  it("tags pre-tool narration as commentary before toolcall_start reaches consumers", async () => {
     const model = makeCompletionsModel({
       id: "grok-4.5",
       name: "Grok 4.5",
@@ -776,7 +776,8 @@ describe("openai transport stream", () => {
     });
 
     const output = createAssistantOutput(model);
-    const stream = { push: () => {} };
+    const events: CapturedStreamEvent[] = [];
+    const stream = { push: (event: unknown) => events.push(event as CapturedStreamEvent) };
 
     const mockChunks = [
       makeCompletionsChunk({ role: "assistant" as const, content: "" }),
@@ -812,6 +813,13 @@ describe("openai transport stream", () => {
       v: 1,
       phase: "commentary",
     });
+    // The phase must be resolved before the tool-call event goes out, so
+    // block/preview consumers never observe the narration unphased.
+    const toolCallStart = events.find(
+      (event) => (event as { type?: string }).type === "toolcall_start",
+    ) as { partial?: { content?: Array<{ type?: string; textSignature?: string }> } } | undefined;
+    const partialText = toolCallStart?.partial?.content?.find((block) => block.type === "text");
+    expect(String(partialText?.textSignature)).toContain('"phase":"commentary"');
   });
 
   it("keeps text untagged when spurious tool calls are stripped on finish_reason stop", async () => {
