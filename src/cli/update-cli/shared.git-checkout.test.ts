@@ -105,6 +105,7 @@ describe("ensureGitCheckout remote verification", () => {
     "https://github.com/openclaw/openclaw",
     "https://github.com/OpenClaw/OpenClaw.git",
     "https://github.com/openclaw/openclaw.GIT",
+    "git@github.com:/openclaw/openclaw.git",
   ])("accepts equivalent canonical remote form %s", async (url) => {
     const dir = await createCheckout([{ name: "origin", url }]);
 

@@ -141,13 +141,9 @@ function normalizeGitRemoteUrl(url: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const scpLike = /^(?:[^@/:]+@)?([^@/:]+):(?!\/)(.+)$/u.exec(trimmed);
   let host: string;
   let repoPath: string;
-  if (scpLike) {
-    host = scpLike[1] ?? "";
-    repoPath = scpLike[2] ?? "";
-  } else {
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) {
     let parsed: URL;
     try {
       parsed = new URL(trimmed);
@@ -159,6 +155,13 @@ function normalizeGitRemoteUrl(url: string): string | null {
     }
     host = parsed.hostname;
     repoPath = parsed.pathname;
+  } else {
+    const scpLike = /^(?:[^@/]+@)?([^@/:]+):(.+)$/u.exec(trimmed);
+    if (!scpLike) {
+      return null;
+    }
+    host = scpLike[1] ?? "";
+    repoPath = scpLike[2] ?? "";
   }
   const normalizedHost = host.toLowerCase();
   const normalizedPath = repoPath
