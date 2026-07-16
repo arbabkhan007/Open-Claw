@@ -2012,10 +2012,9 @@ describe("runCopilotAttempt", () => {
   });
 
   it("marks a timeout during active SDK compaction", async () => {
-    const deferredResetSession = vi.fn();
     const afterCompaction = vi.fn(async (_event, ctx) => {
       expect(ctx.sessionKey).toBe("agent:main:sandbox:policy");
-      await ctx.api?.resetSession("new");
+      expect(ctx.api?.resetSession).toEqual(expect.any(Function));
     });
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
@@ -2032,7 +2031,6 @@ describe("runCopilotAttempt", () => {
     const result = await runCopilotAttempt(
       makeParams({
         sandboxSessionKey: "agent:main:sandbox:policy",
-        deferEmbeddedHookSessionReset: deferredResetSession,
       }),
       { pool: makeFakePool(sdk) },
     );
@@ -2052,16 +2050,9 @@ describe("runCopilotAttempt", () => {
       expect.objectContaining({ compactedCount: 3, sessionFile: "session.json" }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
     );
-    expect(deferredResetSession).toHaveBeenCalledWith({
-      key: "agent:main:session-1",
-      agentId: "agent-1",
-      reason: "new",
-      commandSource: "embedded-agent:hook",
-    });
   });
 
   it("does not expose SDK after_compaction reset API for locked model sessions", async () => {
-    const deferredResetSession = vi.fn();
     const afterCompaction = vi.fn(async (_event, ctx) => {
       expect(ctx.api).toBeUndefined();
       await ctx.api?.resetSession("new");
@@ -2080,7 +2071,6 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(
       makeParams({
-        deferEmbeddedHookSessionReset: deferredResetSession,
         modelSelectionLocked: true,
       }),
       { pool: makeFakePool(sdk) },
@@ -2091,7 +2081,6 @@ describe("runCopilotAttempt", () => {
     await vi.waitFor(() => {
       expect(afterCompaction).toHaveBeenCalledTimes(1);
     });
-    expect(deferredResetSession).not.toHaveBeenCalled();
   });
 
   it("retains a timed-out session until later compaction reaches session.idle", async () => {

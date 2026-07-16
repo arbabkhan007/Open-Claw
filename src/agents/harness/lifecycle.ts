@@ -64,6 +64,17 @@ function assertAgentHarnessContextEngineSupport(
   });
 }
 
+function stripInternalAttemptLifecycleOwner(
+  params: AgentHarnessAttemptParams,
+): AgentHarnessAttemptParams {
+  if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {
+    return params;
+  }
+  const { deferEmbeddedHookSessionReset: _deferEmbeddedHookSessionReset, ...handoffParams } =
+    params as AgentHarnessAttemptParams & { deferEmbeddedHookSessionReset?: unknown };
+  return handoffParams;
+}
+
 function agentHarnessDiagnosticBase(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
@@ -263,7 +274,7 @@ export async function runAgentHarnessLifecycleAttempt(
     }
     const runAndClassify = async () => {
       phase = "send";
-      const rawResult = await harness.runAttempt(params);
+      const rawResult = await harness.runAttempt(stripInternalAttemptLifecycleOwner(params));
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.

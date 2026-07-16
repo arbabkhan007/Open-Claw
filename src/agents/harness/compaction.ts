@@ -99,6 +99,17 @@ function stripHarnessOwnedAuthInputs(
   return result;
 }
 
+function stripInternalHarnessCompactionLifecycleOwner(
+  params: CompactEmbeddedAgentSessionParams,
+): CompactEmbeddedAgentSessionParams {
+  if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {
+    return params;
+  }
+  const result = { ...params };
+  delete result.deferEmbeddedHookSessionReset;
+  return result;
+}
+
 function buildHarnessCompactionModelProvider(params: {
   model?: Model;
   plan?: AgentRuntimeAuthPlan;
@@ -513,7 +524,7 @@ export async function maybeCompactAgentHarnessSession(
   const handoffCompactParams = harnessOwnsAuth
     ? stripHarnessOwnedAuthInputs(compactParamsWithResolvedAuth)
     : compactParamsWithResolvedAuth;
-  const resolvedCompactParams =
+  const resolvedCompactParamsWithInternalFields =
     resolvedApiKey || runtimeModel
       ? {
           ...handoffCompactParams,
@@ -535,6 +546,9 @@ export async function maybeCompactAgentHarnessSession(
             : {}),
         }
       : handoffCompactParams;
+  const resolvedCompactParams = stripInternalHarnessCompactionLifecycleOwner(
+    resolvedCompactParamsWithInternalFields,
+  );
   if (shouldCompactAfterContextEngine) {
     return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
   }

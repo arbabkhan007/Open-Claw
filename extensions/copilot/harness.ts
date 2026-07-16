@@ -564,7 +564,6 @@ function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
     trigger: params.trigger,
     ...buildAgentHookContextChannelFields(params),
     modelSelectionLocked: params.modelSelectionLocked,
-    deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
   };
 }
 

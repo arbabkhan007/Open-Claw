@@ -522,10 +522,17 @@ function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): 
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
 ): EmbeddedRunAttemptParams {
-  if (!Object.hasOwn(params, "systemAgentTool")) {
+  if (
+    !Object.hasOwn(params, "systemAgentTool") &&
+    !Object.hasOwn(params, "deferEmbeddedHookSessionReset")
+  ) {
     return params;
   }
-  const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
+  const {
+    deferEmbeddedHookSessionReset: _deferEmbeddedHookSessionReset,
+    systemAgentTool: _systemAgentTool,
+    ...pluginParams
+  } = params;
   return pluginParams;
 }
 

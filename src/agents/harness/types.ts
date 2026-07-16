@@ -49,7 +49,7 @@ type InternalEmbeddedRunAttemptParams =
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
-  "trajectoryRecorder"
+  "deferEmbeddedHookSessionReset" | "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
@@ -116,8 +116,10 @@ export type AgentHarnessSideQuestionParams = {
 export type AgentHarnessSideQuestionResult = {
   text: string;
 };
-export type AgentHarnessCompactParams =
-  import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
+export type AgentHarnessCompactParams = Omit<
+  import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams,
+  "deferEmbeddedHookSessionReset"
+>;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessResetParams = {

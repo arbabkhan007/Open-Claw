@@ -1821,9 +1821,8 @@ describe("createCopilotAgentHarness", () => {
 
     it("calls the SDK history compaction RPC without requiring a workspace sidecar", async () => {
       const beforeCompaction = vi.fn();
-      const deferredResetSession = vi.fn();
       const afterCompaction = vi.fn(async (_event, ctx) => {
-        await ctx.api?.resetSession("new");
+        expect(ctx.api?.resetSession).toEqual(expect.any(Function));
       });
       initializeGlobalHookRunner(
         createMockPluginRegistry([
@@ -1884,7 +1883,6 @@ describe("createCopilotAgentHarness", () => {
         currentTokenCount: 900,
         workspaceDir: "/this\u0000is/illegal",
         customInstructions: "Keep decisions.",
-        deferEmbeddedHookSessionReset: deferredResetSession,
       });
 
       expect(resumeSession).toHaveBeenCalledWith(
@@ -1914,12 +1912,6 @@ describe("createCopilotAgentHarness", () => {
         { compactedCount: 4, messageCount: -1, sessionFile: "/session.json" },
         expect.objectContaining({ sessionId: "oc-sess-compact-1" }),
       );
-      expect(deferredResetSession).toHaveBeenCalledWith({
-        key: "agent:main:main",
-        agentId: "main",
-        reason: "new",
-        commandSource: "embedded-agent:hook",
-      });
       expect(result).toEqual({
         ok: true,
         compacted: true,
@@ -1947,7 +1939,6 @@ describe("createCopilotAgentHarness", () => {
     });
 
     it("does not expose reset API for locked SDK history compaction sessions", async () => {
-      const deferredResetSession = vi.fn();
       const afterCompaction = vi.fn(async (_event, ctx) => {
         expect(ctx.api).toBeUndefined();
         await ctx.api?.resetSession("new");
@@ -1998,11 +1989,9 @@ describe("createCopilotAgentHarness", () => {
         sessionKey: "agent:main:main",
         sessionId: "oc-sess-locked-compact",
         modelSelectionLocked: true,
-        deferEmbeddedHookSessionReset: deferredResetSession,
       });
 
       expect(afterCompaction).toHaveBeenCalledTimes(1);
-      expect(deferredResetSession).not.toHaveBeenCalled();
     });
 
     it("disconnects the resumed SDK session when compact aborts after resume", async () => {

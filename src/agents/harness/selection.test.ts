@@ -2297,6 +2297,38 @@ describe("selectAgentHarness", () => {
     expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
   });
 
+  it("does not hand raw compaction reset queues to plugin compact handlers", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      compact,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        deferEmbeddedHookSessionReset: vi.fn(),
+      }),
+    ).resolves.toMatchObject({ ok: true, compacted: true });
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
+  });
+
   it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
       ok: true,
