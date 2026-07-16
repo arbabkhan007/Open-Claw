@@ -15,7 +15,10 @@ import {
   validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
+import {
+  findOverlappingWorkspaceAgentIds,
+  shouldRemoveEmptyAgentParentDir,
+} from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -44,6 +47,7 @@ import {
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
@@ -764,6 +768,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
         }
       }
       await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
+      // After trashing agent/ and sessions/ subdirectories, remove the
+      // now-empty canonical parent directory so no stale agent folder
+      // remains on disk. Only the default <stateDir>/agents/<agentId> root
+      // is eligible; custom agentDir paths are preserved to avoid data loss.
+      if (
+        shouldRemoveEmptyAgentParentDir({
+          agentDir: deleteResult.agentDir,
+          agentId,
+          stateDir: resolveStateDir(),
+        })
+      ) {
+        await moveToTrashBestEffort(path.dirname(deleteResult.agentDir));
+      }
     }
 
     respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
