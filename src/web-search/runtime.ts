@@ -180,7 +180,9 @@ export function resolveWebSearchProviderId(params: {
       }),
   );
   const raw =
-    search && "provider" in search ? normalizeLowercaseStringOrEmpty(search.provider) : "";
+    search && Object.hasOwn(search, "provider")
+      ? normalizeLowercaseStringOrEmpty(search.provider)
+      : "";
 
   if (raw) {
     const explicit = providers.find((provider) => provider.id === raw);
@@ -219,7 +221,7 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
     return undefined;
   }
   const configuredProviderId =
-    params.search && "provider" in params.search
+    params.search && Object.hasOwn(params.search, "provider")
       ? normalizeOptionalLowercaseString(params.search.provider)
       : undefined;
   if (configuredProviderId) {
@@ -257,7 +259,7 @@ function resolveExplicitWebSearchProviderId(params: {
   }
 
   const configuredProviderId =
-    params.search && "provider" in params.search
+    params.search && Object.hasOwn(params.search, "provider")
       ? normalizeOptionalLowercaseString(params.search.provider)
       : undefined;
   if (configuredProviderId) {
@@ -419,7 +421,9 @@ function hasExplicitWebSearchSelection(params: {
     (params.providers ?? []).map((provider) => normalizeLowercaseStringOrEmpty(provider.id)),
   );
   const configuredProviderId =
-    params.search && "provider" in params.search && typeof params.search.provider === "string"
+    params.search &&
+    Object.hasOwn(params.search, "provider") &&
+    typeof params.search.provider === "string"
       ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
   if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {
