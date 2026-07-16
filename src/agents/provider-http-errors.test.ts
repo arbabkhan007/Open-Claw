@@ -310,6 +310,24 @@ describe("provider error utils", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
+  it("rejects stalled JSON response body after chunk idle timeout", async () => {
+    // A stream that enqueues one byte and then never closes simulates a provider
+    // that sends headers and some data but stalls mid-body.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      readProviderJsonResponse(response, "stalled-provider", { chunkTimeoutMs: 20 }),
+    ).rejects.toThrow("stalled-provider: response body stalled for 20ms");
+  });
+
   it("caps successful text responses instead of buffering oversized bodies", async () => {
     const streamed = createStreamingTextResponse({
       chunkCount: 20,
