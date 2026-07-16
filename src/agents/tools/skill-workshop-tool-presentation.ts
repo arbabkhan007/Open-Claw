@@ -107,18 +107,14 @@ export function formatProposalReviewResult(
     pagination = paginateReviewText(formatProposalReviewBody(boundedReview), 1);
   }
   return {
-    content: [
-      { type: "text" as const, text: formatProposalReview(boundedReview, pagination) },
-    ],
+    content: [{ type: "text" as const, text: formatProposalReview(boundedReview, pagination) }],
     details: {
       ...proposalDetails(boundedReview.record),
       reviewMode: boundedReview.mode,
       page: pagination.page,
       pageCount: pagination.pageCount,
       totalChars: pagination.totalChars,
-      ...(boundedReview.mode === "unavailable"
-        ? { unavailableReason: boundedReview.reason }
-        : {}),
+      ...(boundedReview.mode === "unavailable" ? { unavailableReason: boundedReview.reason } : {}),
     },
   };
 }

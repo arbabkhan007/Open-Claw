@@ -64,13 +64,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "reject",
   "quarantine",
 ] as const;
-const SKILL_WORKSHOP_PROPOSAL_ACTIONS = [
-  "create",
-  "revise",
-  "list",
-  "inspect",
-  "review",
-] as const;
+const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "revise", "list", "inspect", "review"] as const;
 const SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS = [
   ...SKILL_WORKSHOP_PROPOSAL_ACTIONS,
   "complete",
@@ -272,11 +266,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           config: options.config,
           env: options.env,
-          proposalId: await resolveProposalIdForRead(
-            params,
-            options.workspaceDir,
-            options.env,
-          ),
+          proposalId: await resolveProposalIdForRead(params, options.workspaceDir, options.env),
         });
         if (expectedVersion && expectedVersion !== review.record.proposedVersion) {
           throw new ToolInputError(

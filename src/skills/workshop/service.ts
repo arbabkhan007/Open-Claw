@@ -829,10 +829,7 @@ async function markProposal(
 }
 
 async function withPendingSkillProposalMutation<T>(
-  input: Pick<
-    SkillProposalActionInput,
-    "env" | "expectedVersion" | "proposalId" | "workspaceDir"
-  >,
+  input: Pick<SkillProposalActionInput, "env" | "expectedVersion" | "proposalId" | "workspaceDir">,
   action: "applied" | "quarantined" | "rejected" | "revised",
   fn: (read: SkillProposalReadResult) => Promise<T>,
 ): Promise<T> {
