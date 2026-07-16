@@ -1512,7 +1512,7 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
-export async function resolveManagedOutgoingImageBlobUrl(
+async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
