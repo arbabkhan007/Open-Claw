@@ -865,6 +865,7 @@ export function renderUsage(props: UsageProps) {
                         filters.startDate,
                         filters.endDate,
                         filters.selectedDays,
+                        filters.timeZone,
                         detail.sessionLogs,
                         detail.sessionLogsLoading,
                         detail.sessionLogsExpanded,
@@ -890,3 +891,4 @@ export function renderUsage(props: UsageProps) {
 }
 
 // Exposed for Playwright/Vitest browser unit tests.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

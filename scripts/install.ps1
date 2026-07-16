@@ -172,24 +172,56 @@ function Test-NodeVersionSupported {
 }
 
 function Test-NodeSqliteSupported {
-    try {
-        $probe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { const value = db.prepare("SELECT sqlite_version() AS version").get()?.version; const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null; const major = Number(match?.[1]); const minor = Number(match?.[2]); const patch = Number(match?.[3]); const safe = major > 3 || (major === 3 && (minor > 51 || (minor === 51 && patch >= 3) || (minor === 50 && patch >= 7) || (minor === 44 && patch >= 6))); if (!safe) process.exitCode = 1; } finally { db.close(); }'
-        $probe | & node - 2>$null
-        return ($LASTEXITCODE -eq 0)
-    } catch {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
         return $false
     }
+    $versionMatch = [regex]::Match($Version, '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
+    return (
+        $major -gt 3 -or
+        (
+            $major -eq 3 -and
+            (
+                $minor -gt 51 -or
+                ($minor -eq 51 -and $patch -ge 3) -or
+                ($minor -eq 50 -and $patch -ge 7) -or
+                ($minor -eq 44 -and $patch -ge 6)
+            )
+        )
+    )
 }
 
 function Check-Node {
     try {
-        $nodeVersion = (node -v 2>$null)
+        $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $nodePath = $nodeCommand.Source
+        $nodeVersion = (& $nodePath -v 2>$null)
+        $sqliteProbe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get().version)); } finally { db.close(); }'
+        $sqliteVersion = ($sqliteProbe | & $nodePath - 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            $sqliteVersion = $null
+        }
         if ($nodeVersion) {
-            if ((Test-NodeVersionSupported -Version $nodeVersion) -and (Test-NodeSqliteSupported)) {
+            if (
+                (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodeSqliteSupported -Version $sqliteVersion)
+            ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
             } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
-                Write-Host "[!] Node.js $nodeVersion uses an unsafe SQLite build; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
+                $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
+                    "unavailable"
+                } else {
+                    $sqliteVersion
+                }
+                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
                 return $false
             } else {
                 Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow
@@ -274,9 +306,30 @@ function Ensure-PortableNodeOnUserPath {
     }
 }
 
+function Get-WebRequestTimeoutParameters {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandName,
+        [Parameter(Mandatory = $true)]
+        [int]$LegacyTimeoutSec
+    )
+
+    $command = Get-Command $CommandName -ErrorAction Stop
+    # PowerShell 7.4+ exposes a per-read limit, which bounds body stalls without rejecting slow
+    # connections. Earlier versions only expose TimeoutSec, so downloads keep a longer allowance.
+    if ($command.Parameters.ContainsKey("OperationTimeoutSeconds")) {
+        return @{
+            OperationTimeoutSeconds = 30
+        }
+    }
+
+    return @{ TimeoutSec = $LegacyTimeoutSec }
+}
+
 function Resolve-PortableNodeDownload {
     $architecture = Get-WindowsPortableArchitecture
-    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
         Where-Object { $_.version -match '^v24\.' } |
         Select-Object -First 1
@@ -364,7 +417,8 @@ function Install-PortableNode {
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
@@ -620,7 +674,8 @@ function Resolve-PortableGitDownload {
         "User-Agent" = "openclaw-installer"
         "Accept" = "application/vnd.github+json"
     }
-    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers @requestTimeouts
     if (-not $release -or -not $release.assets) {
         throw "Could not resolve latest git-for-windows release metadata."
     }
@@ -676,7 +731,8 @@ function Install-PortableGit {
 
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
     } finally {
@@ -1194,7 +1250,8 @@ function Get-NpmDebugLogRootCandidates {
 }
 
 function Get-LatestNpmDebugLogPath {
-    foreach ($cacheDir in (Get-NpmDebugLogRootCandidates)) {
+    param([object[]]$CacheRoots)
+    foreach ($cacheDir in @($CacheRoots)) {
         $logDir = Join-Path $cacheDir "_logs"
         if (-not (Test-Path -LiteralPath $logDir -PathType Container)) {
             continue
@@ -1210,7 +1267,10 @@ function Get-LatestNpmDebugLogPath {
 }
 
 function Write-NpmInstallFailureDetails {
-    param([object[]]$Output)
+    param(
+        [object[]]$Output,
+        [object[]]$CacheRoots
+    )
     $printedOutput = $false
     foreach ($line in @($Output)) {
         if ($null -eq $line) {
@@ -1224,7 +1284,7 @@ function Write-NpmInstallFailureDetails {
         $printedOutput = $true
     }
 
-    $latestLog = Get-LatestNpmDebugLogPath
+    $latestLog = Get-LatestNpmDebugLogPath -CacheRoots $CacheRoots
     if ($latestLog) {
         Write-Host "Latest npm debug log ($latestLog):" -ForegroundColor Yellow
         Get-Content -LiteralPath $latestLog -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
@@ -1282,8 +1342,17 @@ function Install-OpenClaw {
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
-        $npmOutput = Invoke-NpmCommand -Arguments (@("install", "-g") + $freshnessArgs + @("$installSpec")) 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        # Resolve cache roots before the install so failure reporting cannot create a newer npm log.
+        $npmDebugLogRoots = @(Get-NpmDebugLogRootCandidates)
+        $npmInstallArguments = @("install", "-g") + $freshnessArgs + @("$installSpec")
+        $npmOutput = Invoke-NpmCommand -Arguments $npmInstallArguments 2>&1
+        $npmInstallStatus = $LASTEXITCODE
+        if ($npmInstallStatus -ne 0) {
+            Write-Host "[!] npm install failed; retrying once" -ForegroundColor Yellow
+            $npmOutput = Invoke-NpmCommand -Arguments $npmInstallArguments 2>&1
+            $npmInstallStatus = $LASTEXITCODE
+        }
+        if ($npmInstallStatus -ne 0) {
             Write-Host "[!] npm install failed" -ForegroundColor Red
             if ($npmOutput -match "spawn git" -or $npmOutput -match "ENOENT.*git") {
                 Write-Host "Error: git is missing from PATH." -ForegroundColor Red
@@ -1293,7 +1362,7 @@ function Install-OpenClaw {
                 Write-Host "Re-run with verbose output to see the full error:" -ForegroundColor Yellow
                 Write-Host '  powershell -c "irm https://openclaw.ai/install.ps1 | iex"' -ForegroundColor Cyan
             }
-            Write-NpmInstallFailureDetails -Output $npmOutput
+            Write-NpmInstallFailureDetails -Output $npmOutput -CacheRoots $npmDebugLogRoots
             return $false
         }
     } finally {

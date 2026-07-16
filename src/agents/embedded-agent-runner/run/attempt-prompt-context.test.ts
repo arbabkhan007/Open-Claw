@@ -6,6 +6,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
+  promptPressureKeys: new Set<string>(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -18,6 +19,17 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  toolResultWarningDedupe: {
+    promptPressure: {
+      check: (key: string) => {
+        if (hoisted.promptPressureKeys.has(key)) {
+          return true;
+        }
+        hoisted.promptPressureKeys.add(key);
+        return false;
+      },
+    },
+  },
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
@@ -69,6 +81,7 @@ function createPrompt(overrides?: Record<string, unknown>) {
 
 function createInput(options?: {
   attempt?: EmbeddedRunAttemptParams;
+  preparedUserTurnMessage?: AgentMessage;
   prompt?: ReturnType<typeof createPrompt>;
   report?: SessionSystemPromptReport;
 }) {
@@ -81,7 +94,9 @@ function createInput(options?: {
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
       messages,
-      preparedUserTurnTimestamp: 123,
+      preparedUserTurnMessage:
+        options?.preparedUserTurnMessage ??
+        ({ role: "user", content: "Visible request", timestamp: 123 } as AgentMessage),
       prompt: options?.prompt ?? createPrompt(),
       replaceSessionMessages,
       sessionAgentId: "agent-1",
@@ -98,6 +113,7 @@ function createInput(options?: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hoisted.promptPressureKeys.clear();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
@@ -141,6 +157,22 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(clonedProjectionState).not.toBe(projectionState);
   });
 
+  it("includes persisted sender context in the overflow-precheck prompt", () => {
+    const fixture = createInput({
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "Visible request",
+        timestamp: 123,
+        __openclaw: { senderId: "alice-id", senderName: "Alice" },
+      } as AgentMessage,
+    });
+
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(result.llmBoundaryPromptForPrecheck).toContain('"name": "Alice"');
+    expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
+  });
+
   it("reports aggregate tool-result pressure for compact-then-truncate routing", () => {
     hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
       messages: [...inputMessages],
@@ -159,6 +191,24 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).toHaveBeenCalledWith(
       expect.stringContaining("aggregate tool-result pressure"),
     );
+  });
+
+  it("deduplicates aggregate pressure warnings per session key", () => {
+    hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
+      messages: [...inputMessages],
+      truncatedCount: 1,
+      aggregateTruncatedCount: 1,
+      aggregatePressureEngaged: true,
+      aggregateBudgetChars: 200,
+    }));
+    const attempt = createAttempt({ sessionId: "dup-session", sessionKey: "dup-session" });
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).toHaveBeenCalledTimes(1);
+    hoisted.warn.mockClear();
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
   it("moves runtime-only context into the active system prompt", () => {

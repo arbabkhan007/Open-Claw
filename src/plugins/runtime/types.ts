@@ -2,6 +2,7 @@
 // Owner schema module import keeps the ProtocolSchemas registry out of the
 // public plugin-sdk dts graph (check-plugin-sdk-exports guards this).
 import type { NodePluginToolDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
@@ -11,9 +12,11 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
-export type SubagentRunParams = {
+type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
+  toolsAlsoAllow?: string[];
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
@@ -30,8 +33,13 @@ type PluginManagedWorktree = {
   branch: string;
 };
 
-export type SubagentRunResult = {
+type SubagentRunResult = {
   runId: string;
+  runtime?: {
+    harness: string;
+    provider: string;
+    model: string;
+  };
 };
 
 type SubagentWaitParams = {
@@ -124,7 +132,38 @@ export type PluginRuntime = PluginRuntimeCore & {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
   };
+  sandbox: {
+    resolveWorkspaceAuthority: (params: {
+      config: OpenClawConfig;
+      agentId?: string;
+      confinedToolNames?: readonly string[];
+      requiredToolNames?: readonly string[];
+      modelProvider?: string;
+      modelId?: string;
+      sessionKey: string;
+    }) => {
+      sandboxed: boolean;
+      workspaceAccess: "none" | "ro" | "rw";
+      confinementError?: string;
+    };
+    prepareWorkspaceAuthority: (params: {
+      config: OpenClawConfig;
+      agentId?: string;
+      confinedToolNames?: readonly string[];
+      requiredToolNames?: readonly string[];
+      modelProvider?: string;
+      modelId?: string;
+      sessionKey: string;
+      workspaceDir: string;
+    }) => Promise<{
+      sandboxed: boolean;
+      workspaceAccess: "none" | "ro" | "rw";
+      confinementError?: string;
+    }>;
+  };
   worktrees: {
+    resolveCheckoutRoot: (params: { path: string }) => Promise<string | undefined>;
+    hasSelfContainedCheckoutMetadata?: (params: { path: string }) => Promise<boolean>;
     create: (params: {
       repoRoot: string;
       name: string;
@@ -133,7 +172,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       ownerId: string;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
-    removeIfLossless: (params: { path: string }) => Promise<boolean>;
+    removeIfLossless: (params: {
+      path: string;
+      ownerKind: "workboard";
+      ownerId: string;
+    }) => Promise<boolean>;
   };
   channel: PluginRuntimeChannel;
 };

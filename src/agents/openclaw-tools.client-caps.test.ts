@@ -21,6 +21,10 @@ function hasWidget(tools: readonly { name: string }[]): boolean {
   return tools.some((tool) => tool.name === "show_widget");
 }
 
+function hasScreen(tools: readonly { name: string }[]): boolean {
+  return tools.some((tool) => tool.name === "screen");
+}
+
 describe("gateway client capability tool filtering", () => {
   it("excludes capability-gated tools when no gateway client caps exist", () => {
     expect(hasWidget(createOpenClawTools())).toBe(false);
@@ -36,9 +40,15 @@ describe("gateway client capability tool filtering", () => {
     );
   });
 
+  it("only exposes screen to UI-command clients", () => {
+    expect(hasScreen(createOpenClawTools())).toBe(false);
+    expect(hasScreen(createOpenClawTools({ clientCaps: ["ui-commands"] }))).toBe(true);
+  });
+
   it("does not let tools.allow resurrect a gated tool for a channel run", () => {
     const tools = createOpenClawCodingTools({
       messageProvider: "telegram",
+      disableMessageTool: true,
       config: { tools: { allow: ["show_widget"] } },
       toolConstructionPlan: {
         includeBaseCodingTools: false,

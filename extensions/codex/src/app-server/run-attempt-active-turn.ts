@@ -87,6 +87,7 @@ export async function activateCodexAttemptTurn(
       runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
@@ -138,8 +139,7 @@ export async function activateCodexAttemptTurn(
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
-    answerPendingUserInput: (text) =>
-      userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+    claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
@@ -153,6 +153,7 @@ export async function activateCodexAttemptTurn(
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+    supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
@@ -175,6 +176,7 @@ export async function activateCodexAttemptTurn(
     cwd: effectiveCwd,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
+    upstreamUserText: turnState.codexTurnPromptText,
   });
   const abortListener = () => {
     if (state.timedOut) {
