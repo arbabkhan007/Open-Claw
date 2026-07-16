@@ -28,6 +28,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
@@ -306,6 +307,10 @@ function buildMemorySection(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  memoryContext?: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+  };
 }) {
   if (params.isMinimal || params.includeMemorySection === false) {
     return [];
@@ -313,7 +318,8 @@ function buildMemorySection(params: {
   return buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
-    agentId: params.agentId,
+    cfg: params.memoryContext?.cfg,
+    agentId: params.memoryContext?.agentId ?? params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
   });
@@ -757,6 +763,10 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  memoryContext?: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+  };
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -780,9 +790,6 @@ export function buildAgentSystemPrompt(params: {
     web_fetch: "Fetch/extract URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
-    screen: "Drive operator web UI",
-    terminal:
-      "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
@@ -820,8 +827,6 @@ export function buildAgentSystemPrompt(params: {
     "web_search",
     "web_fetch",
     "browser",
-    "screen",
-    "terminal",
     "canvas",
     "nodes",
     "cron",
@@ -996,6 +1001,7 @@ export function buildAgentSystemPrompt(params: {
     agentId: params.runtimeInfo?.agentId,
     agentSessionKey: params.runtimeInfo?.sessionKey,
     sandboxed: params.sandboxInfo?.enabled === true,
+    memoryContext: params.memoryContext,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
@@ -1083,9 +1089,6 @@ export function buildAgentSystemPrompt(params: {
             "Large work: `sessions_spawn`; completion push-based.",
             '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
             ...(hasSessionsSpawn ? ["`visible:true` only web/app user or asked."] : []),
-            ...(availableTools.has("screen")
-              ? ["`screen` present: web/app turn may drive UI; messaging turn: don't."]
-              : []),
           ]
         : []),
       ...nativeCommandGuidanceLines,

@@ -57,30 +57,6 @@ describe("boolean config validation", () => {
     const result = OpenClawSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
-
-  it.each([
-    ["root", true, "mcp.servers.example.disabled", "enabled: false"],
-    ["root", false, "mcp.servers.example.disabled", "enabled: true"],
-    ["node-host", true, "nodeHost.mcp.servers.example.disabled", "enabled: false"],
-  ])(
-    'rejects %s MCP server "disabled: %s" with the inverse canonical value',
-    (scope, disabled, path, replacement) => {
-      const server = { command: "example-mcp", disabled };
-      const config =
-        scope === "root"
-          ? { mcp: { servers: { example: server } } }
-          : { nodeHost: { mcp: { servers: { example: server } } } };
-      const result = validateConfigObjectRaw(config);
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected disabled MCP server config to fail validation");
-      }
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({ path, message: expect.stringContaining(replacement) }),
-      );
-    },
-  );
 });
 
 describe("agent timeoutSeconds config", () => {
@@ -399,6 +375,60 @@ describe("plugins.slots.contextEngine", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("plugins.slots memory roles", () => {
+  it("accepts purpose-specific memory slot ids", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+          "memory.compaction": "lossless-claw",
+          "memory.capture": "hindsight",
+          "memory.dreaming": "memory-core",
+          "memory.userModel": "openclaw-honcho",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts per-agent plugin slot overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "nancy",
+            plugins: {
+              slots: {
+                "memory.userModel": "openclaw-honcho",
+                "memory.dreaming": "memory-core",
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported per-agent contextEngine slot overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "nancy",
+            plugins: {
+              slots: {
+                contextEngine: "legacy",
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(false);
   });
 });
 

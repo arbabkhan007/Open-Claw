@@ -25,6 +25,7 @@ const ROOT_SECTIONS = [
   "tools",
   "bindings",
   "broadcast",
+  "audio",
   "media",
   "messages",
   "commands",
@@ -211,6 +212,10 @@ const TARGET_KEYS = [
   "nodeHost.skills.enabled",
   "media",
   "media.preserveFilenames",
+  "audio",
+  "audio.transcription",
+  "audio.transcription.command",
+  "audio.transcription.timeoutSeconds",
   "bindings",
   "bindings[].agentId",
   "bindings[].match",
@@ -371,6 +376,13 @@ const TARGET_KEYS = [
   "plugins.load",
   "plugins.load.paths",
   "plugins.slots",
+  "plugins.slots.memory",
+  "plugins.slots.memory.recall",
+  "plugins.slots.memory.compaction",
+  "plugins.slots.memory.capture",
+  "plugins.slots.memory.dreaming",
+  "plugins.slots.memory.userModel",
+  "plugins.slots.contextEngine",
   "plugins.entries",
   "plugins.entries.*.enabled",
   "plugins.entries.*.hooks",
@@ -885,7 +897,14 @@ describe("config help copy quality", () => {
     expect(/differs|per provider/i.test(targetTo)).toBe(true);
   });
 
-  it("documents broadcast command examples", () => {
+  it("documents broadcast and audio command examples", () => {
+    const audioCmd = expectDefined(
+      FIELD_HELP["audio.transcription.command"],
+      'FIELD_HELP["audio.transcription.command"] test invariant',
+    );
+    expect(audioCmd.includes("whisper-cli")).toBe(true);
+    expect(audioCmd.includes("{input}")).toBe(true);
+
     const broadcastMap = expectDefined(
       FIELD_HELP["broadcast.*"],
       'FIELD_HELP["broadcast.*"] test invariant',

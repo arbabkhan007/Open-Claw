@@ -7,7 +7,6 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
-import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -1377,19 +1376,14 @@ async function compactEmbeddedAgentSessionDirectOnce(
     };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock =
-      (await acquireOwnedSessionTranscriptWriteLock({
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-      })) ??
-      (await acquireSessionWriteLock({
-        sessionFile: params.sessionFile,
-        ...resolveSessionWriteLockOptions(params.config, {
-          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-            timeoutMs: compactionTimeoutMs,
-          }),
+    const sessionLock = await acquireSessionWriteLock({
+      sessionFile: params.sessionFile,
+      ...resolveSessionWriteLockOptions(params.config, {
+        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+          timeoutMs: compactionTimeoutMs,
         }),
-      }));
+      }),
+    });
     try {
       if (!isSqliteSessionTranscript) {
         await repairSessionFileIfNeeded({
@@ -1435,6 +1429,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
+        agentId: sessionAgentId,
         sessionManager,
         provider,
         modelId,

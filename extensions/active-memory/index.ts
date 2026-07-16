@@ -1,12 +1,13 @@
 /**
  * Active Memory plugin entry. Runtime behavior lives in focused sibling modules.
  */
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  applyCliRuntimeRecallTimeoutDefault,
+  definePluginEntry,
+  type OpenClawConfig,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/plugin-entry";
+import {
   hasDeprecatedModelFallbackPolicy,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
@@ -15,7 +16,7 @@ import {
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
 import { buildMetadata, buildPromptPrefix } from "./prompt.js";
-import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
+import { buildQuery, buildSearchQuery, extractRecentTurns } from "./query.js";
 import {
   buildCacheKey,
   buildCircuitBreakerKey,
@@ -71,17 +72,7 @@ export default definePluginEntry({
   name: "Active Memory",
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
-    const readCurrentConfig = (): OpenClawConfig | undefined => {
-      try {
-        return (
-          (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-          (api.config as OpenClawConfig | undefined)
-        );
-      } catch {
-        return api.config as OpenClawConfig | undefined;
-      }
-    };
-    let config = normalizePluginConfig(api.pluginConfig, readCurrentConfig());
+    let config = normalizePluginConfig(api.pluginConfig);
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
         // Wording matters here: the previous text ("set config.modelFallback
@@ -109,7 +100,7 @@ export default definePluginEntry({
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
-      config = normalizePluginConfig(livePluginConfig ?? { enabled: false }, readCurrentConfig());
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
       }
@@ -214,37 +205,7 @@ export default definePluginEntry({
       "before_prompt_build",
       async (event, ctx) => {
         refreshLiveConfigFromRuntime();
-        // The hook deadline, watchdog, and embedded-run budget all flow from
-        // this config, so the CLI-runtime default raise must happen before
-        // any of them are armed. Budgeting shares the runner's own dispatch
-        // eligibility so API-key/missing-backend passthrough runs keep the
-        // plain default.
-        const timeoutAgentId = resolveStatusUpdateAgentId(ctx);
-        // getModelRef returns undefined when no recall model resolves; the
-        // eligibility check treats a missing provider as ineligible.
-        const timeoutModelRef =
-          (timeoutAgentId
-            ? getModelRef(api, timeoutAgentId, config, {
-                modelProviderId: ctx.modelProviderId,
-                modelId: ctx.modelId,
-              })
-            : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
-        const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
-          provider: timeoutModelRef.provider,
-          model: timeoutModelRef.model,
-          config: api.config,
-          ...(timeoutAgentId
-            ? {
-                agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(api.config, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(api.config, timeoutAgentId),
-              }
-            : {}),
-        });
-        const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
-          config,
-          cliDispatchEligibility !== undefined,
-        );
+        const invocationConfig = config;
         const liveRecallTimeoutMs =
           invocationConfig.timeoutMs +
           invocationConfig.setupGraceTimeoutMs +
@@ -404,7 +365,7 @@ export default definePluginEntry({
           hookDeadline.stop();
         }
       },
-      { timeoutMs: beforePromptBuildTimeoutMs },
+      { timeoutMs: beforePromptBuildTimeoutMs, memoryRole: "recall" },
     );
   },
 });

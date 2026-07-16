@@ -407,12 +407,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   override render() {
     const dreaming = this.dreaming;
     const configState = this.context.runtimeConfig.state;
+    const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
     const dreamingOn =
       dreaming.dreamingStatus?.enabled ??
-      resolveConfiguredDreaming(currentConfigObject(configState)).enabled;
+      resolveConfiguredDreaming(
+        currentConfigObject(configState),
+        selectedAgentId ? { agentId: selectedAgentId } : {},
+      ).enabled;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
-    const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
 
     return html`
       <section class="content-header content-header--page agent-memory-panel__header">

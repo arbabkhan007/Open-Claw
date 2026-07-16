@@ -1,11 +1,6 @@
 import type { SessionTranscriptTargetParams } from "openclaw/plugin-sdk/session-transcript-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-// CLI-runtime recalls dispatch through a fresh CLI process (spawn + MCP
-// handshake + tool roundtrips); measured runs take 14-20s, so the plain
-// default budget would time out most of them. Explicit timeoutMs config
-// always wins over this default.
-const DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS = 45_000;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
 const DEFAULT_RECENT_USER_TURNS = 2;
@@ -26,7 +21,7 @@ const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
-const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
+const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get", "memory_recall"] as const;
 const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
 const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
 const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
@@ -191,8 +186,6 @@ type ResolvedActiveRecallPluginConfig = {
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs: number;
-  /** True when timeoutMs is the built-in default rather than operator config. */
-  timeoutMsIsDefault: boolean;
   setupGraceTimeoutMs: number;
   queryMode: "message" | "recent" | "full";
   maxSummaryChars: number;
@@ -365,7 +358,6 @@ export {
   DEFAULT_RECENT_ASSISTANT_TURNS,
   DEFAULT_RECENT_USER_CHARS,
   DEFAULT_RECENT_USER_TURNS,
-  DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
   DEFAULT_SETUP_GRACE_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_TRANSCRIPT_DIR,

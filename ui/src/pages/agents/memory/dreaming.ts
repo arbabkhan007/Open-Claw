@@ -8,6 +8,8 @@ import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
+const MEMORY_DREAMING_SLOT_KEY = "memory.dreaming";
+const MEMORY_RECALL_SLOT_KEY = "memory.recall";
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
 type DreamingPhaseStatusBase = {
@@ -431,21 +433,73 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
   };
 }
 
-function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const plugins = asRecord(configValue?.plugins);
-  const slots = asRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
-    return configuredSlot;
+function normalizeSlotPluginId(value: unknown): string | null | undefined {
+  const configuredSlot = normalizeTrimmedString(value);
+  if (!configuredSlot) {
+    return undefined;
   }
-  return DEFAULT_DREAMING_PLUGIN_ID;
+  return configuredSlot.toLowerCase() === "none" ? null : configuredSlot;
 }
 
-export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
+function resolveAgentConfig(
+  configValue: Record<string, unknown> | null,
+  agentId: string | undefined,
+): Record<string, unknown> | null {
+  if (!agentId) {
+    return null;
+  }
+  const agents = asRecord(configValue?.agents);
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  for (const entry of list) {
+    const agent = asRecord(entry);
+    if (normalizeTrimmedString(agent?.id) === agentId) {
+      return agent;
+    }
+  }
+  return null;
+}
+
+function resolveRoleSlotPluginId(
+  configValue: Record<string, unknown> | null,
+  slotKey: typeof MEMORY_DREAMING_SLOT_KEY | typeof MEMORY_RECALL_SLOT_KEY,
+  options: { agentId?: string } = {},
+): string | null | undefined {
+  const agent = resolveAgentConfig(configValue, normalizeTrimmedString(options.agentId));
+  const agentPlugins = asRecord(agent?.plugins);
+  const agentSlots = asRecord(agentPlugins?.slots);
+  if (agentSlots && Object.hasOwn(agentSlots, slotKey)) {
+    return normalizeSlotPluginId(agentSlots[slotKey]) ?? null;
+  }
+
+  const plugins = asRecord(configValue?.plugins);
+  const slots = asRecord(plugins?.slots);
+  if (slots && Object.hasOwn(slots, slotKey)) {
+    return normalizeSlotPluginId(slots[slotKey]) ?? null;
+  }
+  return undefined;
+}
+
+function resolveDreamingPluginId(
+  configValue: Record<string, unknown> | null,
+  options: { agentId?: string } = {},
+): string {
+  const dreamingSlot = resolveRoleSlotPluginId(configValue, MEMORY_DREAMING_SLOT_KEY, options);
+  if (dreamingSlot !== undefined) {
+    return dreamingSlot ?? "none";
+  }
+
+  const recallSlot = resolveRoleSlotPluginId(configValue, MEMORY_RECALL_SLOT_KEY, options);
+  return recallSlot || DEFAULT_DREAMING_PLUGIN_ID;
+}
+
+export function resolveConfiguredDreaming(
+  configValue: Record<string, unknown> | null,
+  options: { agentId?: string } = {},
+): {
   pluginId: string;
   enabled: boolean;
 } {
-  const pluginId = resolveDreamingPluginId(configValue);
+  const pluginId = resolveDreamingPluginId(configValue, options);
   const plugins = asRecord(configValue?.plugins);
   const entries = asRecord(plugins?.entries);
   const pluginEntry = asRecord(entries?.[pluginId]);
@@ -1247,6 +1301,7 @@ export async function updateDreamingEnabled(
   }
   const { pluginId } = resolveConfiguredDreaming(
     asRecord(config.state.configSnapshot?.config) ?? null,
+    buildSelectedAgentPayload(state),
   );
   if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
     return false;

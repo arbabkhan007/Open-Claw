@@ -13,6 +13,7 @@ import {
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import { getPluginCompatRecord } from "./compat/registry.js";
+import type { MemoryPluginRole } from "./memory-role.contract.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -398,7 +399,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; timeoutMs?: number; memoryRole?: MemoryPluginRole },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -481,6 +482,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       handler: effectiveHandler,
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(opts?.memoryRole ? { memoryRole: opts.memoryRole } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

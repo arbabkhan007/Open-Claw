@@ -514,9 +514,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
   "tools.experimental":
-    "Experimental built-in tool flags. Use each tool's switch to opt in or out of its documented default.",
+    "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
   "tools.experimental.planTool":
-    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default for embedded models; set false to opt out.",
+    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded OpenClaw runs.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":
@@ -716,6 +716,14 @@ export const FIELD_HELP: Record<string, string> = {
     "When enabled, uploaded media keeps its original filename instead of a generated temp-safe name. Turn this on when downstream automations depend on stable names, and leave off to reduce accidental filename leakage.",
   "media.ttlHours":
     "Optional retention window in hours for persisted media cleanup across the full media tree. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove media older than the window.",
+  audio:
+    "Global audio ingestion settings used before higher-level tools process speech or media content. Configure this when you need deterministic transcription behavior for voice notes and clips.",
+  "audio.transcription":
+    "Command-based transcription settings for converting audio files into text before agent handling. Keep a simple, deterministic command path here so failures are easy to diagnose in logs.",
+  "audio.transcription.command":
+    'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
+  "audio.transcription.timeoutSeconds":
+    "Maximum time allowed for the transcription command to finish before it is aborted. Increase this for longer recordings, and keep it tight in latency-sensitive deployments.",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
   "bindings[].type":
@@ -1472,7 +1480,17 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
-    'Select the active memory plugin by id, or "none" to disable memory plugins.',
+    'Legacy shorthand for selecting the active factual memory recall plugin by id, or "none" to disable memory plugins.',
+  "plugins.slots.memory.recall":
+    'Selects the plugin that owns factual memory search and retrieval, or "none" to disable recall for that scope.',
+  "plugins.slots.memory.compaction":
+    'Selects the plugin that owns memory-aware context compaction, or "none" when no memory compaction provider is active.',
+  "plugins.slots.memory.capture":
+    'Selects the plugin that owns automatic memory capture and extraction, or "none" when no capture provider is active.',
+  "plugins.slots.memory.dreaming":
+    'Selects the plugin that owns background memory consolidation, promotion, and dream diary behavior, or "none" to use the recall/default dreaming fallback.',
+  "plugins.slots.memory.userModel":
+    'Selects the plugin that owns inferred user/profile modeling, or "none" when no user-model provider is active.',
   "plugins.slots.contextEngine":
     "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
   "plugins.entries":

@@ -265,6 +265,18 @@ const PluginEntrySchema = z.strictObject({
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
+const PluginSlotsSchema = z
+  .object({
+    memory: z.string().optional(),
+    "memory.recall": z.string().optional(),
+    "memory.compaction": z.string().optional(),
+    "memory.capture": z.string().optional(),
+    "memory.dreaming": z.string().optional(),
+    "memory.userModel": z.string().optional(),
+    contextEngine: z.string().optional(),
+  })
+  .strict();
+
 const TalkProviderEntrySchema = z
   .object({
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -413,18 +425,6 @@ const McpServerSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
-    if (Object.hasOwn(data, "disabled")) {
-      const disabled = Reflect.get(data, "disabled") as unknown;
-      const replacement =
-        typeof disabled === "boolean"
-          ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
-          : 'the canonical "enabled" boolean instead';
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `unsupported key "disabled"; use ${replacement}`,
-        path: ["disabled"],
-      });
-    }
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
     if (
       data.transport === "stdio" &&
@@ -1433,12 +1433,7 @@ export const OpenClawSchema = z
             paths: z.array(z.string()).optional(),
           })
           .optional(),
-        slots: z
-          .strictObject({
-            memory: z.string().optional(),
-            contextEngine: z.string().optional(),
-          })
-          .optional(),
+        slots: PluginSlotsSchema.optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
         bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
       })

@@ -1,6 +1,8 @@
 // Defines plugin hook registry entry and dispatch types.
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginHookRegistration as TypedPluginHookRegistration } from "./hook-types.js";
+import type { MemoryPluginRole } from "./memory-role.contract.js";
+import type { MemoryRoleSlotSelection } from "./slot-resolution.js";
 
 /** Legacy hook registration stored by the global hook runner registry. */
 type PluginLegacyHookRegistration = {
@@ -22,5 +24,7 @@ export type GlobalHookRunnerRegistry = HookRunnerRegistry & {
   plugins: Array<{
     id: string;
     status: "loaded" | "disabled" | "error";
+    memoryRolesSelected?: MemoryPluginRole[];
+    memoryRoleSelections?: MemoryRoleSlotSelection[];
   }>;
 };

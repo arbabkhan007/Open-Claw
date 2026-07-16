@@ -31,6 +31,11 @@ import {
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
+import {
+  listConfiguredMemoryRolePluginIds,
+  listMemoryRoleSlotDecisionValues,
+  resolveMemoryRoleSlots,
+} from "./slot-resolution.js";
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
@@ -115,7 +120,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         warningCacheKey: context.cacheKey,
         suppliedManifestRegistry: options.manifestRegistry,
       });
-    const memorySlot = context.normalized.slots.memory;
+    const memoryRoleSlots = resolveMemoryRoleSlots({ cfg: context.cfg });
+    const selectedMemoryRolePluginIds = new Set(
+      listConfiguredMemoryRolePluginIds({
+        cfg: context.activationSource.rootConfig ?? context.cfg,
+      }),
+    );
+    const memorySlots = listMemoryRoleSlotDecisionValues({
+      cfg: context.cfg,
+      slotValues: Object.values(memoryRoleSlots),
+      includeConfiguredAgentSlots: true,
+    });
+    const memorySlot = memoryRoleSlots.recall;
     const state: PluginLoadLoopState = {
       seenIds: new Map(),
       selectedMemoryPluginId: null,
@@ -142,6 +158,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         options,
         onlyPluginIdSet,
         dreamingSidecar,
+        selectedMemoryRolePluginIds,
+        memorySlots,
+        memorySlot,
         validateOnly,
         registryBuilder,
         loadPluginModule,
@@ -156,7 +175,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       );
     }
     // Scoped snapshots may omit the configured memory plugin intentionally.
-    if (!onlyPluginIdSet && typeof memorySlot === "string" && !state.memorySlotMatched) {
+    if (
+      !onlyPluginIdSet &&
+      typeof memorySlot === "string" &&
+      selectedMemoryRolePluginIds.has(memorySlot) &&
+      !state.memorySlotMatched
+    ) {
       registry.diagnostics.push({
         level: "warn",
         message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
