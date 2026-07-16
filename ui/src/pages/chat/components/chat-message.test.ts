@@ -2685,6 +2685,67 @@ describe("grouped chat rendering", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("falls back gracefully when a managed outgoing image body stalls after headers arrive", async () => {
+    vi.useFakeTimers();
+    const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing managed image signal");
+      }
+      return {
+        ok: true,
+        blob: async () =>
+          await new Promise<Blob>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                // Simulate native body-read abort behavior: the rejection is an
+                // AbortError, not the custom TimeoutError carried by signal.reason.
+                reject(new DOMException("The operation was aborted.", "AbortError"));
+              },
+              { once: true },
+            );
+          }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: managedChatImageUrl,
+            alt: "Generated image body stall",
+            width: 1,
+            height: 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "test-auth-token",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    expectSameOriginGet(fetchInit);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("renders direct tool-result image data inline", () => {
     const container = document.createElement("div");
     renderAssistantMessage(

@@ -1512,7 +1512,7 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
-async function resolveManagedOutgoingImageBlobUrl(
+export async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
@@ -1539,13 +1539,13 @@ async function resolveManagedOutgoingImageBlobUrl(
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
       const controller = new AbortController();
-      const timeout = setTimeout(
-        () =>
-          controller.abort(
-            new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
-          ),
-        MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS,
-      );
+      let deadlineFired = false;
+      const timeout = setTimeout(() => {
+        deadlineFired = true;
+        controller.abort(
+          new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
+        );
+      }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
       try {
         const res = await fetch(fetchUrl, {
           method: "GET",
@@ -1567,7 +1567,10 @@ async function resolveManagedOutgoingImageBlobUrl(
         managedImageBlobUrlMissCache.delete(cacheKey);
         return blobUrl;
       } catch (err) {
-        if (err instanceof DOMException && err.name === "TimeoutError") {
+        // After the deadline fires, both the initial fetch and the body read can
+        // reject with a native AbortError instead of our custom TimeoutError.
+        // Treat any post-deadline rejection as a timeout so the UI falls back.
+        if (deadlineFired) {
           managedImageBlobUrlMissCache.set(cacheKey, Date.now());
           return null;
         }
