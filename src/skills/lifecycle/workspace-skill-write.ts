@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isSymlinkOpenError } from "@openclaw/fs-safe/path";
-import { FsSafeError, pathExists, root } from "../../infra/fs-safe.js";
+import {
+  FsSafeError,
+  isSymlinkOpenError,
+  pathExists,
+  root,
+} from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { findContainingAllowedSkillSymlinkTarget } from "../loading/symlink-targets.js";
 
