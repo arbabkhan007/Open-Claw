@@ -1,3 +1,4 @@
+// Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -1299,7 +1300,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
   "agents.defaults.memorySearch.queryInputType":
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
-  "agents.defaults.memorySearch.documentInputType": "Document/index embedding `input_type`.",
+  "agents.defaults.memorySearch.documentInputType":
+    "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "agents.defaults.memorySearch.queryInstructionTemplate":
     "Use retrieval query templates for Qwen3 and Mixedbread.",
   "agents.defaults.memorySearch.outputDimensionality":
