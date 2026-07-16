@@ -407,6 +407,7 @@ export async function runCopilotAttempt(
     ...(input.config ? { config: input.config } : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
+    modelSelectionLocked: input.modelSelectionLocked,
     deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset,
   };
   const finishAttempt = (result: AgentHarnessAttemptResult) =>

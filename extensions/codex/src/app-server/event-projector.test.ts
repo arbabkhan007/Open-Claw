@@ -6632,6 +6632,7 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(beforeContext.runId).toBe("run-1");
     expect(beforeContext.sessionId).toBe("session-1");
+    expect(beforeContext.api).toBeUndefined();
     const afterPayload = requireRecord(
       mockCallArg(afterCompaction, 0, 0, "afterCompaction"),
       "after payload",
@@ -6645,12 +6646,46 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(afterContext.runId).toBe("run-1");
     expect(afterContext.sessionId).toBe("session-1");
+    expect(afterContext.api).toBeDefined();
     expect(deferredResetSession).toHaveBeenCalledWith({
       key: "agent:main:session-1",
       agentId: "agent-1",
       reason: "reset",
       commandSource: "embedded-agent:hook",
     });
+  });
+
+  it("does not expose codex after_compaction reset API for locked model sessions", async () => {
+    const deferredResetSession = vi.fn();
+    const params = await createParams();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      expect(ctx.api).toBeUndefined();
+      await ctx.api?.resetSession();
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+    const projector = await createProjector({
+      ...params,
+      agentId: "agent-1",
+      sessionKey: "agent:main:session-1",
+      modelSelectionLocked: true,
+      deferEmbeddedHookSessionReset: deferredResetSession,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "contextCompaction", id: "compact-1" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "contextCompaction", id: "compact-1" },
+      }),
+    );
+
+    expect(afterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredResetSession).not.toHaveBeenCalled();
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {

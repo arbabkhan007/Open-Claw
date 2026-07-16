@@ -2056,6 +2056,40 @@ describe("runCopilotAttempt", () => {
     });
   });
 
+  it("does not expose SDK after_compaction reset API for locked model sessions", async () => {
+    const deferredResetSession = vi.fn();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      expect(ctx.api).toBeUndefined();
+      await ctx.api?.resetSession("new");
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+
+    await runCopilotAttempt(
+      makeParams({
+        deferEmbeddedHookSessionReset: deferredResetSession,
+        modelSelectionLocked: true,
+      }),
+      { pool: makeFakePool(sdk) },
+    );
+
+    sdk.sessions[0]?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
+
+    await vi.waitFor(() => {
+      expect(afterCompaction).toHaveBeenCalledTimes(1);
+    });
+    expect(deferredResetSession).not.toHaveBeenCalled();
+  });
+
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
     const afterCompaction = vi.fn();
     const onDeferredCompaction = vi.fn();

@@ -489,7 +489,6 @@ export class CodexAppServerEventProjector {
           messageProvider: this.params.messageProvider ?? undefined,
           trigger: this.params.trigger,
           channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
-          deferEmbeddedHookSessionReset: this.params.deferEmbeddedHookSessionReset,
         },
       });
       this.emitAgentEvent({
@@ -543,6 +542,8 @@ export class CodexAppServerEventProjector {
           messageProvider: this.params.messageProvider ?? undefined,
           trigger: this.params.trigger,
           channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+          modelSelectionLocked: this.params.modelSelectionLocked,
+          deferEmbeddedHookSessionReset: this.params.deferEmbeddedHookSessionReset,
         },
       });
       this.emitAgentEvent({
