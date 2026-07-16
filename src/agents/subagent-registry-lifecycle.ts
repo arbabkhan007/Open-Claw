@@ -34,7 +34,6 @@ import {
 } from "./announce-idempotency.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -70,12 +69,12 @@ import {
 } from "./subagent-registry-helpers.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-run-outcome.js";
 import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
 type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
@@ -83,19 +82,15 @@ type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),
   "cleanupBrowserSessionsForLifecycleEnd"
 >;
-
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
-
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../browser-lifecycle-cleanup.js"),
 );
-
 async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
-
 function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
   if (
     typeof params.entry.runTimeoutSeconds !== "number" ||
@@ -121,7 +116,6 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
   }
   return false;
 }
-
 function resolveExpiredExplicitRunDeadlineMs(params: {
   entry: SubagentRunRecord;
   nextEndedAt: number;
@@ -134,7 +128,6 @@ function resolveExpiredExplicitRunDeadlineMs(params: {
   );
   return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
 }
-
 function isOlderEquivalentTerminalCallback(params: {
   entry: SubagentRunRecord;
   endedAt: number;
@@ -156,7 +149,6 @@ function isOlderEquivalentTerminalCallback(params: {
     current.error === params.outcome.error
   );
 }
-
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -196,7 +188,6 @@ export function createSubagentRegistryLifecycleController(params: {
   const terminalCompletionLocks = new Map<string, Promise<void>>();
   const terminalGenerations = new WeakMap<SubagentRunRecord, number>();
   const cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
-
   const newerGenerationOwnsSession = (entry: SubagentRunRecord): boolean =>
     entry.killReconciliation?.supersededAt !== undefined ||
     Array.from(params.runs.values()).some(
@@ -717,6 +708,12 @@ export function createSubagentRegistryLifecycleController(params: {
         entry.delivery?.payload?.fallbackFrozenResultText ?? entry.completion?.fallbackResultText,
       wakeOnDescendantSettle:
         entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
+      pendingRequesterConsumedDescendantRunIds:
+        entry.delivery?.payload?.pendingRequesterConsumedDescendantRunIds ??
+        entry.delivery?.pendingRequesterConsumedDescendantRunIds,
+      pendingRequesterConsumedRunStartedAt:
+        entry.delivery?.payload?.pendingRequesterConsumedRunStartedAt ??
+        entry.delivery?.pendingRequesterConsumedRunStartedAt,
     };
   };
 
@@ -1384,6 +1381,9 @@ export function createSubagentRegistryLifecycleController(params: {
       spawnMode: pendingPayload.spawnMode,
       expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
       wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+      pendingRequesterConsumedDescendantRunIds:
+        pendingPayload.pendingRequesterConsumedDescendantRunIds,
+      pendingRequesterConsumedRunStartedAt: pendingPayload.pendingRequesterConsumedRunStartedAt,
       onBeforeDeleteChildSession:
         cleanup === "delete"
           ? () => {

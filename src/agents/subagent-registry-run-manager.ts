@@ -19,7 +19,6 @@ import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -40,26 +39,25 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { applyPendingRequesterConsumedDescendantRuns } from "./subagent-registry-pending-consumption.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-run-outcome.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
 } from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
-
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
-
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
-
 function resolveHardRunTimeoutEndedAt(
   entry: SubagentRunRecord,
   now: number,
@@ -71,7 +69,6 @@ function resolveHardRunTimeoutEndedAt(
   }
   return now + WAIT_TIMEOUT_DEADLINE_SKEW_MS >= deadlineMs ? deadlineMs : undefined;
 }
-
 function resolveCompletionAfterHardRunDeadline(params: {
   entry: SubagentRunRecord;
   observedStartedAt?: number;
@@ -592,6 +589,8 @@ export function createSubagentRunManager(params: {
     preserveFrozenResultFallback?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
+    pendingRequesterConsumedDescendantRunIds?: string[];
+    pendingRequesterConsumedRunStartedAt?: number;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -689,6 +688,7 @@ export function createSubagentRunManager(params: {
       runTimeoutSeconds,
     });
     clearDeliveryState(next);
+    applyPendingRequesterConsumedDescendantRuns(next, replaceParams);
 
     if (previousRunId !== nextRunId) {
       params.runs.delete(previousRunId);

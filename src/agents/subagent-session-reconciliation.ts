@@ -12,7 +12,6 @@ import {
 } from "../config/sessions.js";
 import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -21,6 +20,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 
 export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
 export type SubagentRunOrphanReason =

@@ -2764,12 +2764,16 @@ describe("subagent announce formatting", () => {
     expect(message).toContain("All pending descendants for that run have now settled");
     expect(message).toContain("result from child a");
     expect(message).toContain("result from child b");
-    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
-      previousRunId: "run-parent-phase-1",
-      nextRunId: "run-parent-phase-2",
-      preserveFrozenResultFallback: true,
-      task: expect.stringContaining("All pending descendants for that run have now settled"),
-    });
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: "run-parent-phase-1",
+        nextRunId: "run-parent-phase-2",
+        preserveFrozenResultFallback: true,
+        pendingRequesterConsumedDescendantRunIds: ["run-child-a", "run-child-b"],
+        pendingRequesterConsumedRunStartedAt: 10,
+        task: expect.stringContaining("All pending descendants for that run have now settled"),
+      }),
+    );
   });
 
   it("does not re-wake an already woken run id", async () => {

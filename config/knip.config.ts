@@ -558,8 +558,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
+      "browser-bridge.ts!",
       "browser-control-auth.ts!",
       "browser-config.ts!",
+      "browser-cdp.ts!",
       "browser-doctor.ts!",
       "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
@@ -593,7 +595,11 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: bundledPluginWorkspace([
+      // Loaded via package metadata/specifier and deprecated SDK package bridges.
+      "configured-state.ts!",
+      "timeouts.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/diffs`]: bundledPluginWorkspace([
       // scripts/build-diffs-viewer-runtime.mjs bundles this browser entry.
       "src/viewer-client.ts!",
@@ -652,6 +658,8 @@ const config = {
       "realtime-provider-shared.ts!",
       "tts.ts!",
       "usage.ts!",
+      // Runtime registration is loaded by package/registry specifier.
+      "register.runtime.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: bundledPluginWorkspace([
       // Session catalog and provider helpers are plugin-owned runtime surfaces.
@@ -679,6 +687,8 @@ const config = {
       "web/vite.config.ts!",
       // Imported directly from the GitHub Actions smoke-plan script.
       "src/ci-smoke-plan.ts!",
+      // QA Lab model selection is invoked by manifest/runtime entrypoints.
+      "model-selection.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),

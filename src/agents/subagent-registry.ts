@@ -39,7 +39,6 @@ import { removeInternalSessionEffectsSession } from "./internal-session-effects.
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -93,6 +92,7 @@ import {
 import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
@@ -106,10 +106,8 @@ import {
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
-
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
-
 type SubagentAnnounceModule = Pick<
   typeof import("./subagent-announce.js"),
   "captureSubagentCompletionReply" | "runSubagentAnnounceFlow"
@@ -1747,6 +1745,8 @@ export function replaceSubagentRunAfterSteer(params: {
   preserveFrozenResultFallback?: boolean;
   transcriptTarget?: AgentRunSessionTarget;
   task?: string;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
 }

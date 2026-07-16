@@ -36,6 +36,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { markDescendantCompletionConsumedByRequester } from "./subagent-registry-consumption.js";
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -2330,6 +2331,82 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.runId).toBe("run-yield-continuation");
     expect(replacement?.pauseReason).toBeUndefined();
     expect(replacement?.endedAt).toBeUndefined();
+  });
+
+  it("uses the original requester start window when a wake replacement credits real descendant rows", () => {
+    const originalRequesterStartedAt = 1_000;
+    const descendantStartedAt = 1_500;
+    const wakeStartedAt = Date.now();
+    mod.addSubagentRunForTests({
+      runId: "run-parent-phase-1",
+      childSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "parent waits on child",
+      cleanup: "keep",
+      createdAt: originalRequesterStartedAt,
+      startedAt: originalRequesterStartedAt,
+      endedAt: originalRequesterStartedAt + 100,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-child-before-wake",
+      childSessionKey: "agent:main:subagent:parent:subagent:child",
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "parent",
+      task: "child completes before wake",
+      cleanup: "keep",
+      createdAt: descendantStartedAt,
+      startedAt: descendantStartedAt,
+      endedAt: descendantStartedAt + 100,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+
+    expect(
+      mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-parent-phase-1",
+        nextRunId: "run-parent-phase-2",
+        pendingRequesterConsumedDescendantRunIds: ["run-child-before-wake"],
+        pendingRequesterConsumedRunStartedAt: originalRequesterStartedAt,
+      }),
+    ).toBe(true);
+    const replacement = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-parent-phase-2");
+    expect(replacement?.startedAt).toBe(wakeStartedAt);
+    expect(replacement?.delivery?.pendingRequesterConsumedDescendantRunIds).toEqual([
+      "run-child-before-wake",
+    ]);
+    expect(replacement?.delivery?.pendingRequesterConsumedRunStartedAt).toBe(
+      originalRequesterStartedAt,
+    );
+
+    expect(
+      markDescendantCompletionConsumedByRequester({
+        requesterSessionKey: "agent:main:subagent:parent",
+        runStartedAt: replacement?.startedAt ?? 0,
+        runIds: ["run-child-before-wake"],
+        kind: "subagent_descendant_result",
+        consumerRunId: "run-parent-phase-2",
+      }),
+    ).toBe(0);
+    expect(
+      markDescendantCompletionConsumedByRequester({
+        requesterSessionKey: "agent:main:subagent:parent",
+        runStartedAt: replacement?.delivery?.pendingRequesterConsumedRunStartedAt ?? 0,
+        runIds: replacement?.delivery?.pendingRequesterConsumedDescendantRunIds ?? [],
+        kind: "subagent_descendant_result",
+        consumerRunId: "run-parent-phase-2",
+      }),
+    ).toBe(1);
+    const child = mod
+      .listSubagentRunsForRequester("agent:main:subagent:parent")
+      .find((entry) => entry.runId === "run-child-before-wake");
+    expect(child?.delivery?.status).toBe("delivered");
+    expect(child?.delivery?.requesterConsumedRunStartedAt).toBe(originalRequesterStartedAt);
   });
 
   it("ignores a late yield lifecycle event after the paused run is killed", async () => {

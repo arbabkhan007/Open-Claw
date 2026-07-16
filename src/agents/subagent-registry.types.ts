@@ -5,8 +5,8 @@
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type PendingFinalDeliveryPayload = {
@@ -25,6 +25,8 @@ export type PendingFinalDeliveryPayload = {
   frozenResultText?: string | null;
   fallbackFrozenResultText?: string | null;
   wakeOnDescendantSettle?: boolean;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
 };
 
 export type SubagentExecutionState = {
@@ -59,6 +61,16 @@ export type SubagentCompletionDeliveryState = {
   enqueuedAt?: number;
   deliveredAt?: number;
   announcedAt?: number;
+  requesterConsumedAt?: number;
+  requesterConsumedKind?: "cron_descendant_fallback" | "subagent_descendant_result";
+  requesterConsumedBySessionKey?: string;
+  requesterConsumedRunStartedAt?: number;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
+  requesterConsumedMetadata?: {
+    consumerRunId?: string;
+    deliveryTextHash?: string;
+  };
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;

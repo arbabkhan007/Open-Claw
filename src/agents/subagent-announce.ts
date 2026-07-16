@@ -4,13 +4,7 @@
  * Captures child output, applies wait outcomes, routes announcements, and performs cleanup decisions.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -34,12 +28,10 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
-  buildChildCompletionFindings,
   buildCompactAnnounceStatsLine,
-  dedupeLatestChildCompletionRows,
-  filterCurrentDirectChildCompletionRows,
   readLatestSubagentOutputWithRetry,
   readSubagentOutput,
+  stripAndClassifyReply,
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
@@ -51,6 +43,10 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  buildRequesterConsumedChildCompletion,
+  recordRequesterConsumedDescendantCompletions,
+} from "./subagent-requester-consumed-credit.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
@@ -81,7 +77,7 @@ function loadSubagentRegistryRuntime() {
 
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
-export type { SubagentRunOutcome } from "./subagent-announce-output.js";
+export type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
@@ -144,27 +140,6 @@ function isWakeContinuationRun(runId: string): boolean {
   return stripWakeRunSuffixes(trimmed) !== trimmed;
 }
 
-function stripAndClassifyReply(text: string): string | null {
-  let result = text;
-  let didStrip = false;
-  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (
-    didStrip &&
-    (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN) || isAnnounceSkip(result))
-  ) {
-    return null;
-  }
-  return result;
-}
-
 async function wakeSubagentRunAfterDescendants(params: {
   runId: string;
   childSessionKey: string;
@@ -172,6 +147,8 @@ async function wakeSubagentRunAfterDescendants(params: {
   findings: string;
   announceId: string;
   signal?: AbortSignal;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
 }): Promise<boolean> {
   if (params.signal?.aborted) {
     return false;
@@ -231,6 +208,8 @@ async function wakeSubagentRunAfterDescendants(params: {
     // Persist the wake message as the replacement run's task so that any
     // post-restart redispatch reconstructs the correct prompt.
     task: wakeMessage,
+    pendingRequesterConsumedDescendantRunIds: params.pendingRequesterConsumedDescendantRunIds,
+    pendingRequesterConsumedRunStartedAt: params.pendingRequesterConsumedRunStartedAt,
   });
 }
 
@@ -258,6 +237,8 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -317,6 +298,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let childCompletionFindings: string | undefined;
+    let consumedChildRunIds: string[] = [];
     let subagentRegistryRuntime:
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
@@ -348,15 +330,13 @@ export async function runSubagentAnnounceFlow(params: {
           },
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
-          childCompletionFindings = buildChildCompletionFindings(
-            dedupeLatestChildCompletionRows(
-              filterCurrentDirectChildCompletionRows(directChildren, {
-                requesterSessionKey: params.childSessionKey,
-                getLatestSubagentRunByChildSessionKey:
-                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
-              }),
-            ),
-          );
+          const childCompletion = buildRequesterConsumedChildCompletion(directChildren, {
+            requesterSessionKey: params.childSessionKey,
+            getLatestSubagentRunByChildSessionKey:
+              subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+          });
+          consumedChildRunIds = childCompletion.consumedRunIds;
+          childCompletionFindings = childCompletion.text;
         }
       }
     } catch {
@@ -385,6 +365,8 @@ export async function runSubagentAnnounceFlow(params: {
         findings: childCompletionFindings,
         announceId: wakeAnnounceId,
         signal: params.signal,
+        pendingRequesterConsumedDescendantRunIds: consumedChildRunIds,
+        pendingRequesterConsumedRunStartedAt: params.startedAt,
       });
       if (woke) {
         shouldDeleteChildSession = false;
@@ -599,6 +581,17 @@ export async function runSubagentAnnounceFlow(params: {
     });
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered || delivery.terminal === true;
+    recordRequesterConsumedDescendantCompletions({
+      delivery,
+      subagentRegistryRuntime,
+      childSessionKey: params.childSessionKey,
+      childRunId: params.childRunId,
+      startedAt: params.startedAt,
+      childCompletionFindings,
+      consumedChildRunIds,
+      pendingRequesterConsumedDescendantRunIds: params.pendingRequesterConsumedDescendantRunIds,
+      pendingRequesterConsumedRunStartedAt: params.pendingRequesterConsumedRunStartedAt,
+    });
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

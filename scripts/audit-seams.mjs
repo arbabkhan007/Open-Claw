@@ -620,7 +620,7 @@ function describeCronSeamKinds(relativePath, source) {
 
   if (
     importsFollowup &&
-    /\bwaitForDescendantSubagentSummary\b|\breadDescendantSubagentFallbackReply\b|\bexpectsSubagentFollowup\b|\bcallGateway\b|\blistDescendantRunsForRequester\b/.test(
+    /\bwaitForDescendantSubagentSummary\b|\breadDescendantSubagentFallbackReplyWithRuns\b|\bexpectsSubagentFollowup\b|\bcallGateway\b|\blistDescendantRunsForRequester\b/.test(
       source,
     )
   ) {

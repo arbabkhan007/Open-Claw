@@ -3,8 +3,13 @@
  *
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../auto-reply/tokens.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
@@ -21,9 +26,14 @@ import {
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import { withSubagentOutcomeTiming } from "./subagent-run-outcome.js";
+import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
+
+export { withSubagentOutcomeTiming } from "./subagent-run-outcome.js";
+export type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -70,36 +80,6 @@ type AgentWaitResult = {
   timeoutPhase?: string;
   providerStarted?: boolean;
 };
-
-export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
-  error?: string;
-  startedAt?: number;
-  endedAt?: number;
-  elapsedMs?: number;
-};
-
-export function withSubagentOutcomeTiming(
-  outcome: SubagentRunOutcome,
-  timing: {
-    startedAt?: number;
-    endedAt?: number;
-  },
-): SubagentRunOutcome {
-  const startedAt = asFiniteNumber(timing.startedAt) ?? asFiniteNumber(outcome.startedAt);
-  const endedAt = asFiniteNumber(timing.endedAt) ?? asFiniteNumber(outcome.endedAt);
-  const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
-  if (typeof startedAt === "number") {
-    nextTiming.startedAt = startedAt;
-  }
-  if (typeof endedAt === "number") {
-    nextTiming.endedAt = endedAt;
-  }
-  if (typeof startedAt === "number" && typeof endedAt === "number") {
-    nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
-  }
-  return { ...outcome, ...nextTiming };
-}
 
 function extractSubagentAssistantText(message: unknown): string {
   if (!message || typeof message !== "object") {
@@ -377,9 +357,30 @@ function selectChildCompletionResultText(child: ChildCompletionRow): string | un
   )?.trim();
 }
 
-export function buildChildCompletionFindings(
-  children: Array<ChildCompletionRow>,
-): string | undefined {
+export function stripAndClassifyReply(text: string): string | null {
+  let result = text;
+  let didStrip = false;
+  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
+  if (hasLeadingSilentToken) {
+    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
+  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
+  if (
+    didStrip &&
+    (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN) || isAnnounceSkip(result))
+  ) {
+    return null;
+  }
+  return result;
+}
+
+export function buildChildCompletionFindingsWithRuns(
+  children: (ChildCompletionRow & { runId?: string })[],
+): { text: string; consumedRunIds: string[] } | undefined {
   const sorted = [...children].toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
@@ -390,6 +391,7 @@ export function buildChildCompletionFindings(
   });
 
   const sections: string[] = [];
+  const consumedRunIds: string[] = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
@@ -411,39 +413,27 @@ export function buildChildCompletionFindings(
         "\n",
       ),
     );
+    if (typeof child.runId === "string" && child.runId.trim()) {
+      consumedRunIds.push(child.runId);
+    }
   }
 
   if (sections.length === 0) {
     return undefined;
   }
 
-  return ["Child completion results:", "", ...sections].join("\n\n");
+  return { text: ["Child completion results:", "", ...sections].join("\n\n"), consumedRunIds };
 }
 
-export function dedupeLatestChildCompletionRows(
-  children: Array<{
-    runId: string;
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    generation?: number;
-    createdAt: number;
-    endedAt?: number;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
-    outcome?: SubagentRunOutcome;
-  }>,
-) {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+type ChildCompletionRunRow = ChildCompletionRow & {
+  runId: string;
+  generation?: number;
+};
+
+export function dedupeLatestChildCompletionRows<T extends ChildCompletionRunRow>(
+  children: T[],
+): T[] {
+  const latestByChildSessionKey = new Map<string, T>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
     if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
@@ -462,6 +452,7 @@ export function filterCurrentDirectChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
+    generation?: number;
     frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
