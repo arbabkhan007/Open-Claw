@@ -261,8 +261,14 @@ it("preserves announcedAt for not_required delivery when completion was announce
         createdAt: 100,
         generation: 2,
       });
+      const sameGenerationEarlier = createRun({
+        runId: "same-generation-alpha",
+        childSessionKey,
+        createdAt: 200,
+        generation: 2,
+      });
       const sameGenerationLater = createRun({
-        runId: "same-generation-later",
+        runId: "same-generation-zulu",
         childSessionKey,
         createdAt: 200,
         generation: 2,
@@ -274,16 +280,15 @@ it("preserves announcedAt for not_required delivery when completion was announce
 
       saveSubagentRegistryToSqlite(
         new Map(
-          [legacy, latestGeneration, sameGenerationLater, otherChild].map((run) => [
-            run.runId,
-            run,
-          ]),
+          [legacy, latestGeneration, sameGenerationLater, sameGenerationEarlier, otherChild].map(
+            (run) => [run.runId, run],
+          ),
         ),
       );
 
       expect(
         loadSubagentRunsForChildSessionFromSqlite(childSessionKey).map((run) => run.runId),
-      ).toEqual(["legacy", "latest-generation", "same-generation-later"]);
+      ).toEqual(["legacy", "latest-generation", "same-generation-alpha", "same-generation-zulu"]);
       expect(loadSubagentRunsForChildSessionFromSqlite("   ")).toEqual([]);
     });
   });

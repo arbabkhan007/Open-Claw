@@ -8,6 +8,12 @@ const mocks = vi.hoisted(() => ({
       childSessionKey: string,
     ) => Map<string, SubagentRunRecord>
   >(() => new Map()),
+  getSubagentRunsSnapshotForController: vi.fn<
+    (
+      runs: Map<string, SubagentRunRecord>,
+      controllerSessionKey: string,
+    ) => Map<string, SubagentRunRecord>
+  >(() => new Map()),
   getSubagentRunsSnapshotForRead: vi.fn<
     (runs: Map<string, SubagentRunRecord>) => Map<string, SubagentRunRecord>
   >(() => {
@@ -21,16 +27,18 @@ vi.mock("./subagent-registry-memory.js", () => ({
 
 vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController: vi.fn(),
+  getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
 }));
 
-describe("subagent registry child-session reads", () => {
+describe("subagent registry scoped reads", () => {
   let mod: typeof import("./subagent-registry-read.js");
 
   beforeEach(async () => {
     mocks.getSubagentRunsSnapshotForChildSession.mockReset();
     mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(new Map());
+    mocks.getSubagentRunsSnapshotForController.mockReset();
+    mocks.getSubagentRunsSnapshotForController.mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForRead.mockClear();
     mod = await import("./subagent-registry-read.js");
   });
@@ -49,6 +57,38 @@ describe("subagent registry child-session reads", () => {
     expect(mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
     expect(mod.getSessionDisplaySubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
     expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledTimes(2);
+    expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
+  });
+
+  it("uses the controller snapshot while retaining legacy requester-owned runs", () => {
+    const controllerSessionKey = "agent:main:controller";
+    const explicit = createRun({
+      runId: "explicit",
+      controllerSessionKey,
+      requesterSessionKey: "agent:main:other",
+    });
+    const legacy = createRun({
+      runId: "legacy",
+      requesterSessionKey: controllerSessionKey,
+    });
+    const other = createRun({
+      runId: "other",
+      controllerSessionKey: "agent:main:other-controller",
+      requesterSessionKey: controllerSessionKey,
+    });
+    mocks.getSubagentRunsSnapshotForController.mockReturnValue(
+      new Map([
+        [explicit.runId, explicit],
+        [legacy.runId, legacy],
+        [other.runId, other],
+      ]),
+    );
+
+    expect(mod.listSubagentRunsForController(controllerSessionKey)).toEqual([explicit, legacy]);
+    expect(mocks.getSubagentRunsSnapshotForController).toHaveBeenCalledWith(
+      expect.any(Map),
+      controllerSessionKey,
+    );
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
   });
 });

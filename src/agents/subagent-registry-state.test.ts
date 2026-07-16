@@ -94,10 +94,14 @@ describe("subagent registry state read cache", () => {
     expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses persisted controller snapshots within the ttl", () => {
+  it("refreshes persisted controller snapshots when the ttl expires", () => {
     const persistedRun = createRun("persisted");
     persistedRun.controllerSessionKey = "agent:main:controller";
-    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([persistedRun]);
+    const refreshedRun = createRun("refreshed");
+    refreshedRun.controllerSessionKey = "agent:main:controller";
+    mocks.loadSubagentRunsForControllerFromSqlite
+      .mockReturnValueOnce([persistedRun])
+      .mockReturnValueOnce([refreshedRun]);
 
     expect([
       ...getSubagentRunsSnapshotForController(new Map(), "agent:main:controller").keys(),
@@ -106,6 +110,13 @@ describe("subagent registry state read cache", () => {
       ...getSubagentRunsSnapshotForController(new Map(), "agent:main:controller").keys(),
     ]).toEqual(["persisted"]);
     expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(500);
+
+    expect([
+      ...getSubagentRunsSnapshotForController(new Map(), "agent:main:controller").keys(),
+    ]).toEqual(["refreshed"]);
+    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(2);
   });
 
   it("keeps controller and child cache entries separate when their keys match", () => {
@@ -123,6 +134,8 @@ describe("subagent registry state read cache", () => {
     expect(getSubagentRunsSnapshotForChildSession(new Map(), sessionKey).has(childRun.runId)).toBe(
       true,
     );
+    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledWith(sessionKey);
+    expect(mocks.loadSubagentRunsForChildSessionFromSqlite).toHaveBeenCalledWith(sessionKey);
   });
 
   it("uses isolated child snapshots and overlays matching in-memory runs", () => {
