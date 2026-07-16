@@ -1,6 +1,8 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -16,10 +18,14 @@ import {
   readRetryAfter,
 } from "./internal/rest-errors.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
 const DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+
+/** Matches Discord REST outbound budget so webhook delivery cannot hang unbounded. */
+export const DISCORD_WEBHOOK_TIMEOUT_MS = DISCORD_REST_TIMEOUT_MS;
 
 type DiscordWebhookSendOpts = {
   cfg: OpenClawConfig;
@@ -31,6 +37,8 @@ type DiscordWebhookSendOpts = {
   username?: string;
   avatarUrl?: string;
   wait?: boolean;
+  /** Override for tests; production uses DISCORD_WEBHOOK_TIMEOUT_MS. */
+  timeoutMs?: number;
 };
 
 function resolveWebhookExecutionUrl(params: {
@@ -58,6 +66,14 @@ function coerceWebhookErrorBody(raw: string): unknown {
   } catch {
     return { message: truncateUtf16Safe(raw, 200) };
   }
+}
+
+function isDiscordWebhookDeadlineError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const name = String((error as { name?: unknown }).name ?? "");
+  return name === "AbortError" || name === "TimeoutError";
 }
 
 async function throwWebhookResponseError(response: Response): Promise<never> {
@@ -100,14 +116,21 @@ export async function sendWebhookMessageDiscord(
     mentionAliases: account.config.mentionAliases,
   });
 
-  const response = await (proxyFetch ?? fetch)(
-    resolveWebhookExecutionUrl({
-      webhookId,
-      webhookToken,
-      threadId: opts.threadId,
-      wait: opts.wait,
-    }),
-    {
+  const url = resolveWebhookExecutionUrl({
+    webhookId,
+    webhookToken,
+    threadId: opts.threadId,
+    wait: opts.wait,
+  });
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DISCORD_WEBHOOK_TIMEOUT_MS);
+  const requestTimeout = buildTimeoutAbortSignal({
+    timeoutMs,
+    operation: "discord.webhook.send",
+    url,
+  });
+
+  try {
+    const response = await (proxyFetch ?? fetch)(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -118,36 +141,49 @@ export async function sendWebhookMessageDiscord(
         avatar_url: normalizeOptionalString(opts.avatarUrl),
         ...(messageReference ? { message_reference: messageReference } : {}),
       }),
-    },
-  );
-  if (!response.ok) {
-    await throwWebhookResponseError(response);
-  }
+      signal: requestTimeout.signal,
+    });
+    if (!response.ok) {
+      await throwWebhookResponseError(response);
+    }
 
-  const payload: {
-    id?: string;
-    channel_id?: string;
-  } =
-    response.status === 204
-      ? {}
-      : await readProviderJsonResponse<{ id?: string; channel_id?: string }>(
+    let payload: {
+      id?: string;
+      channel_id?: string;
+    } = {};
+    if (response.status !== 204) {
+      try {
+        payload = await readProviderJsonResponse<{ id?: string; channel_id?: string }>(
           response,
           "Discord webhook send",
-        ).catch(() => ({}));
-  try {
-    recordChannelActivity({
-      channel: "discord",
-      accountId: account.accountId,
-      direction: "outbound",
+        );
+      } catch (error) {
+        // Keep the empty-payload fallback for malformed wait bodies, but never
+        // treat a request deadline abort as a successful webhook send.
+        if (isDiscordWebhookDeadlineError(error) || requestTimeout.signal?.aborted) {
+          throw error;
+        }
+      }
+    }
+    try {
+      recordChannelActivity({
+        channel: "discord",
+        accountId: account.accountId,
+        direction: "outbound",
+      });
+    } catch {
+      // Best-effort telemetry only.
+    }
+    return createDiscordSendResult({
+      result: payload,
+      fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
+      kind: "text",
+      ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
+      ...(replyTo ? { replyToId: replyTo } : {}),
     });
-  } catch {
-    // Best-effort telemetry only.
+  } finally {
+    // Keep the deadline active through error and JSON body reads; clearing after
+    // headers would leave a stalled Discord webhook response unbounded.
+    requestTimeout.cleanup();
   }
-  return createDiscordSendResult({
-    result: payload,
-    fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
-    kind: "text",
-    ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
-    ...(replyTo ? { replyToId: replyTo } : {}),
-  });
 }
