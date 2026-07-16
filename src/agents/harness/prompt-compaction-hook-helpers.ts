@@ -197,15 +197,18 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   if (!hookRunner?.hasHooks("after_compaction")) {
     return;
   }
-  const resetQueue = params.ctx.deferEmbeddedHookSessionReset
-    ? null
-    : createEmbeddedHookSessionResetQueue();
-  const deferResetSession =
-    params.ctx.deferEmbeddedHookSessionReset ??
-    (resetQueue
-      ? (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
-          resetQueue.deferResetSession(request)
-      : undefined);
+  const resetEnabled = params.ctx.modelSelectionLocked !== true;
+  const resetQueue =
+    resetEnabled && !params.ctx.deferEmbeddedHookSessionReset
+      ? createEmbeddedHookSessionResetQueue()
+      : null;
+  const deferResetSession = resetEnabled
+    ? (params.ctx.deferEmbeddedHookSessionReset ??
+      (resetQueue
+        ? (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
+            resetQueue.deferResetSession(request)
+        : undefined))
+    : undefined;
   try {
     await hookRunner.runAfterCompaction(
       {
@@ -215,11 +218,15 @@ export async function runAgentHarnessAfterCompactionHook(params: {
       },
       {
         ...buildAgentHookContext(params.ctx),
-        api: buildEmbeddedHookApi({
-          agentId: params.ctx.agentId,
-          sessionKey: params.ctx.sessionKey,
-          ...(deferResetSession ? { deferResetSession } : {}),
-        }),
+        ...(resetEnabled
+          ? {
+              api: buildEmbeddedHookApi({
+                agentId: params.ctx.agentId,
+                sessionKey: params.ctx.sessionKey,
+                ...(deferResetSession ? { deferResetSession } : {}),
+              }),
+            }
+          : {}),
       },
     );
   } catch (error) {

@@ -38,6 +38,7 @@ export type AgentHarnessHookContext = {
   chatId?: string;
   channel?: string;
   channelContext?: PluginHookChannelContext;
+  modelSelectionLocked?: boolean;
   deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
 };
 
