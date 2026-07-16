@@ -17,7 +17,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   findOverlappingWorkspaceAgentIds,
-  shouldRemoveEmptyAgentParentDir,
+  removeEmptyAgentParentDir,
 } from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
@@ -768,19 +768,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
         }
       }
       await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
-      // After trashing agent/ and sessions/ subdirectories, remove the
-      // now-empty canonical parent directory so no stale agent folder
+      // After trashing agent/ and sessions/ subdirectories, atomically remove
+      // the now-empty canonical parent directory so no stale agent folder
       // remains on disk. Only the default <stateDir>/agents/<agentId> root
       // is eligible; custom agentDir paths are preserved to avoid data loss.
-      if (
-        shouldRemoveEmptyAgentParentDir({
-          agentDir: deleteResult.agentDir,
-          agentId,
-          stateDir: resolveStateDir(),
-        })
-      ) {
-        await moveToTrashBestEffort(path.dirname(deleteResult.agentDir));
-      }
+      // rmdir is atomic — a same-id recreation that populates the directory
+      // between subdirectory cleanup and parent removal causes ENOTEMPTY and
+      // the directory is kept.
+      await removeEmptyAgentParentDir({
+        agentDir: deleteResult.agentDir,
+        agentId,
+        stateDir: resolveStateDir(),
+      });
     }
 
     respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
