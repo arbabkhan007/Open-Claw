@@ -5,6 +5,7 @@ import "./fs-safe-defaults.js";
 export {
   isNotFoundPathError,
   isPathInside,
+  isSymlinkOpenError,
   normalizeWindowsPathForComparison,
   safeStatSync,
 } from "@openclaw/fs-safe/path";
