@@ -1685,15 +1685,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/memory
 - Headings:
   - H1: openclaw memory
-  - H2: memory status
-  - H2: memory index
-  - H2: memory search
-  - H2: memory promote
-  - H2: memory promote-explain
-  - H2: memory rem-harness
-  - H2: memory rem-backfill
+  - H2: Examples
+  - H2: Options
   - H2: Dreaming
-  - H2: SecretRef gateway dependency
   - H2: Related
 
 ## cli/message.md
@@ -2210,16 +2204,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/active-memory
 - Headings:
   - H2: Quick start
-  - H2: How it works
-  - H2: When it runs
-  - H3: Session types
-  - H2: Session toggle
+  - H2: Speed recommendations
+  - H3: Cerebras setup
   - H2: How to see it
+  - H2: Session toggle
+  - H2: When it runs
+  - H2: Session types
+  - H2: Where it runs
+  - H2: Why use it
+  - H2: How it works
   - H2: Query modes
   - H2: Prompt styles
   - H2: Model fallback policy
-  - H3: Speed recommendations
-  - H4: Cerebras setup
   - H2: Memory tools
   - H3: Built-in memory-core
   - H3: LanceDB memory
@@ -5912,13 +5908,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Installation
   - H2: Quick start
-  - H2: Embedding config
-  - H3: Dimensions
+  - H2: Provider-backed embeddings
   - H2: Ollama embeddings
+  - H2: OpenAI-compatible providers
   - H2: Recall and capture limits
   - H2: Commands
   - H2: Storage
-  - H2: Runtime dependencies and platform support
+  - H2: Runtime dependencies
   - H2: Troubleshooting
   - H3: Input length exceeds the context length
   - H3: Unsupported embedding model

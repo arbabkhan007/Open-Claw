@@ -8,13 +8,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
 import { clearDetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-state.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { clearCompactionProviders } from "./compaction-provider.js";
 import {
   resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
   type PluginActivationState,
@@ -37,6 +37,79 @@ import { validateJsonSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
+
+function isAllowedMemoryRoleSlotSelection(params: {
+  pluginId: string;
+  normalized: NormalizedPluginsConfig;
+}): boolean {
+  if (!params.normalized.enabled) {
+    return false;
+  }
+  if (params.normalized.deny.includes(params.pluginId)) {
+    return false;
+  }
+  if (params.normalized.entries[params.pluginId]?.enabled === false) {
+    return false;
+  }
+  return true;
+}
+
+export function applyMemoryRoleSlotActivation(params: {
+  pluginId: string;
+  normalized: NormalizedPluginsConfig;
+  dreamingSidecar: AuthorizedDreamingSidecar | null;
+  selectedMemoryRolePluginIds: ReadonlySet<string>;
+  activationState: ReturnType<typeof resolveEffectivePluginActivationState>;
+  enableState: ReturnType<typeof resolveEffectiveEnableState>;
+}): {
+  activationState: ReturnType<typeof resolveEffectivePluginActivationState>;
+  enableState: ReturnType<typeof resolveEffectiveEnableState>;
+} {
+  if (
+    isAuthorizedDreamingSidecarPlugin({
+      sidecar: params.dreamingSidecar,
+      pluginId: params.pluginId,
+    })
+  ) {
+    const sidecarState = {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto" as const,
+      reason: `dreaming sidecar for selected memory slot "${
+        params.dreamingSidecar?.selectedMemoryPluginId ?? ""
+      }"`,
+    };
+    return {
+      activationState: sidecarState,
+      enableState: sidecarState,
+    };
+  }
+  if (
+    params.enableState.enabled ||
+    !params.selectedMemoryRolePluginIds.has(params.pluginId) ||
+    !isAllowedMemoryRoleSlotSelection({
+      pluginId: params.pluginId,
+      normalized: params.normalized,
+    })
+  ) {
+    return {
+      activationState: params.activationState,
+      enableState: params.enableState,
+    };
+  }
+  const selectedState = {
+    enabled: true,
+    activated: true,
+    explicitlyEnabled: true,
+    source: "explicit" as const,
+    reason: "selected memory slot",
+  };
+  return {
+    activationState: selectedState,
+    enableState: selectedState,
+  };
+}
 
 export function createPluginLoaderLogger(): PluginLogger {
   return createSubsystemLogger("plugins");
@@ -70,8 +143,11 @@ function resolveDreamingSidecarEngineId(params: {
   ) {
     return null;
   }
+  const selectedPluginConfig = params.cfg.plugins?.entries?.[normalizedMemorySlot]?.config as
+    | Record<string, unknown>
+    | undefined;
   const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
+    pluginConfig: selectedPluginConfig,
     cfg: params.cfg,
   });
   return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;

@@ -47,6 +47,7 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { MemoryPluginRole } from "./memory-role.contract.js";
 import type {
   MigrationProviderPlugin,
   PluginConfigMigration,
@@ -479,6 +480,6 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; timeoutMs?: number; memoryRole?: MemoryPluginRole },
   ) => void;
 };

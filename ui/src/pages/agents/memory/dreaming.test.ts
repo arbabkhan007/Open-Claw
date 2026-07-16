@@ -834,7 +834,9 @@ describe("dreaming controller", () => {
       config: {
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            memory: "legacy-memory-plugin",
+            "memory.recall": "memory-recall-plugin",
+            "memory.dreaming": "memos-local-openclaw-plugin",
           },
           entries: {
             "memos-local-openclaw-plugin": {
@@ -875,14 +877,62 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("falls back to memory-core when selected memory slot is blank", async () => {
+  it("patches selected-agent memory.dreaming owner ahead of global and recall owners", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "alpha";
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            "memory.recall": "global-recall-plugin",
+            "memory.dreaming": "global-dreaming-plugin",
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "alpha",
+              plugins: {
+                slots: {
+                  "memory.recall": "agent-recall-plugin",
+                  "memory.dreaming": "agent-dreaming-plugin",
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+    request.mockResolvedValue({ ok: true });
+    const config = createConfig(state);
+
+    const ok = await updateDreamingEnabled(state, config, true);
+
+    expect(ok).toBe(true);
+    expect(getConfigPatchRawPayload(config)).toEqual({
+      plugins: {
+        entries: {
+          "agent-dreaming-plugin": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("falls back to memory-core when only legacy memory slot is configured", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
       config: {
         plugins: {
           slots: {
-            memory: "   ",
+            memory: "legacy-memory-plugin",
           },
         },
       },
@@ -915,7 +965,7 @@ describe("dreaming controller", () => {
       config: {
         plugins: {
           slots: {
-            memory: "memory-lancedb",
+            "memory.dreaming": "memory-lancedb",
           },
         },
       },
@@ -942,18 +992,27 @@ describe("dreaming controller", () => {
     );
   });
 
-  it("reads dreaming enabled state from the selected memory slot plugin", () => {
+  it("reads dreaming enabled state from the selected memory.dreaming slot plugin", () => {
     expect(
       resolveConfiguredDreaming({
         plugins: {
           slots: {
-            memory: "memos-local-openclaw-plugin",
+            memory: "legacy-memory-plugin",
+            "memory.recall": "memory-recall-plugin",
+            "memory.dreaming": "memos-local-openclaw-plugin",
           },
           entries: {
             "memos-local-openclaw-plugin": {
               config: {
                 dreaming: {
                   enabled: true,
+                },
+              },
+            },
+            "memory-recall-plugin": {
+              config: {
+                dreaming: {
+                  enabled: false,
                 },
               },
             },
@@ -973,14 +1032,87 @@ describe("dreaming controller", () => {
     });
   });
 
-  it('falls back to memory-core when selected memory slot is "none"', () => {
+  it("reads selected-agent memory.dreaming owner ahead of global/default", () => {
+    expect(
+      resolveConfiguredDreaming(
+        {
+          plugins: {
+            slots: {
+              "memory.dreaming": "global-dreaming-plugin",
+            },
+            entries: {
+              "global-dreaming-plugin": {
+                config: {
+                  dreaming: {
+                    enabled: false,
+                  },
+                },
+              },
+              "agent-dreaming-plugin": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "alpha",
+                plugins: {
+                  slots: {
+                    "memory.dreaming": "agent-dreaming-plugin",
+                  },
+                },
+              },
+            ],
+          },
+        },
+        { agentId: "alpha" },
+      ),
+    ).toEqual({
+      pluginId: "agent-dreaming-plugin",
+      enabled: true,
+    });
+  });
+
+  it("treats memory.dreaming=none as disabled instead of falling back to recall", () => {
+    const result = resolveConfiguredDreaming({
+      plugins: {
+        slots: {
+          "memory.dreaming": "none",
+          "memory.recall": "memory-recall-plugin",
+        },
+        entries: {
+          "memory-recall-plugin": {
+            config: {
+              dreaming: { enabled: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({ pluginId: "none", enabled: false });
+  });
+
+  it("ignores legacy memory slot when memory.dreaming and memory.recall are absent", () => {
     expect(
       resolveConfiguredDreaming({
         plugins: {
           slots: {
-            memory: "none",
+            memory: "memos-local-openclaw-plugin",
           },
           entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
             "memory-core": {
               config: {
                 dreaming: {

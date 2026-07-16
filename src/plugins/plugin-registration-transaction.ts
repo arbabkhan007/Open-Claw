@@ -26,8 +26,10 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   getMemoryCapabilityRegistration,
+  listMemoryCapabilityRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  listMemoryRuntimeRegistrations,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -40,9 +42,11 @@ export type PluginProcessGlobalState = {
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   interactiveHandlers: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
+  memoryCapabilities: ReturnType<typeof listMemoryCapabilityRegistrations>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  memoryRuntimes: ReturnType<typeof listMemoryRuntimeRegistrations>;
 };
 
 export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
@@ -54,9 +58,11 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     embeddingProviders: listRegisteredEmbeddingProviders(),
     interactiveHandlers: listPluginInteractiveHandlers(),
     memoryCapability: getMemoryCapabilityRegistration(),
+    memoryCapabilities: listMemoryCapabilityRegistrations(),
     memoryCorpusSupplements: listMemoryCorpusSupplements(),
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
     memoryPromptSupplements: listMemoryPromptSupplements(),
+    memoryRuntimes: listMemoryRuntimeRegistrations(),
   };
 }
 
@@ -70,7 +76,9 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreRegisteredMemoryEmbeddingProviders(state.memoryEmbeddingProviders);
   restoreMemoryPluginState({
     capability: state.memoryCapability,
+    capabilities: state.memoryCapabilities,
     corpusSupplements: state.memoryCorpusSupplements,
+    runtimes: state.memoryRuntimes,
     promptSupplements: state.memoryPromptSupplements,
   });
 }
