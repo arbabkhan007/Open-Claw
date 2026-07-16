@@ -243,16 +243,16 @@ class MemoryDB {
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
     } else {
-      this.table = await this.db.createTable(TABLE_NAME, [
-        {
-          id: "__schema__",
-          text: "",
-          vector: Array.from({ length: this.vectorDim }).fill(0),
-          importance: 0,
-          category: "other",
-          createdAt: 0,
-        },
-      ]);
+      // existOk closes the cross-process gap after this advisory check.
+      const schemaRow = {
+        id: "__schema__",
+        text: "",
+        vector: Array.from({ length: this.vectorDim }).fill(0),
+        importance: 0,
+        category: "other",
+        createdAt: 0,
+      };
+      this.table = await this.db.createTable(TABLE_NAME, [schemaRow], { existOk: true });
       await this.table.delete('id = "__schema__"');
     }
   }
@@ -517,9 +517,8 @@ class MemoryRecallEmbeddingError extends Error {
   }
 }
 
-export const testing = {
-  runWithTimeout,
-} as const;
+const createMemoryDb = (dbPath: string, vectorDim: number) => new MemoryDB(dbPath, vectorDim);
+export const testing = { createMemoryDb, runWithTimeout } as const;
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
   const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
