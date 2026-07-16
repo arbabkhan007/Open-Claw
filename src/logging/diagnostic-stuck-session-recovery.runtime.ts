@@ -234,17 +234,19 @@ export async function recoverStuckDiagnosticSession(
         return outcome;
       }
 
-      // Terminal-phase reply operations (completed/failed/aborted) hold their
-      // sessionKey in the reply-run registry but represent already-settled
-      // work, not evidence of active reply work. Without this guard the
-      // recovery loop unconditionally keeps the lane (active_reply_work →
-      // keep_lane), even though a terminal-phase operation will never produce
-      // further progress, permanently wedging the lane (#105712).
-      if (
-        activeReplyPhase === "completed" ||
-        activeReplyPhase === "failed" ||
-        activeReplyPhase === "aborted"
-      ) {
+      // Terminal-phase reply operations (failed/aborted) hold their sessionKey
+      // in the reply-run registry but represent already-settled work, not
+      // evidence of active reply work. Without this guard the recovery loop
+      // unconditionally keeps the lane (active_reply_work → keep_lane), even
+      // though a terminal-phase operation will never produce further progress,
+      // permanently wedging the lane (#105712).
+      //
+      // On current main, complete() clears registry state immediately so
+      // "completed" operations are never reachable here. "failed" operations
+      // remain in the registry only when retainFailureUntilComplete is set
+      // (fail() → scheduleTerminalSettle). "aborted" operations from
+      // post-backend abortByUser also remain registered.
+      if (activeReplyPhase === "failed" || activeReplyPhase === "aborted") {
         // Wait for the terminal settlement window before reclaiming so
         // pending delivery/cleanup (retainFailureUntilComplete) can settle
         // naturally. The diagnostic progress age approximates how long the

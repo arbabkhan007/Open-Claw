@@ -422,7 +422,7 @@ describe("stuck session recovery", () => {
     ]);
   });
 
-  it.each(["completed", "failed", "aborted"])(
+  it.each(["failed", "aborted"])(
     "reclaims terminal-phase reply operations (phase=%s, phantom embedded_run) instead of keeping the lane",
     async (phase) => {
       mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("phantom-reply-session");
@@ -465,7 +465,7 @@ describe("stuck session recovery", () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
-    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("completed");
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("failed");
     // lastProgressAgeMs = 30s — well within the 60s terminal settle window
     mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
       lastProgressAgeMs: 30_000,

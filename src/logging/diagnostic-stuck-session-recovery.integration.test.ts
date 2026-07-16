@@ -318,8 +318,10 @@ describe("stuck session recovery integration", () => {
     // Phantom terminal-phase reply operations stay in the registry when:
     // - fail() + retainFailureUntilComplete (failed phase, retained until complete())
     // - abortByUser() on a running operation (aborted phase, 60s settle window)
-    // complete() calls clearState() immediately, so "completed" phantoms
-    // are only reachable via setPhase("completed") without complete().
+    // complete() calls clearState() immediately on current main, so "completed"
+    // phantoms are never in the registry at recovery time. Only "failed" (with
+    // retainFailureUntilComplete) and "aborted" (post-backend abortByUser)
+    // remain registered.
     // The recovery sees isEmbeddedAgentRunActive=true via the reply-run registry.
     //
     // E2E reclaim proof: clears diagnostic activity to simulate a stale phantom
