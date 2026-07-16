@@ -12,6 +12,7 @@ export type DeferredEmbeddedHookSessionResetRequest = {
   agentId?: string;
   reason: EmbeddedHookSessionResetReason;
   commandSource: string;
+  assertCurrent?: () => void;
 };
 export type DeferEmbeddedHookSessionReset = (
   request: DeferredEmbeddedHookSessionResetRequest,

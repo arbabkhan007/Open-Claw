@@ -6,6 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -307,7 +308,12 @@ async function runEmbeddedAgentInternal(
           lifecycleGeneration,
           suspendForFailure,
           deferEmbeddedHookSessionReset: (request) =>
-            hookSessionResetQueue.deferResetSession(request),
+            hookSessionResetQueue.deferResetSession({
+              ...request,
+              assertCurrent:
+                request.assertCurrent ??
+                (() => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)),
+            }),
         });
       } finally {
         await hookSessionResetQueue.flush();

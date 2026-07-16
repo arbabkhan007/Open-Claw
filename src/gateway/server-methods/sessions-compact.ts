@@ -343,6 +343,23 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               completed,
               reason,
             });
+          const assertCompactionResetCurrent = () => {
+            const currentEntry = loadAccessorSessionEntryForGatewayTarget({
+              key,
+              cfg,
+              agentId: requestedAgentId,
+            }).entry;
+            if (
+              !currentEntry ||
+              currentEntry.sessionId !== sessionId ||
+              currentEntry.lifecycleRevision !== lifecycleRevision ||
+              resolveSessionWorkStartError(target.canonicalKey, currentEntry)
+            ) {
+              const error = new Error("stale compaction hook reset");
+              error.name = "AbortError";
+              throw error;
+            }
+          };
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
           const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
           try {
@@ -355,7 +372,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               sessionStoreKey: compactTarget.primaryKey,
               storePath,
               deferEmbeddedHookSessionReset: (request) =>
-                hookSessionResetQueue.deferResetSession(request),
+                hookSessionResetQueue.deferResetSession({
+                  ...request,
+                  assertCurrent: request.assertCurrent ?? assertCompactionResetCurrent,
+                }),
             });
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));
