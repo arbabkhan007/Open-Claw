@@ -1,6 +1,7 @@
 // Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { isDeterministicGatewayModel } from "../agents/deterministic-gateway-model.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import { loadModelCatalogSnapshot, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -156,6 +157,11 @@ export async function warnIfModelConfigLooksOff(
     cfg: config,
     agentId: options?.agentId,
   });
+  // The deterministic gateway model is intentionally credential-free and never
+  // appears in provider catalogs; both checks below would be false positives.
+  if (isDeterministicGatewayModel(ref.provider, ref.model)) {
+    return;
+  }
   const warnings: string[] = [];
   const snapshot =
     options?.validateCatalog === false

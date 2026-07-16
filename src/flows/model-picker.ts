@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DETERMINISTIC_GATEWAY_MODEL_REF } from "../agents/deterministic-gateway-model.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
   resolveLogicalModelCatalogEntryState,
@@ -71,6 +72,19 @@ function formatKeepCurrentModelLabel(params: {
   return params.configuredRaw
     ? t("wizard.model.keepCurrent", { value: params.configuredLabel })
     : t("wizard.model.keepCurrentDefault", { value: params.resolvedKey });
+}
+
+function deterministicGatewayOption(): WizardSelectOption {
+  return {
+    value: DETERMINISTIC_GATEWAY_MODEL_REF,
+    label: t("wizard.model.deterministicGateway"),
+  };
+}
+
+function addDeterministicGatewayOption(options: WizardSelectOption[]): void {
+  if (!options.some((option) => option.value === DETERMINISTIC_GATEWAY_MODEL_REF)) {
+    options.push(deterministicGatewayOption());
+  }
 }
 
 function formatModelRefLabel(params: {
@@ -857,6 +871,7 @@ export async function promptDefaultModel(
       label: t("wizard.model.browseAll"),
       hint: t("wizard.model.loadsProviderCatalogs"),
     });
+    addDeterministicGatewayOption(options);
 
     const selection = await params.prompter.select({
       message: params.message ?? t("wizard.model.defaultModel"),
@@ -902,6 +917,7 @@ export async function promptDefaultModel(
         hint: t("wizard.model.current"),
       });
     }
+    addDeterministicGatewayOption(options);
     if (options.length === 0) {
       return promptManualModel({
         prompter: params.prompter,
@@ -945,11 +961,7 @@ export async function promptDefaultModel(
   }
   const catalog = catalogSnapshot.entries;
   if (catalog.length === 0) {
-    return promptManualModel({
-      prompter: params.prompter,
-      allowBlank: allowKeep,
-      initialValue: configuredRaw || resolvedKey || undefined,
-    });
+    return promptDefaultModel({ ...params, loadCatalog: false });
   }
 
   const aliasIndex = buildModelAliasIndex({
@@ -977,11 +989,7 @@ export async function promptDefaultModel(
     hasAuth,
   });
   if (models.length === 0) {
-    return promptManualModel({
-      prompter: params.prompter,
-      allowBlank: allowKeep,
-      initialValue: configuredRaw || resolvedKey || undefined,
-    });
+    return promptDefaultModel({ ...params, loadCatalog: false });
   }
 
   const isVisibleProvider = createModelPickerVisibleProviderPredicate({
@@ -999,11 +1007,7 @@ export async function promptDefaultModel(
     isVisibleProvider,
   });
   if (filteredModels.length === 0) {
-    return promptManualModel({
-      prompter: params.prompter,
-      allowBlank: allowKeep,
-      initialValue: configuredRaw || resolvedKey || undefined,
-    });
+    return promptDefaultModel({ ...params, loadCatalog: false });
   }
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
@@ -1068,6 +1072,7 @@ export async function promptDefaultModel(
       hint: t("wizard.model.currentNotInCatalog"),
     });
   }
+  addDeterministicGatewayOption(options);
 
   const firstPreferredModel =
     preferredProvider && hasPreferredProvider
@@ -1104,6 +1109,9 @@ export async function promptDefaultModel(
       allowBlank: false,
       initialValue: configuredRaw || resolvedKey || undefined,
     });
+  }
+  if (selectedValue === DETERMINISTIC_GATEWAY_MODEL_REF) {
+    return { model: DETERMINISTIC_GATEWAY_MODEL_REF };
   }
 
   const providerPluginResult = await maybeHandleProviderPluginSelection({
