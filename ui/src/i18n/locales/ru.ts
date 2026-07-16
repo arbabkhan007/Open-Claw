@@ -1714,6 +1714,7 @@ export const ru: TranslationMap = {
     memoryImport: "Импорт памяти",
     debug: "Отладка",
     logs: "Журналы",
+    safety: "Safety",
     plugin: "Плагин",
   },
   subtitles: {
@@ -1746,6 +1747,7 @@ export const ru: TranslationMap = {
     memoryImport: "Перенесите память Codex и Claude Code в рабочее пространство агента.",
     debug: "Снимки, события, RPC.",
     logs: "Живые журналы шлюза.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Панель, предоставленная плагином.",
   },
   memoryImport: {

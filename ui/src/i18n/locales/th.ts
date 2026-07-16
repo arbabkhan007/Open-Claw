@@ -1683,6 +1683,7 @@ export const th: TranslationMap = {
     memoryImport: "นำเข้าหน่วยความจำ",
     debug: "ดีบัก",
     logs: "บันทึก",
+    safety: "Safety",
     plugin: "ปลั๊กอิน",
   },
   subtitles: {
@@ -1714,6 +1715,7 @@ export const th: TranslationMap = {
     memoryImport: "นำหน่วยความจำของ Codex และ Claude Code เข้าสู่พื้นที่ทำงานของเอเจนต์",
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "แผงที่ปลั๊กอินจัดเตรียมไว้",
   },
   memoryImport: {

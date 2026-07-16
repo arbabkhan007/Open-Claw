@@ -1710,6 +1710,7 @@ export const tr: TranslationMap = {
     memoryImport: "Belleği İçe Aktar",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
+    safety: "Safety",
     plugin: "Eklenti",
   },
   subtitles: {
@@ -1742,6 +1743,7 @@ export const tr: TranslationMap = {
     memoryImport: "Codex ve Claude Code belleğini bir aracı çalışma alanına aktarın.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
+    safety: "AI safety taxonomy events and severity trends.",
     plugin: "Eklenti tarafından sağlanan panel.",
   },
   memoryImport: {
