@@ -33,6 +33,7 @@ function createCompactionContext(params: {
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
+  modelSelectionLocked?: boolean;
   deferEmbeddedHookSessionReset?: EmbeddedAgentSubscribeContext["params"]["deferEmbeddedHookSessionReset"];
 }): EmbeddedAgentSubscribeContext {
   // Minimal context preserves only the compaction counters and callbacks the
@@ -46,6 +47,7 @@ function createCompactionContext(params: {
       sessionKey: params.sessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
+      modelSelectionLocked: params.modelSelectionLocked,
       deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
       onAgentEvent: undefined,
     },
@@ -426,6 +428,42 @@ describe("handleCompactionEnd", () => {
     });
 
     expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose resetSession for model-locked terminal after_compaction hooks", async () => {
+    const deferredReset = vi.fn();
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        expect(hookContext.api).toBeUndefined();
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "main",
+      initialCount: 0,
+      modelSelectionLocked: true,
+      deferEmbeddedHookSessionReset: deferredReset,
+    });
+
+    await handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: { summary: "compacted" },
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredReset).not.toHaveBeenCalled();
   });
 
   it("reconciles the session store after a successful compaction end event", async () => {

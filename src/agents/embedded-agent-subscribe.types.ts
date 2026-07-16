@@ -38,6 +38,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   runId: string;
   /** Immutable gateway lifecycle ownership for this execution. */
   lifecycleGeneration?: string;
+  /** Current run uses a model-selection-locked session identity. */
+  modelSelectionLocked?: boolean;
   /** Run-owned queue for compaction-hook reset requests. */
   deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
   /** Originating message channel used for subsystem log attribution. */

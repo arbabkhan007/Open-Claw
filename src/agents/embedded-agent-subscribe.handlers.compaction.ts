@@ -201,7 +201,7 @@ export function handleCompactionEnd(
             ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
             ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
             sessionKey: ctx.params.sessionKey,
-            ...(hasResult && !wasAborted
+            ...(hasResult && !wasAborted && ctx.params.modelSelectionLocked !== true
               ? {
                   api: buildEmbeddedHookApi({
                     agentId: ctx.params.agentId,
