@@ -228,6 +228,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       onUserMessagePersistenceInvalidated: () => {
         sessionPromptState.activePrompt.persisted = false;
       },
+      deferEmbeddedHookSessionReset: runInput.deferEmbeddedHookSessionReset,
       getPostCompactionAbortError: input.getPostCompactionAbortError,
       setPostCompactionAbortController: input.setPostCompactionAbortController,
       clearPostCompactionAbortController: input.clearPostCompactionAbortController,

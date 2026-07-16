@@ -83,6 +83,9 @@ type AttemptControl = {
   onUserMessagePersistenceInvalidated: NonNullable<
     EmbeddedRunAttemptParams["onUserMessagePersistenceInvalidated"]
   >;
+  deferEmbeddedHookSessionReset: NonNullable<
+    EmbeddedRunAttemptParams["deferEmbeddedHookSessionReset"]
+  >;
   getPostCompactionAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
@@ -200,6 +203,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionTarget: runtime.sessionTarget,
     trajectorySessionFile: runtime.trajectorySessionFile,
     trajectoryRecorder: runtime.trajectoryRecorder,
+    deferEmbeddedHookSessionReset: control.deferEmbeddedHookSessionReset,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,

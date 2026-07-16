@@ -10,6 +10,7 @@ import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usa
 import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
+  type DeferEmbeddedHookSessionReset,
 } from "./embedded-agent-runner/compaction-hooks.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -185,7 +186,12 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   if (!willRetry) {
     const hookRunnerEnd = getGlobalHookRunner();
     if (hookRunnerEnd?.hasHooks("after_compaction")) {
-      const resetQueue = createEmbeddedHookSessionResetQueue();
+      const resetQueue = ctx.params.deferEmbeddedHookSessionReset
+        ? null
+        : createEmbeddedHookSessionResetQueue();
+      const deferResetSession: DeferEmbeddedHookSessionReset | undefined =
+        ctx.params.deferEmbeddedHookSessionReset ??
+        (resetQueue ? (request) => resetQueue.deferResetSession(request) : undefined);
       void (async () => {
         try {
           await hookRunnerEnd.runAfterCompaction(
@@ -201,7 +207,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
               api: buildEmbeddedHookApi({
                 agentId: ctx.params.agentId,
                 sessionKey: ctx.params.sessionKey,
-                deferResetSession: (request) => resetQueue.deferResetSession(request),
+                ...(deferResetSession ? { deferResetSession } : {}),
               }),
             },
           );
@@ -209,7 +215,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
         } finally {
           try {
-            await resetQueue.flush();
+            await resetQueue?.flush();
           } catch (err) {
             ctx.log.warn(`deferred after_compaction reset failed: ${String(err)}`);
           }

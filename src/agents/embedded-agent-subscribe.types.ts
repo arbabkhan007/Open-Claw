@@ -12,6 +12,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import type { DeferEmbeddedHookSessionReset } from "./embedded-agent-runner/compaction-hooks.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
@@ -37,6 +38,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   runId: string;
   /** Immutable gateway lifecycle ownership for this execution. */
   lifecycleGeneration?: string;
+  /** Run-owned queue for compaction-hook reset requests. */
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;

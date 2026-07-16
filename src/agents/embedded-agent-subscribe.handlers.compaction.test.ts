@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -18,6 +18,14 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
 
+const hookRunnerMocks = vi.hoisted(() => ({
+  getGlobalHookRunner: vi.fn(),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: hookRunnerMocks.getGlobalHookRunner,
+}));
+
 function createCompactionContext(params: {
   storePath: string;
   sessionKey: string;
@@ -25,6 +33,7 @@ function createCompactionContext(params: {
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
+  deferEmbeddedHookSessionReset?: EmbeddedAgentSubscribeContext["params"]["deferEmbeddedHookSessionReset"];
 }): EmbeddedAgentSubscribeContext {
   // Minimal context preserves only the compaction counters and callbacks the
   // handlers mutate, making store reconciliation assertions direct.
@@ -37,6 +46,7 @@ function createCompactionContext(params: {
       sessionKey: params.sessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
+      deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
       onAgentEvent: undefined,
     },
     state: {
@@ -61,6 +71,11 @@ function createCompactionContext(params: {
     getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
+
+beforeEach(() => {
+  hookRunnerMocks.getGlobalHookRunner.mockReset();
+  hookRunnerMocks.getGlobalHookRunner.mockReturnValue(null);
+});
 
 function makeUsageSnapshot(totalTokens: number): AssistantUsageSnapshot {
   return {
@@ -328,6 +343,50 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
+  it("uses the run-owned reset queue for subscription after_compaction hooks", async () => {
+    const deferredRequests: unknown[] = [];
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        await expect(hookContext.api?.resetSession?.("reset")).resolves.toMatchObject({
+          ok: true,
+          deferred: true,
+          key: "main",
+        });
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "main",
+      initialCount: 0,
+      deferEmbeddedHookSessionReset: (request) => {
+        deferredRequests.push(request);
+      },
+    });
+
+    finishCompaction(ctx);
+
+    await vi.waitFor(() => {
+      expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+      expect(deferredRequests).toEqual([
+        {
+          key: "main",
+          agentId: "test-agent",
+          reason: "reset",
+          commandSource: "embedded-agent:hook",
+        },
+      ]);
+    });
+  });
+
   it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");

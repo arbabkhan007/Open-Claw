@@ -210,6 +210,7 @@ export function prepareEmbeddedAttemptStream(input: {
       session: input.activeSession,
       runId: attempt.runId,
       lifecycleGeneration: attempt.lifecycleGeneration,
+      deferEmbeddedHookSessionReset: attempt.deferEmbeddedHookSessionReset,
       messageChannel: input.runtimeChannel,
       initialReplayState: attempt.initialReplayState,
       hookRunner: getGlobalHookRunner() ?? undefined,
