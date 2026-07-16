@@ -996,9 +996,6 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
-    // Add concrete user-content evidence to prove onboarding completed
-    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# Daily log\n");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
