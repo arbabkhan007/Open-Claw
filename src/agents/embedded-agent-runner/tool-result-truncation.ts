@@ -995,6 +995,15 @@ function clearToolResultText(
     // The pointer is what makes elision recoverable. ~130 chars per entry is
     // negligible against the 64k+ aggregate floor, and accounting uses actual lengths.
     remainingTextBudget = Math.max(remainingTextBudget, spillMarkers.compact.length);
+  } else if (
+    remainingTextBudget <= 0 &&
+    content.some((block): block is TextContent & { type: "text" | "toolResult" } =>
+      isToolResultTextBlock(block),
+    )
+  ) {
+    // When the aggregate budget is exhausted and no spill markers exist,
+    // keep at least 1 character so the model never sees an empty result.
+    remainingTextBudget = 1;
   }
   return {
     ...message,
