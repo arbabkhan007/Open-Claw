@@ -776,4 +776,45 @@ describe("AgentSession retry behavior", () => {
     expect(transientEvents).toContain("auto_retry_start");
     expect(transientEvents).toContain("auto_retry_end");
   });
+
+  it("honors server Retry-After (retryAfterMs) for the auto-retry delay", async () => {
+    streamMocks.streamSimple.mockReset();
+    // retryAfterMs (30ms) must win over the configured base backoff (1000ms).
+    streamMocks.streamSimple
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError("HTTP 503 temporary provider response"),
+          retryAfterMs: 30,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError(""),
+          content: [{ type: "text", text: "recovered" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+          retryAfterMs: undefined,
+        }),
+      );
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({
+        retry: { baseDelayMs: 1_000, maxRetries: 1 },
+      }),
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+    });
+    const events: Array<{ type: string; delayMs?: number }> = [];
+    session.subscribe((event) => events.push(event));
+
+    await session.prompt("test retry-after");
+
+    const retryStart = events.find((event) => event.type === "auto_retry_start");
+    expect(retryStart).toBeDefined();
+    expect(retryStart?.delayMs).toBe(30);
+  });
 });
