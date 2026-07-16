@@ -9,6 +9,7 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
@@ -268,6 +269,14 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
+  };
+  /**
+   * Fix #2: Host-bound safety diagnostics emitter.
+   * Trust level, pluginId, and origin are locked in by the host at load time.
+   * Plugins cannot self-attest their own provenance.
+   */
+  safetyDiagnostics?: {
+    emit: (event: AISafetyEventInput) => AISafetyEventEmitResult;
   };
 };
 
