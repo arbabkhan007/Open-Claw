@@ -11,7 +11,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { resolveSkillWorkshopToolApproval } from "./policy.js";
-import { proposeCreateSkill } from "./service.js";
+import { proposeCreateSkill, reviseSkillProposal } from "./service.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -157,6 +157,40 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(approvalDescription).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
     );
+  });
+
+  it("blocks a future version before approval can outlive a concurrent revision", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-version-race-");
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Version Race",
+      description: "Bind approval to the proposal snapshot",
+      content: "# Version Race\n\nVersion one.\n",
+    });
+
+    const result = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: {
+        action: "apply",
+        proposal_id: proposal.record.id,
+        proposal_version: "v2",
+      },
+      workspaceDir,
+      config: pendingApprovalConfig,
+    });
+
+    expect(result).toEqual({
+      block: true,
+      blockReason:
+        "Skill proposal version v2 does not match the current approval snapshot v1. Review it again before continuing.",
+    });
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Version Race\n\nVersion two.\n",
+    });
+    expect(revised.record.proposedVersion).toBe("v2");
+    expect(result?.requireApproval).toBeUndefined();
   });
 
   it("renders proposal-controlled fields without approval-line injection", async () => {

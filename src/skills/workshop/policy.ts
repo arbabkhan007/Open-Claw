@@ -147,6 +147,10 @@ function lifecycleApprovalTimeoutReason(proposalId?: string): string {
   ].join(" ");
 }
 
+function lifecycleVersionMismatchReason(expected: string, current: string): string {
+  return `Skill proposal version ${formatApprovalField(expected)} does not match the current approval snapshot ${formatApprovalField(current)}. Review it again before continuing.`;
+}
+
 function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
   if (config) {
     return config;
@@ -185,21 +189,31 @@ export async function resolveSkillWorkshopToolApproval(params: {
     fallback: text.description,
   });
   const toolParams = asNullableRecord(params.toolParams);
-  const bindProposalId =
-    approvalDescription.proposalId && !readOptionalString(toolParams, "proposal_id");
+  const requestedVersion = readOptionalString(toolParams, "proposal_version");
+  if (
+    approvalDescription.proposalVersion &&
+    requestedVersion &&
+    requestedVersion !== approvalDescription.proposalVersion
+  ) {
+    return {
+      block: true,
+      blockReason: lifecycleVersionMismatchReason(
+        requestedVersion,
+        approvalDescription.proposalVersion,
+      ),
+    };
+  }
   // The prompt describes this proposal snapshot, so execution must stay on the
   // same version or a revision during the approval wait could change the action.
-  const bindCurrentVersion =
-    approvalDescription.proposalVersion && !readOptionalString(toolParams, "proposal_version");
+  const bindProposalSnapshot =
+    approvalDescription.proposalId && approvalDescription.proposalVersion;
   return {
-    ...(bindProposalId || bindCurrentVersion
+    ...(bindProposalSnapshot
       ? {
           params: {
             ...toolParams,
-            ...(bindProposalId ? { proposal_id: approvalDescription.proposalId } : {}),
-            ...(bindCurrentVersion
-              ? { proposal_version: approvalDescription.proposalVersion }
-              : {}),
+            proposal_id: approvalDescription.proposalId,
+            proposal_version: approvalDescription.proposalVersion,
           },
         }
       : {}),
