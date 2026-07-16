@@ -31,9 +31,9 @@
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
             "thinkingLevelMap": {
-              "minimal": "high",
-              "low": "high",
-              "medium": "high",
+              "minimal": "low",
+              "low": "low",
+              "medium": "medium",
               "high": "high",
               "xhigh": "max",
               "max": "max"
@@ -58,9 +58,9 @@
             "name": "DeepSeek V4 Flash",
             "reasoning": true,
             "thinkingLevelMap": {
-              "minimal": "high",
-              "low": "high",
-              "medium": "high",
+              "minimal": "low",
+              "low": "low",
+              "medium": "medium",
               "high": "high",
               "xhigh": "max",
               "max": "max"

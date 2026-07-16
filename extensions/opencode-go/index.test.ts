@@ -57,9 +57,9 @@ const deepSeekV4ThinkingProfile = {
   defaultLevel: "high",
 };
 const deepSeekV4ThinkingLevelMap = {
-  minimal: "high",
-  low: "high",
-  medium: "high",
+  minimal: "low",
+  low: "low",
+  medium: "medium",
   high: "high",
   xhigh: "max",
   max: "max",
@@ -487,6 +487,9 @@ describe("opencode-go provider plugin", () => {
   );
 
   it.each([
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
     ["high", "high"],
     ["xhigh", "max"],
     ["max", "max"],
