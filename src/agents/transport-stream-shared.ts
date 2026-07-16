@@ -38,11 +38,37 @@ const EMPTY_TOOL_RESULT_TEXT = "(no output)";
  * embedded handler read this to route commentary/narration out of the final
  * reply. Shared so every provider transport tags phases identically.
  */
-export function encodeAssistantTextSignatureV1(
-  id: string,
-  phase?: "commentary" | "final_answer",
-): string {
+function encodeAssistantTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
+}
+
+/**
+ * Tags untagged non-empty text blocks in a tool-calling turn as commentary so
+ * the reply pipeline routes the narration out of the delivered reply. Counts
+ * already-tagged text blocks first so generated ids stay unique and repeated
+ * calls stay idempotent.
+ */
+export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): void {
+  const isTextBlock = (
+    block: unknown,
+  ): block is { type: "text"; text: string; textSignature?: string } => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; text?: unknown };
+    return record.type === "text" && typeof record.text === "string";
+  };
+  const textBlocks = content.filter(isTextBlock);
+  let commentaryTextIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
+  for (const block of textBlocks) {
+    if (block.text.trim().length > 0 && block.textSignature === undefined) {
+      block.textSignature = encodeAssistantTextSignatureV1(
+        `commentary-${commentaryTextIndex}`,
+        "commentary",
+      );
+      commentaryTextIndex += 1;
+    }
+  }
 }
 
 export function sanitizeTransportPayloadText(text: string): string {

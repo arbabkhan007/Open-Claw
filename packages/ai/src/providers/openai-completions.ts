@@ -52,6 +52,7 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { encodeTextSignatureV1 } from "./openai-responses-shared.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
   projectOpenAITools,
@@ -549,6 +550,27 @@ export const streamOpenAICompletions: StreamFunction<
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+      // Chat Completions has no per-item phase metadata (unlike Responses), so
+      // tag pre-tool narration once the final stopReason is settled; delivery
+      // gates route commentary-tagged text out of the final reply. Tagging
+      // earlier would silence the text on the drop path above, where tool
+      // calls are filtered out and the text is delivered as the reply.
+      if (output.stopReason === "toolUse") {
+        let commentaryTextIndex = 0;
+        for (const block of output.content) {
+          if (
+            block.type === "text" &&
+            block.text.trim().length > 0 &&
+            block.textSignature === undefined
+          ) {
+            block.textSignature = encodeTextSignatureV1(
+              `commentary-${commentaryTextIndex}`,
+              "commentary",
+            );
+            commentaryTextIndex += 1;
+          }
+        }
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });

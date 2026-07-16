@@ -80,12 +80,12 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
-  encodeAssistantTextSignatureV1,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
+  tagPendingCommentaryText,
 } from "./transport-stream-shared.js";
 import type { ContextUsage } from "./usage.js";
 
@@ -636,25 +636,6 @@ function mapStopReason(reason: string | undefined): string {
       return "stop";
     default:
       throw new Error(`Unhandled stop reason: ${String(reason)}`);
-  }
-}
-
-function tagPendingCommentaryText(content: TransportContentBlock[]): void {
-  let commentaryTextIndex = content.filter(
-    (block) => block.type === "text" && block.textSignature !== undefined,
-  ).length;
-  for (const block of content) {
-    if (
-      block.type === "text" &&
-      block.text.trim().length > 0 &&
-      block.textSignature === undefined
-    ) {
-      block.textSignature = encodeAssistantTextSignatureV1(
-        `commentary-${commentaryTextIndex}`,
-        "commentary",
-      );
-      commentaryTextIndex += 1;
-    }
   }
 }
 

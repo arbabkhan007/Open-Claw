@@ -70,7 +70,11 @@ import {
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
-import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
+import {
+  failTransportStream,
+  finalizeTransportStream,
+  tagPendingCommentaryText,
+} from "./transport-stream-shared.js";
 
 function hasToolHistory(messages: Context["messages"]): boolean {
   return messages.some(
@@ -804,6 +808,13 @@ async function processOpenAICompletionsStream(
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
+  }
+  // Chat Completions has no per-item phase metadata (unlike Responses), so tag
+  // pre-tool narration once the final stopReason is settled. Tagging earlier at
+  // the tool-call boundary would silence the text on the drop path above, where
+  // tool calls are filtered out and the text is delivered as the reply.
+  if (output.stopReason === "toolUse") {
+    tagPendingCommentaryText(output.content);
   }
 }
 
