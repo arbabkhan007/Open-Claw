@@ -70,6 +70,7 @@ export async function runPreparedEmbeddedLoop(
     startupStages,
     lifecycleGeneration,
     suspendForFailure,
+    deferEmbeddedHookSessionReset,
   } = input;
   const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
@@ -267,6 +268,7 @@ export async function runPreparedEmbeddedLoop(
       hookRunner,
       hookContext: hookCtx,
       sessionPromptState,
+      deferEmbeddedHookSessionReset,
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();

@@ -1,5 +1,6 @@
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { resolveCompactionSuccessorTranscript } from "../../../context-engine/types.js";
+import { buildEmbeddedHookApi, type DeferEmbeddedHookSessionReset } from "../compaction-hooks.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -13,8 +14,16 @@ export function createEmbeddedRunCompactionRuntime(input: {
   hookRunner: PreparedEmbeddedRunInput["hookRunner"];
   hookContext: PreparedEmbeddedRunInput["hookContext"];
   sessionPromptState: SessionPromptState;
+  deferEmbeddedHookSessionReset: DeferEmbeddedHookSessionReset;
 }) {
-  const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
+  const {
+    runParams: params,
+    contextEngine,
+    hookRunner,
+    hookContext,
+    sessionPromptState,
+    deferEmbeddedHookSessionReset,
+  } = input;
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
@@ -100,7 +109,14 @@ export function createEmbeddedRunCompactionRuntime(input: {
             sessionPromptState.sessionFile,
           ...(previousSessionId ? { previousSessionId } : {}),
         },
-        resolveActiveHookContext(),
+        {
+          ...resolveActiveHookContext(),
+          api: buildEmbeddedHookApi({
+            agentId: hookContext.agentId,
+            sessionKey: hookContext.sessionKey,
+            deferResetSession: deferEmbeddedHookSessionReset,
+          }),
+        },
       );
     } catch (error) {
       log.warn(`after_compaction hook failed during ${reason}: ${String(error)}`);

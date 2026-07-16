@@ -34,7 +34,7 @@ import {
 } from "../session-suspension.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import { buildEmbeddedHookApi, createEmbeddedHookSessionResetQueue } from "./compaction-hooks.js";
+import { createEmbeddedHookSessionResetQueue } from "./compaction-hooks.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -250,11 +250,6 @@ async function runEmbeddedAgentInternal(
         modelProviderId: provider,
         modelId,
         trigger: params.trigger,
-        api: buildEmbeddedHookApi({
-          agentId: workspaceResolution.agentId,
-          sessionKey: resolvedSessionKey,
-          deferResetSession: (request) => hookSessionResetQueue.deferResetSession(request),
-        }),
         ...buildAgentHookContextChannelFields(params),
         ...buildAgentHookContextIdentityFields({
           trigger: params.trigger,
