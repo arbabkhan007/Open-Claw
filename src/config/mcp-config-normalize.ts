@@ -29,6 +29,22 @@ export function isKnownCliMcpTypeAlias(value: unknown): boolean {
 }
 
 /**
+ * Folds the operator `disabled` alias into the canonical `enabled` flag.
+ *
+ * Every spawn path selects configured servers with `enabled !== false`.
+ * Hand-edited `openclaw.json` reaches runtime reads without the write-path
+ * canonicalizer, so this must run at the read chokepoint too or a
+ * `disabled: true` server keeps getting spawned (issue #103954).
+ */
+function foldMcpDisabledAlias(server: Record<string, unknown>): Record<string, unknown> {
+  if (server.disabled === true) {
+    server.enabled = false;
+    delete server.disabled;
+  }
+  return server;
+}
+
+/**
  * Converts operator-friendly MCP server aliases into canonical config keys.
  *
  * Existing canonical fields win over legacy snake_case or `type` aliases so
@@ -69,7 +85,7 @@ export function canonicalizeConfiguredMcpServer(
     next.clientKey = next.client_key;
     delete next.client_key;
   }
-  return next;
+  return foldMcpDisabledAlias(next);
 }
 
 /** Returns a cloned map of object-shaped MCP server configs, dropping invalid entries. */
@@ -80,6 +96,9 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
   return Object.fromEntries(
     Object.entries(value)
       .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+      .map(([name, server]) => [
+        name,
+        foldMcpDisabledAlias({ ...(server as Record<string, unknown>) }),
+      ]),
   );
 }
