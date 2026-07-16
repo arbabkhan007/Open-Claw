@@ -28,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
+import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
@@ -173,7 +174,10 @@ async function deliverIrcReply(params: {
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
   await deliverFormattedTextWithAttachments({
-    payload: params.payload,
+    payload: {
+      ...params.payload,
+      text: sanitizeIrcAssistantText(params.payload.text ?? ""),
+    },
     send: async ({ text, replyToId }) => {
       if (params.sendReply) {
         await params.sendReply(params.target, text, replyToId);

@@ -196,6 +196,53 @@ describe("irc inbound behavior", () => {
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 
+  it.each([
+    {
+      name: "mixed assistant text",
+      reply: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      expected: ["Done."],
+    },
+    {
+      name: "trace-only assistant text",
+      reply: "⚠️ 🛠️ `search repos (agent)` failed",
+      expected: [],
+    },
+    {
+      name: "ordinary assistant text",
+      reply: "The pipeline has 3 open deals.",
+      expected: ["The pipeline has 3 open deals."],
+    },
+  ])("sanitizes $name on the inbound reply path", async ({ reply, expected }) => {
+    const coreRuntime = createPluginRuntimeMock();
+    const sendReply = vi.fn(async () => {});
+    const dispatchReply = coreRuntime.channel.inbound.dispatchReply as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    dispatchReply.mockImplementation(
+      async (params: { delivery: { deliver: (payload: { text: string }) => Promise<void> } }) => {
+        await params.delivery.deliver({ text: reply });
+      },
+    );
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      sendReply,
+    });
+
+    expect(sendReply.mock.calls.map((call) => call[1])).toEqual(expected);
+  });
+
   it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();
