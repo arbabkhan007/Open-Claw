@@ -772,6 +772,15 @@ export interface OperatorApprovals {
   updated_at_ms: number;
 }
 
+export interface OutboundMediaProvenance {
+  created_at_ms: number;
+  kind: string;
+  realpath: string;
+  sha256: string;
+  size_bytes: number;
+  version: number;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -1294,6 +1303,7 @@ export interface DB {
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   operator_approvals: OperatorApprovals;
+  outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
