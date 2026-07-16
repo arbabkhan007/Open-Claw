@@ -4,7 +4,8 @@ import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordError } from "./internal/rest-errors.js";
-import { DISCORD_WEBHOOK_TIMEOUT_MS, sendWebhookMessageDiscord } from "./send.webhook.js";
+import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
+import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const cfg = {
   channels: {
@@ -85,7 +86,8 @@ describe("sendWebhookMessageDiscord timeouts", () => {
   });
 
   it("uses the Discord REST outbound timeout budget by default", () => {
-    expect(DISCORD_WEBHOOK_TIMEOUT_MS).toBe(15_000);
+    // Webhook send reuses DISCORD_REST_TIMEOUT_MS as its private default.
+    expect(DISCORD_REST_TIMEOUT_MS).toBe(15_000);
   });
 
   it("keeps a never-responding webhook pending without a request signal (negative control)", async () => {
@@ -176,7 +178,8 @@ describe("sendWebhookMessageDiscord timeouts", () => {
     const timeoutMs = 250;
     const originalFetch = globalThis.fetch;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const target = typeof input === "string" ? input : input.toString();
+      const target =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const rewritten = target.replace("https://discord.com", fixture.baseUrl);
       return await originalFetch(rewritten, init);
     });

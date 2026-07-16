@@ -25,7 +25,7 @@ import type { DiscordSendResult } from "./send.types.js";
 const DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 /** Matches Discord REST outbound budget so webhook delivery cannot hang unbounded. */
-export const DISCORD_WEBHOOK_TIMEOUT_MS = DISCORD_REST_TIMEOUT_MS;
+const DISCORD_WEBHOOK_TIMEOUT_MS = DISCORD_REST_TIMEOUT_MS;
 
 type DiscordWebhookSendOpts = {
   cfg: OpenClawConfig;
@@ -72,7 +72,7 @@ function isDiscordWebhookDeadlineError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
   }
-  const name = String((error as { name?: unknown }).name ?? "");
+  const name = (error as { name?: unknown }).name;
   return name === "AbortError" || name === "TimeoutError";
 }
 
