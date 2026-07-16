@@ -19,7 +19,6 @@ import type {
   OpenAIResponsesCompat,
   SimpleStreamOptions,
 } from "../../llm/types.js";
-import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
@@ -30,6 +29,7 @@ import {
   listPluginModelCatalogFiles,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
+import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
@@ -130,6 +130,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
+  supportsTemperature: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -358,7 +359,7 @@ export class ModelRegistry {
 
     // Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
     resetApiProviders(defaultApiRegistry);
-    resetOAuthProviders();
+    getAuthStorageOAuthProviderRegistry(this.authStorage).reset();
 
     this.loadModels();
 
@@ -862,7 +863,7 @@ export class ModelRegistry {
         ...config.oauth,
         id: providerName,
       };
-      registerOAuthProvider(oauthProvider);
+      getAuthStorageOAuthProviderRegistry(this.authStorage).register(oauthProvider);
     }
 
     if (config.streamSimple) {
@@ -952,3 +953,4 @@ export interface ProviderConfigInput {
     compat?: Model["compat"];
   }>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

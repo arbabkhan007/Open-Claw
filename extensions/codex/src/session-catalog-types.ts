@@ -1,3 +1,11 @@
+import type {
+  CodexThread,
+  CodexThreadListParams,
+  CodexThreadListResponse,
+  CodexThreadTurnsListParams,
+  CodexThreadTurnsListResponse,
+} from "./app-server/protocol.js";
+
 /** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
@@ -31,6 +39,16 @@ export type CodexSessionCatalogPageParams = {
   cwd?: string;
 };
 
+export type CodexSessionCatalogControl = {
+  connectionFingerprint?: string;
+  withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
+  listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
+  listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
+  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
+  archiveThread(threadId: string): Promise<void>;
+};
+
 export type CodexSessionCatalogError = {
   code: string;
   message: string;
@@ -42,6 +60,8 @@ export type CodexSessionCatalogHost = {
   kind: "gateway" | "node";
   connected: boolean;
   nodeId?: string;
+  canContinueCodex?: boolean;
+  canOpenTerminalCodex?: boolean;
   sessions: CodexSessionCatalogSession[];
   nextCursor?: string;
   backwardsCursor?: string;
@@ -50,6 +70,15 @@ export type CodexSessionCatalogHost = {
 
 export type CodexSessionCatalogResult = {
   hosts: CodexSessionCatalogHost[];
+};
+
+export type CodexSessionTranscriptPage = {
+  hostId: string;
+  label: string;
+  threadId: string;
+  items: import("./app-server/protocol.js").CodexThreadItem[];
+  nextCursor?: string;
+  backwardsCursor?: string;
 };
 
 export type CodexSessionCatalogParams = {

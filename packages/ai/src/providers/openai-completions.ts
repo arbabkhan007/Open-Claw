@@ -22,7 +22,6 @@ import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   OpenAICompletionsCompat,
@@ -33,7 +32,6 @@ import type {
   ThinkingContent,
   Tool,
   ToolCall,
-  ToolResultMessage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
@@ -62,7 +60,11 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -96,10 +98,6 @@ function isThinkingContentBlock(block: { type: string }): block is ThinkingConte
 
 function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
-}
-
-function isImageContentBlock(block: { type: string }): block is ImageContent {
-  return block.type === "image";
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -245,7 +243,6 @@ export const streamOpenAICompletions: StreamFunction<
             partial: output,
           });
         } else if (block.type === "toolCall") {
-          block.arguments = parseStreamingJson(block.partialArgs);
           // Finalize in-place and strip the scratch buffers so replay only
           // carries parsed arguments.
           delete block.partialArgs;
@@ -768,7 +765,7 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
@@ -891,7 +888,7 @@ function addCacheControlToLastConversationMessage(
 ): void {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (cacheOptOutIndexes.has(i)) {
+    if (!message || cacheOptOutIndexes.has(i)) {
       continue;
     }
     if (message.role === "user" || message.role === "assistant") {
@@ -910,7 +907,10 @@ function addCacheControlToLastTool(
     return;
   }
 
-  const lastTool = tools[tools.length - 1] as ChatCompletionToolWithCacheControl;
+  const lastTool: ChatCompletionToolWithCacheControl | undefined = tools.at(-1);
+  if (!lastTool) {
+    return;
+  }
   lastTool.cache_control = cacheControl;
 }
 
@@ -1003,7 +1003,7 @@ export function convertMessages(
     // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
-      const [callId] = id.split("|");
+      const callId = id.slice(0, id.indexOf("|"));
       // Sanitize to allowed chars and truncate to 40 chars (OpenAI limit)
       return callId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
     }
@@ -1034,6 +1034,9 @@ export function convertMessages(
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
     // Some providers don't allow user messages directly after tool results
     // Insert a synthetic assistant message to bridge the gap
     if (
@@ -1127,7 +1130,7 @@ export function convertMessages(
           }
 
           // Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-          let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
+          let signature = nonEmptyThinkingBlocks.at(0)?.thinkingSignature;
           if (model.provider === "opencode-go" && signature === "reasoning") {
             signature = "reasoning_content";
           }
@@ -1155,16 +1158,18 @@ export function convertMessages(
             arguments: JSON.stringify(tc.arguments),
           },
         }));
-        const reasoningDetails = toolCalls
-          .filter((tc) => tc.thoughtSignature)
-          .map((tc) => {
-            try {
-              return JSON.parse(tc.thoughtSignature!);
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean);
+        const reasoningDetails = toolCalls.flatMap((tc) => {
+          const signature = tc.thoughtSignature;
+          if (!signature) {
+            return [];
+          }
+          try {
+            const parsed: unknown = JSON.parse(signature);
+            return parsed ? [parsed] : [];
+          } catch {
+            return [];
+          }
+        });
         if (reasoningDetails.length > 0) {
           (
             assistantMsg as typeof assistantMsg & { reasoning_details?: unknown }
@@ -1195,13 +1200,16 @@ export function convertMessages(
       const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
       let j = i;
 
-      for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
-        const toolMsg = transformedMessages[j] as ToolResultMessage;
+      while (j < transformedMessages.length) {
+        const toolMsg = transformedMessages.at(j);
+        if (toolMsg?.role !== "toolResult") {
+          break;
+        }
 
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some((c) => c.type === "image");
+        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
@@ -1221,7 +1229,7 @@ export function convertMessages(
 
         if (hasImages && model.input.includes("image")) {
           for (const block of toolMsg.content) {
-            if (isImageContentBlock(block)) {
+            if (isImageWithMediaPayload(block)) {
               imageBlocks.push({
                 type: "image_url",
                 image_url: {
@@ -1231,6 +1239,7 @@ export function convertMessages(
             }
           }
         }
+        j += 1;
       }
 
       i = j - 1;
@@ -1365,7 +1374,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     isCloudflareAiGateway;
 
   const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether;
+    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
@@ -1444,3 +1453,4 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

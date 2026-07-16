@@ -1,4 +1,5 @@
 // Test Extension tests cover test extension script behavior.
+/* oxlint-disable typescript/no-unnecessary-type-parameters -- explicit call-site result types keep mock tuple extraction precise. */
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import {
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
+  listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
@@ -38,6 +40,29 @@ type RunGroupParams = {
   env: Record<string, string | undefined>;
   targets: string[];
 };
+
+function createConcurrentExtensionBatchPlan() {
+  const groups = [
+    ["light", 10, "one", 1],
+    ["heavy", 30, "two", 3],
+    ["middle", 20, "three", 2],
+  ] as const;
+  return {
+    extensionCount: groups.length,
+    extensionIds: groups.map((group) => group[2]),
+    estimatedCost: 60,
+    hasTests: true,
+    planGroups: groups.map(([config, estimatedCost, extensionId, testFileCount]) => ({
+      config,
+      estimatedCost,
+      extensionIds: [extensionId],
+      roots: [`extensions/${extensionId}`],
+      testFileCount,
+    })),
+    testFileCount: 6,
+  };
+}
+
 function runScriptResult(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -45,7 +70,7 @@ function runScriptResult(args: string[], cwd = process.cwd()) {
   });
 }
 
-function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
+function requireFirstMockArg<T>(mock: { mock: { calls: readonly (readonly unknown[])[] } }): T {
   const [call] = mock.mock.calls;
   if (!call) {
     throw new Error("expected first mock call argument");
@@ -54,7 +79,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> 
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
-  return arg;
+  return arg as T;
 }
 
 function findExtensionWithoutTests() {
@@ -66,6 +91,10 @@ function findExtensionWithoutTests() {
     throw new Error("Expected at least one extension without tests");
   }
   return extensionId;
+}
+
+function listExtensionTestFiles(extensionId: string): string[] {
+  return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
 function expectPositiveIntegerMetric(value: number) {
@@ -477,19 +506,21 @@ describe("scripts/test-extension.mjs", () => {
 
   it("keeps explicitly requested extensions without tests in batch plans", () => {
     const extensionId = findExtensionWithoutTests();
+    const testedExtensionId = "firecrawl";
+    const testedExtensionFiles = listExtensionTestFiles(testedExtensionId);
     const batch = resolveExtensionBatchPlan({
       cwd: process.cwd(),
-      extensionIds: [extensionId, "firecrawl"],
+      extensionIds: [extensionId, testedExtensionId],
     });
 
     expect(batch.extensionIds).toEqual(
-      [extensionId, "firecrawl"].toSorted((left, right) => left.localeCompare(right)),
+      [extensionId, testedExtensionId].toSorted((left, right) => left.localeCompare(right)),
     );
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
-    expect(batch.testFileCount).toBe(2);
-    expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual(["firecrawl"]);
+    expect(batch.testFileCount).toBe(testedExtensionFiles.length);
+    expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual([testedExtensionId]);
   });
 
   it("counts tracked extension tests without walking extension directories", () => {
@@ -522,7 +553,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
-      shards.map((shard, index) => `checks-node-extensions-shard-${index + 1}`),
+      shards.map((_shard, index) => `checks-node-extensions-shard-${index + 1}`),
     );
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
@@ -560,46 +591,17 @@ describe("scripts/test-extension.mjs", () => {
         resolvers.push(() => resolve(0));
       });
     });
-    const runPromise = runExtensionBatchPlan(
-      {
-        extensionCount: 3,
-        extensionIds: ["one", "two", "three"],
-        estimatedCost: 60,
-        hasTests: true,
-        planGroups: [
-          {
-            config: "light",
-            estimatedCost: 10,
-            extensionIds: ["one"],
-            roots: ["extensions/one"],
-            testFileCount: 1,
-          },
-          {
-            config: "heavy",
-            estimatedCost: 30,
-            extensionIds: ["two"],
-            roots: ["extensions/two"],
-            testFileCount: 3,
-          },
-          {
-            config: "middle",
-            estimatedCost: 20,
-            extensionIds: ["three"],
-            roots: ["extensions/three"],
-            testFileCount: 2,
-          },
-        ],
-        testFileCount: 6,
-      },
-      {
-        env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-        runGroup,
-        vitestArgs: ["--reporter=dot"],
-      },
-    );
+    const runPromise = runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+      runGroup: runGroup as NonNullable<
+        NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+      >,
+      vitestArgs: ["--reporter=dot"],
+    });
 
-    await Promise.resolve();
-    expect(started).toEqual(["heavy", "middle"]);
+    await vi.waitFor(() => {
+      expect(started).toEqual(["heavy", "middle"]);
+    });
     resolvers.shift()?.();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -626,6 +628,40 @@ describe("scripts/test-extension.mjs", () => {
       },
       targets: ["two"],
     });
+  });
+
+  it("stops admitting extension batch groups after a parallel failure", async () => {
+    const started: string[] = [];
+    let resolveHeavy: ((code: number) => void) | undefined;
+    let resolveMiddle: ((code: number) => void) | undefined;
+    const runGroup = vi.fn((params: RunGroupParams) => {
+      started.push(params.config);
+      return new Promise<number>((resolve) => {
+        if (params.config === "heavy") {
+          resolveHeavy = resolve;
+        } else if (params.config === "middle") {
+          resolveMiddle = resolve;
+        }
+      });
+    });
+    const runPromise = runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+      runGroup: runGroup as NonNullable<
+        NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+      >,
+    });
+
+    await vi.waitFor(() => {
+      expect(started).toEqual(["heavy", "middle"]);
+    });
+    resolveHeavy?.(7);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(started).toEqual(["heavy", "middle"]);
+    resolveMiddle?.(0);
+    await expect(runPromise).resolves.toBe(7);
+    expect(runGroup).toHaveBeenCalledTimes(2);
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {
@@ -840,16 +876,12 @@ describe("scripts/test-extension.mjs", () => {
 
   it("fails extension batch groups when exact excludes remove every test", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const firecrawlTestFiles = listExtensionTestFiles("firecrawl");
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: [
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
-        ],
+        vitestArgs: firecrawlTestFiles.flatMap((testFile) => ["--exclude", testFile]),
       },
     );
 
@@ -859,16 +891,15 @@ describe("scripts/test-extension.mjs", () => {
 
   it("fails extension batch groups when dir-relative exact excludes remove every test", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const firecrawlTestFiles = listExtensionTestFiles("firecrawl");
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: [
+        vitestArgs: firecrawlTestFiles.flatMap((testFile) => [
           "--exclude",
-          "firecrawl/src/firecrawl-tools.test.ts",
-          "--exclude",
-          "firecrawl/src/firecrawl-client.test.ts",
-        ],
+          testFile.replace(/^extensions\//u, ""),
+        ]),
       },
     );
 
@@ -878,17 +909,13 @@ describe("scripts/test-extension.mjs", () => {
 
   it("allows extension batch groups to opt into empty exact excludes", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const firecrawlTestFiles = listExtensionTestFiles("firecrawl");
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         allowEmptyAfterExclude: true,
         runGroup,
-        vitestArgs: [
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
-        ],
+        vitestArgs: firecrawlTestFiles.flatMap((testFile) => ["--exclude", testFile]),
       },
     );
 
@@ -966,7 +993,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<voi
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -978,7 +1005,7 @@ async function waitForClose(
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);
