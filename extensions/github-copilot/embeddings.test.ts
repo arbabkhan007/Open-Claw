@@ -300,6 +300,53 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it("redacts credential-shaped text in model discovery errors", async () => {
+    mockDiscoveryResponse({
+      ok: false,
+      status: 401,
+      text: '{"error":{"message":"authentication failed"},"access_token":"ghu_AAAAUNIQUESECRETXXXX111122223333"}',
+    });
+
+    let caught: Error | undefined;
+    try {
+      await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 401");
+    expect(caught?.message).toContain("authentication failed");
+    expect(caught?.message).not.toContain("ghu_AAAAUNIQUESECRETXXXX111122223333");
+    expect(caught?.message).not.toContain("UNIQUESECRET");
+  });
+
+  it("redacts credential-shaped text in embeddings errors", async () => {
+    mockDiscoveryResponse({
+      ok: true,
+      json: buildModelsResponse([
+        { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+      ]),
+    });
+    const errorResponse = new Response(
+      '{"error":{"message":"rate limit exceeded"},"access_token":"gho_BBBBUNIQUEEMBSECRETYYYY444455556666"}',
+      { status: 429, headers: { "content-type": "application/json" } },
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => errorResponse));
+    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    let caught: Error | undefined;
+    try {
+      await result.provider?.embedQuery("hello");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot embeddings HTTP 429");
+    expect(caught?.message).toContain("rate limit exceeded");
+    expect(caught?.message).not.toContain("gho_BBBBUNIQUEEMBSECRETYYYY444455556666");
+    expect(caught?.message).not.toContain("UNIQUEEMBSECRET");
+  });
+
   it("honors remote overrides when creating the provider", async () => {
     resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "gh_remote_token" });
     mockDiscoveryResponse({
