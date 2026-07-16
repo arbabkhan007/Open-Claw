@@ -99,7 +99,7 @@ describe("navigationIconForRoute", () => {
       "memory-import": "download",
       debug: "bug",
       logs: "scrollText",
-      safety: "shieldAlert",
+      safety: "alertTriangle",
     });
   });
 

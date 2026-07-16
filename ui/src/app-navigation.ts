@@ -187,7 +187,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   "memory-import": "download",
   debug: "bug",
   logs: "scrollText",
-  safety: "shieldAlert",
+  safety: "alertTriangle",
   plugin: "puzzle",
   "new-session": "plus",
 };
