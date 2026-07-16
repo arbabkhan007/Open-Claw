@@ -5,6 +5,11 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
+  isBareOkDeliveryStatus,
+  isBareSentDeliveryStatus,
+  resultConfirmsCurrentSourceRoute,
+} from "./embedded-agent-message-tool-source-route.js";
+import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,
   isMessagingToolDeliveryAction,
@@ -30,7 +35,6 @@ const RESULT_ENVELOPE_KEYS = [
 const BROADCAST_SEND_ENVELOPE_KEYS = ["payload", "result", "sendResult", "toolResult"];
 const PARTIAL_DELIVERY_ENVELOPE_KEYS = [...RESULT_ENVELOPE_KEYS, "error", "cause"];
 const SESSIONS_SEND_DELIVERY_STATUSES = new Set(["accepted", "ok"]);
-const BARE_OK_DELIVERY_STATUS = "ok";
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -61,14 +65,6 @@ function isMessageToolSourceReplyActionName(action: unknown): boolean {
 
 function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
-}
-
-function isBareOkDeliveryStatus(value: unknown): boolean {
-  return normalizeStatus(value) === BARE_OK_DELIVERY_STATUS;
-}
-
-function isBareSentDeliveryStatus(value: unknown): boolean {
-  return normalizeStatus(value) === SENT_DELIVERY_STATUS;
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
@@ -563,7 +559,9 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }
-  if (hasExplicitMessageRoute(args) && params.allowExplicitSourceRoute !== true) {
+  const hasConfirmedExplicitSourceRoute =
+    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+  if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }
   return isDeliveredMessagingToolResult(params);

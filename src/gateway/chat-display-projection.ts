@@ -28,6 +28,15 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-o
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
+import {
+  hasDryRunMessageToolResultValue,
+  hasSuppressedMessageToolResultValue,
+  isDryRunMessageToolRecord,
+  readMessageToolResultCallId,
+  readMessageToolResultName,
+  readMessageToolResultOkValue,
+  readMessageToolSourceReplyRoute,
+} from "./message-tool-result-status.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
@@ -50,11 +59,13 @@ type ChatDisplayProjectionResult = {
 type PendingMessageToolVisibleReply = {
   toolCallId?: string;
   text: string;
+  requiresSourceRouteConfirmation: boolean;
   anchor: Record<string, unknown>;
   completionAnchor?: Record<string, unknown>;
   deliveryMirrorAnchor?: Record<string, unknown>;
   deliveryMirrorIndex?: number;
   sourceReplySink?: "internal-ui";
+  sourceReplyRoute?: "current-source";
   succeeded: boolean;
 };
 
@@ -874,17 +885,6 @@ function readMessageToolVisibleText(args: Record<string, unknown>): string | und
   return undefined;
 }
 
-function isDryRunMessageToolRecord(record: Record<string, unknown>): boolean {
-  if (record.dryRun === true || record.dry_run === true) {
-    return true;
-  }
-  const deliveryStatus =
-    normalizeOptionalString(record.deliveryStatus) ??
-    normalizeOptionalString(record.delivery_status) ??
-    normalizeOptionalString(record.status);
-  return deliveryStatus?.toLowerCase() === "dry_run";
-}
-
 function extractMessageToolVisibleReplies(
   message: Record<string, unknown>,
 ): Array<Omit<PendingMessageToolVisibleReply, "anchor" | "succeeded">> {
@@ -911,15 +911,17 @@ function extractMessageToolVisibleReplies(
     if (isDryRunMessageToolRecord(args)) {
       continue;
     }
-    if (hasExplicitMessageToolRoute(args)) {
-      continue;
-    }
+    const requiresSourceRouteConfirmation = hasExplicitMessageToolRoute(args);
     const text = readMessageToolVisibleText(args);
     if (!text?.trim()) {
       continue;
     }
     const toolCallId = readToolBlockCallId(record);
-    replies.push({ ...(toolCallId ? { toolCallId } : {}), text });
+    replies.push({
+      ...(toolCallId ? { toolCallId } : {}),
+      text,
+      requiresSourceRouteConfirmation,
+    });
   }
   return replies;
 }
@@ -939,79 +941,6 @@ function isRenderableAssistantDisplayMessage(message: Record<string, unknown>): 
   return text !== undefined && !isSuppressedControlReplyText(text);
 }
 
-function readMessageToolResultName(message: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalString(message.toolName) ??
-    normalizeOptionalString(message.tool_name) ??
-    normalizeOptionalString(message.name) ??
-    normalizeOptionalString(message.tool)
-  );
-}
-
-function readMessageToolResultCallId(message: Record<string, unknown>): string | undefined {
-  return (
-    normalizeOptionalString(message.toolCallId) ??
-    normalizeOptionalString(message.tool_call_id) ??
-    normalizeOptionalString(message.callId) ??
-    normalizeOptionalString(message.call_id) ??
-    normalizeOptionalString(message.id)
-  );
-}
-
-function readToolResultOkValue(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  const record = readMaybeJsonRecord(value);
-  if (record && typeof record.ok === "boolean") {
-    return record.ok;
-  }
-  if (Array.isArray(value)) {
-    for (const block of value) {
-      const blockOk = readToolResultOkValue(block);
-      if (blockOk !== undefined) {
-        return blockOk;
-      }
-      const recordBlock = readRecord(block);
-      if (typeof recordBlock?.text === "string") {
-        const textOk = readToolResultOkValue(recordBlock.text);
-        if (textOk !== undefined) {
-          return textOk;
-        }
-      }
-      if (typeof recordBlock?.content === "string") {
-        const contentOk = readToolResultOkValue(recordBlock.content);
-        if (contentOk !== undefined) {
-          return contentOk;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-function hasDryRunToolResultValue(value: unknown): boolean {
-  const record = readMaybeJsonRecord(value);
-  if (record && isDryRunMessageToolRecord(record)) {
-    return true;
-  }
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((block) => {
-    if (hasDryRunToolResultValue(block)) {
-      return true;
-    }
-    const recordBlock = readRecord(block);
-    if (typeof recordBlock?.text === "string" && hasDryRunToolResultValue(recordBlock.text)) {
-      return true;
-    }
-    return (
-      typeof recordBlock?.content === "string" && hasDryRunToolResultValue(recordBlock.content)
-    );
-  });
-}
-
 function isSuccessfulMessageToolResult(
   message: Record<string, unknown>,
   pending: PendingMessageToolVisibleReply,
@@ -1025,10 +954,14 @@ function isSuccessfulMessageToolResult(
     return false;
   }
   const resultCallId = readMessageToolResultCallId(message);
+  const hasSuccessfulPayload = isSuccessfulMessageToolResultPayload(message);
+  const hasConfirmedSourceRoute =
+    !pending.requiresSourceRouteConfirmation ||
+    readMessageToolSourceReplyRoute(message) === "current-source";
   if (pending.toolCallId) {
-    return resultCallId === pending.toolCallId && isSuccessfulMessageToolResultPayload(message);
+    return resultCallId === pending.toolCallId && hasSuccessfulPayload && hasConfirmedSourceRoute;
   }
-  return isSuccessfulMessageToolResultPayload(message);
+  return hasSuccessfulPayload && hasConfirmedSourceRoute;
 }
 
 function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>): boolean {
@@ -1036,18 +969,27 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
     return false;
   }
   if (
-    hasDryRunToolResultValue(message.result) ||
-    hasDryRunToolResultValue(message.output) ||
-    hasDryRunToolResultValue(message.content) ||
-    hasDryRunToolResultValue(message.text)
+    hasDryRunMessageToolResultValue(message.result) ||
+    hasDryRunMessageToolResultValue(message.output) ||
+    hasDryRunMessageToolResultValue(message.content) ||
+    hasDryRunMessageToolResultValue(message.text)
+  ) {
+    return false;
+  }
+  if (
+    hasSuppressedMessageToolResultValue(message.details) ||
+    hasSuppressedMessageToolResultValue(message.result) ||
+    hasSuppressedMessageToolResultValue(message.output) ||
+    hasSuppressedMessageToolResultValue(message.content) ||
+    hasSuppressedMessageToolResultValue(message.text)
   ) {
     return false;
   }
   const ok =
-    readToolResultOkValue(message.result) ??
-    readToolResultOkValue(message.output) ??
-    readToolResultOkValue(message.content) ??
-    readToolResultOkValue(message.text);
+    readMessageToolResultOkValue(message.result) ??
+    readMessageToolResultOkValue(message.output) ??
+    readMessageToolResultOkValue(message.content) ??
+    readMessageToolResultOkValue(message.text);
   return ok !== false;
 }
 
@@ -1069,6 +1011,7 @@ function buildMessageToolVisibleReplyMirror(
       toolName: "message",
       ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
       ...(pending.sourceReplySink ? { sourceReplySink: pending.sourceReplySink } : {}),
+      ...(pending.sourceReplyRoute ? { sourceReplyRoute: pending.sourceReplyRoute } : {}),
       ...(pending.sourceReplySink && sourceMessageSeq ? { sourceMessageSeq } : {}),
     },
   };
@@ -1190,6 +1133,10 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
           const sourceReplySink = readMessageToolSourceReplySink(record);
           if (sourceReplySink) {
             item.sourceReplySink = sourceReplySink;
+          }
+          const sourceReplyRoute = readMessageToolSourceReplyRoute(record);
+          if (sourceReplyRoute) {
+            item.sourceReplyRoute = sourceReplyRoute;
           }
           item.completionAnchor = item.deliveryMirrorAnchor ?? record;
           if (item.deliveryMirrorAnchor) {

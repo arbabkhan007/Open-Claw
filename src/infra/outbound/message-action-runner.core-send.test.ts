@@ -37,7 +37,7 @@ const slackConfig = {
   },
 } as OpenClawConfig;
 
-function registerSlackTextPlugin() {
+function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
   const sendText = vi.fn().mockResolvedValue({
     channel: "slack",
     messageId: "m1",
@@ -57,7 +57,7 @@ function registerSlackTextPlugin() {
             },
           }),
           config: {
-            listAccountIds: () => ["default"],
+            listAccountIds: () => accountIds,
             resolveAccount: () => ({ enabled: true }),
             isConfigured: () => true,
           },
@@ -335,12 +335,148 @@ describe("runMessageAction core send routing", () => {
         currentChannelId: "channel:C123",
       },
       sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      requesterAccountId: "default",
       sourceReplyDeliveryMode: "message_tool_only",
       dryRun: false,
     });
 
     expect(result.kind).toBe("send");
     expect(sendText).toHaveBeenCalledOnce();
+  });
+
+  it("marks explicit sends that resolve to the current source conversation", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "visible source reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      requesterAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("does not mark explicit sends to another conversation as source replies", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:OTHER",
+        message: "remote reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+    expect(
+      result.kind === "send"
+        ? (result.toolResult?.details as { sourceReplyRoute?: unknown } | undefined)
+            ?.sourceReplyRoute
+        : undefined,
+    ).toBeUndefined();
+  });
+
+  it("does not mark same-target sends through another account as source replies", async () => {
+    registerSlackTextPlugin(["default", "other"]);
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        accountId: "other",
+        target: "channel:C123",
+        message: "cross-account reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      requesterAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("does not mark same-target sends to another thread as source replies", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        threadId: "other-thread",
+        message: "thread-only reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        currentThreadTs: "source-thread",
+      },
+      sessionKey: "agent:main:slack:channel:C123:thread:source-thread",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("does not mark Slack top-level sends with an explicit reply target", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        replyTo: "1712345678.000100",
+        message: "another thread",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
   });
 
   it("prepends messages.responsePrefix to message-tool sends", async () => {

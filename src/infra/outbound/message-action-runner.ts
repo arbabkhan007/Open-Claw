@@ -79,6 +79,13 @@ import {
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
+import {
+  hasExplicitMessageTarget,
+  isExplicitDifferentAccount,
+  isExplicitDifferentChannel,
+  markCurrentSourceReplyResultIfNeeded,
+  shouldApplyImplicitSourceReplySendPolicy,
+} from "./message-action-source-route.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import {
   prepareOutboundMirrorRoute,
@@ -606,14 +613,6 @@ function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolea
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
 
-function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
-  return (
-    hasExplicitSingularTargetParam(params) ||
-    (Array.isArray(params.targets) &&
-      params.targets.some((value) => normalizeOptionalString(value)))
-  );
-}
-
 function hasPotentialActionTargetInput(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
@@ -675,36 +674,6 @@ function isCurrentSourceTargetParam(
     );
   }
   return Array.from(explicitCandidates).some((candidate) => currentCandidates.has(candidate));
-}
-
-function hasExplicitNonCurrentChannelParam(
-  input: RunMessageActionParams,
-  params: Record<string, unknown>,
-): boolean {
-  const explicitChannel = normalizeOptionalLowercaseString(params.channel);
-  if (!explicitChannel) {
-    return false;
-  }
-  const currentChannelProvider = normalizeOptionalLowercaseString(
-    input.toolContext?.currentChannelProvider,
-  );
-  return !currentChannelProvider || explicitChannel !== currentChannelProvider;
-}
-
-function applyImplicitSourceReplySendPolicy(
-  input: RunMessageActionParams,
-  params: Record<string, unknown>,
-) {
-  if (input.action !== "send" || input.sourceReplyDeliveryMode !== "message_tool_only") {
-    return;
-  }
-  if (hasExplicitNonCurrentChannelParam(input, params)) {
-    return;
-  }
-  if (hasExplicitTargetParam(params) && !isCurrentSourceTargetParam(input, params)) {
-    return;
-  }
-  params.bestEffort = true;
 }
 
 async function runGatewayPluginMessageActionOrNull(params: {
@@ -1276,8 +1245,19 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
     }),
   });
+  const currentSourceRoute = {
+    dryRun: input.dryRun === true,
+    currentChannelProvider: input.toolContext?.currentChannelProvider,
+    actionChannel: params.channel,
+    currentAccountId: input.requesterAccountId ?? input.defaultAccountId,
+    explicitAccountId: params.accountId,
+    targetMatchesCurrentSource: isCurrentSourceTargetParam(input, params),
+    currentThreadId: input.toolContext?.currentThreadTs,
+    replyToIsExplicit,
+    resolvedThreadId,
+  };
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    return markCurrentSourceReplyResultIfNeeded(gatewayPluginAction, currentSourceRoute);
   }
 
   const useCorePresentationDelivery = Boolean(
@@ -1352,7 +1332,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     threadId: resolvedThreadId ?? undefined,
   });
 
-  return {
+  const result: MessageActionRunResult = {
     kind: "send",
     channel,
     action,
@@ -1363,6 +1343,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     sendResult: send.sendResult,
     dryRun,
   };
+  return markCurrentSourceReplyResultIfNeeded(result, currentSourceRoute);
 }
 
 async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
@@ -1617,7 +1598,6 @@ export async function runMessageAction(
   if (await shouldUseInternalSourceReplySink(input, params)) {
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
   }
-  applyImplicitSourceReplySendPolicy(input, params);
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
@@ -1651,6 +1631,24 @@ export async function runMessageAction(
   }
   if (accountId) {
     params.accountId = accountId;
+  }
+  if (
+    shouldApplyImplicitSourceReplySendPolicy({
+      action,
+      sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+      hasExplicitNonCurrentChannel: isExplicitDifferentChannel({
+        explicitChannel: params.channel,
+        currentChannelProvider: input.toolContext?.currentChannelProvider,
+      }),
+      hasExplicitDifferentAccount: isExplicitDifferentAccount({
+        explicitAccountId: params.accountId,
+        currentAccountId: input.requesterAccountId ?? input.defaultAccountId,
+      }),
+      hasExplicitTarget: hasExplicitMessageTarget(params),
+      targetMatchesCurrentSource: isCurrentSourceTargetParam(input, params),
+    })
+  ) {
+    params.bestEffort = true;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
   const normalizationPolicy = resolveAttachmentMediaPolicy({
