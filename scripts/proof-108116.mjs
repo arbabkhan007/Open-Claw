@@ -106,7 +106,11 @@ async function main() {
   server.close();
 }
 
-main().catch((error: unknown) => {
-  console.error("[proof] unexpected error:", error);
-  process.exitCode = 1;
-});
+(async () => {
+  try {
+    await main();
+  } catch (error) {
+    console.error("[proof] unexpected error:", error);
+    process.exitCode = 1;
+  }
+})();
