@@ -7,6 +7,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
+import {
+  buildEmbeddedHookApi,
+  createEmbeddedHookSessionResetQueue,
+} from "./embedded-agent-runner/compaction-hooks.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -181,18 +185,36 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   if (!willRetry) {
     const hookRunnerEnd = getGlobalHookRunner();
     if (hookRunnerEnd?.hasHooks("after_compaction")) {
-      void hookRunnerEnd
-        .runAfterCompaction(
-          {
-            messageCount: ctx.params.session.messages?.length ?? 0,
-            compactedCount: ctx.getCompactionCount(),
-            sessionFile: ctx.params.session.sessionFile,
-          },
-          { sessionKey: ctx.params.sessionKey },
-        )
-        .catch((err: unknown) => {
+      const resetQueue = createEmbeddedHookSessionResetQueue();
+      void (async () => {
+        try {
+          await hookRunnerEnd.runAfterCompaction(
+            {
+              messageCount: ctx.params.session.messages?.length ?? 0,
+              compactedCount: ctx.getCompactionCount(),
+              sessionFile: ctx.params.session.sessionFile,
+            },
+            {
+              ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+              ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+              sessionKey: ctx.params.sessionKey,
+              api: buildEmbeddedHookApi({
+                agentId: ctx.params.agentId,
+                sessionKey: ctx.params.sessionKey,
+                deferResetSession: (request) => resetQueue.deferResetSession(request),
+              }),
+            },
+          );
+        } catch (err) {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
-        });
+        } finally {
+          try {
+            await resetQueue.flush();
+          } catch (err) {
+            ctx.log.warn(`deferred after_compaction reset failed: ${String(err)}`);
+          }
+        }
+      })();
     }
   }
 }

@@ -3749,6 +3749,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
       sessionKey: "test-key",
+      api: expect.objectContaining({
+        resetSession: expect.any(Function),
+      }),
     });
   });
 

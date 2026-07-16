@@ -1831,6 +1831,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
             onHookMessages: params.onCompactionHookMessages,
+            deferResetSession: params.deferEmbeddedHookSessionReset,
           });
           return {
             ok: true,

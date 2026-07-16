@@ -12,6 +12,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { DeferEmbeddedHookSessionReset } from "./compaction-hooks.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -113,6 +114,8 @@ export type CompactEmbeddedAgentSessionParams = {
     sessionId: string;
     sessionKey: string;
   }) => void | Promise<void>;
+  /** Queue hook-requested current-session resets for a caller-owned post-run lifecycle flush. */
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */

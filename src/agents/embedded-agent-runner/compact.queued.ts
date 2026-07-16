@@ -61,7 +61,12 @@ import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
-import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
+import {
+  asCompactionHookRunner,
+  buildEmbeddedHookApi,
+  createEmbeddedHookSessionResetQueue,
+  runPostCompactionSideEffects,
+} from "./compaction-hooks.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionHarnessRuntime,
@@ -707,6 +712,7 @@ async function compactResolvedContextEngine(
           agentId: params.agentId,
         });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+        const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
         const hookCtx = {
           sessionId: params.sessionId,
           agentId: sessionAgentId,
@@ -901,6 +907,11 @@ async function compactResolvedContextEngine(
             const afterHookCtx = {
               ...hookCtx,
               sessionId: postCompactionSessionId,
+              api: buildEmbeddedHookApi({
+                agentId: sessionAgentId,
+                sessionKey: hookSessionKey,
+                deferResetSession: (request) => hookSessionResetQueue.deferResetSession(request),
+              }),
             };
             await hookRunner.runAfterCompaction(
               {
@@ -918,6 +929,8 @@ async function compactResolvedContextEngine(
             log.warn("after_compaction hook failed", {
               errorMessage: formatErrorMessage(err),
             });
+          } finally {
+            await hookSessionResetQueue.flush();
           }
         }
         let secondaryNativeHarnessCompaction: EmbeddedAgentCompactResult | undefined;

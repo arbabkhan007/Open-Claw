@@ -1,7 +1,7 @@
 /**
  * Test: before_compaction & after_compaction hook wiring
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ const hookMocks = vi.hoisted(() => ({
     runAfterCompaction: vi.fn(async () => {}),
   },
   emitAgentEvent: vi.fn(),
+  performGatewaySessionReset: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -19,6 +20,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: hookMocks.emitAgentEvent,
+}));
+
+vi.mock("../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: hookMocks.performGatewaySessionReset,
 }));
 
 import {
@@ -35,6 +40,7 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.runAfterCompaction.mockClear();
     hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
     hookMocks.emitAgentEvent.mockClear();
+    hookMocks.performGatewaySessionReset.mockClear();
   });
 
   function createCompactionEndCtx(params: {
@@ -42,6 +48,8 @@ describe("compaction hook wiring", () => {
     messages?: unknown[];
     sessionFile?: string;
     sessionKey?: string;
+    agentId?: string;
+    sessionId?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
   }) {
@@ -49,6 +57,8 @@ describe("compaction hook wiring", () => {
       params: {
         runId: params.runId,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
         session: {
           messages: params.messages ?? [],
           sessionFile: params.sessionFile,
@@ -90,7 +100,12 @@ describe("compaction hook wiring", () => {
       event: afterCalls[0]?.[0] as
         | { messageCount?: number; compactedCount?: number; sessionFile?: string }
         | undefined,
-      hookCtx: afterCalls[0]?.[1] as { sessionKey?: string } | undefined,
+      hookCtx: afterCalls[0]?.[1] as
+        | {
+            sessionKey?: string;
+            api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+          }
+        | undefined,
     };
   }
 
@@ -104,7 +119,9 @@ describe("compaction hook wiring", () => {
       if (!params.call.hookCtx) {
         throw new Error("Expected compaction hook context");
       }
-      expect(params.call.hookCtx).toEqual({ sessionKey: params.expectedSessionKey });
+      expect(params.call.hookCtx).toEqual(
+        expect.objectContaining({ sessionKey: params.expectedSessionKey }),
+      );
     }
   }
 
@@ -195,6 +212,38 @@ describe("compaction hook wiring", () => {
       runId: "r2",
       stream: "compaction",
       data: { phase: "end", willRetry: false, completed: true },
+    });
+  });
+
+  it("provides a deferred reset API to final after-compaction hooks", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    (hookMocks.runner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, hookCtx: unknown) => {
+        const api = (hookCtx as { api?: { resetSession?: (reason?: "new" | "reset") => unknown } })
+          .api;
+        expect(api?.resetSession).toEqual(expect.any(Function));
+        await api?.resetSession?.("reset");
+      },
+    );
+
+    const ctx = createCompactionEndCtx({
+      runId: "r2-reset",
+      messages: [1, 2],
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:discord-public:cron:heartbeat",
+      agentId: "discord-public",
+      sessionId: "session-heartbeat",
+      compactionCount: 1,
+    });
+
+    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+
+    await expect.poll(() => hookMocks.performGatewaySessionReset.mock.calls.length).toBe(1);
+    expect(hookMocks.performGatewaySessionReset).toHaveBeenCalledWith({
+      key: "agent:discord-public:cron:heartbeat",
+      agentId: "discord-public",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
     });
   });
 

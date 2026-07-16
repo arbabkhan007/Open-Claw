@@ -12,6 +12,10 @@ import type {
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import {
+  buildEmbeddedHookApi,
+  createEmbeddedHookSessionResetQueue,
+} from "../embedded-agent-runner/compaction-hooks.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
@@ -192,6 +196,7 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   if (!hookRunner?.hasHooks("after_compaction")) {
     return;
   }
+  const resetQueue = createEmbeddedHookSessionResetQueue();
   try {
     await hookRunner.runAfterCompaction(
       {
@@ -199,9 +204,18 @@ export async function runAgentHarnessAfterCompactionHook(params: {
         compactedCount: params.compactedCount,
         sessionFile: params.sessionFile,
       },
-      buildAgentHookContext(params.ctx),
+      {
+        ...buildAgentHookContext(params.ctx),
+        api: buildEmbeddedHookApi({
+          agentId: params.ctx.agentId,
+          sessionKey: params.ctx.sessionKey,
+          deferResetSession: (request) => resetQueue.deferResetSession(request),
+        }),
+      },
     );
   } catch (error) {
     log.warn(`after_compaction hook failed: ${String(error)}`);
+  } finally {
+    await resetQueue.flush();
   }
 }

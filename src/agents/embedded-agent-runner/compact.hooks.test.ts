@@ -42,6 +42,7 @@ import {
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
   shouldPreferExplicitConfigApiKeyAuthMock,
+  performGatewaySessionResetMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
@@ -1790,6 +1791,23 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    (hookRunner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, context: unknown) => {
+        const hookContext = context as {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        };
+        expect(hookContext.api?.resetSession).toEqual(expect.any(Function));
+        await expect(hookContext.api?.resetSession?.("new")).resolves.toMatchObject({
+          ok: true,
+          key: TEST_SESSION_KEY,
+          deferred: true,
+        });
+        expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
+        await expect(
+          hookContext.api?.resetSession?.("agent:other-session" as "reset"),
+        ).rejects.toThrow(/reason "new" or "reset"/);
+      },
+    );
     await runCompactionHooks({
       sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
@@ -1838,6 +1856,16 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         messageProvider: "telegram",
       }),
     );
+    const pluginAfterContext = mockCallArg(hookRunner.runAfterCompaction, 0, 1) as {
+      api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+    };
+    expect(pluginAfterContext.api?.resetSession).toEqual(expect.any(Function));
+    expect(performGatewaySessionResetMock).toHaveBeenCalledWith({
+      key: "agent:main:session-1",
+      agentId: "main",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
   });
 
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {

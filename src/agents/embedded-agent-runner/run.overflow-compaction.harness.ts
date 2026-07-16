@@ -114,6 +114,14 @@ export const mockedGlobalHookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
+const mockedPerformGatewaySessionReset = vi.fn(
+  async (params: { key: string; reason?: "new" | "reset"; commandSource?: string }) => ({
+    ok: true as const,
+    key: params.key,
+    entry: { sessionId: "reset-session" },
+  }),
+);
+
 export const mockedContextEngine = {
   info: { ownsCompaction: false as boolean },
   compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
@@ -853,6 +861,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     waitForDeferredTurnMaintenanceForSession: mockedWaitForDeferredTurnMaintenanceForSession,
   }));
 
+  vi.doMock("../../gateway/session-reset-service.js", () => ({
+    performGatewaySessionReset: mockedPerformGatewaySessionReset,
+  }));
+
   vi.doMock("./model.js", () => ({
     createEmptyAgentDiscoveryStores: mockedCreateEmptyAgentDiscoveryStores,
     resolveModelAsync: mockedResolveModelAsync,
@@ -916,6 +928,34 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./compaction-hooks.js", () => ({
+    buildEmbeddedHookApi: vi.fn(
+      (params?: {
+        agentId?: string;
+        sessionKey?: string;
+        commandSource?: string;
+        deferResetSession?: (request: {
+          key: string;
+          agentId?: string;
+          reason: "new" | "reset";
+          commandSource: string;
+        }) => void;
+      }) => ({
+        resetSession: vi.fn(async (reason: "new" | "reset" = "reset") => {
+          const key = params?.sessionKey ?? "test-key";
+          params?.deferResetSession?.({
+            key,
+            ...(params?.agentId ? { agentId: params.agentId } : {}),
+            reason,
+            commandSource: params?.commandSource ?? "embedded-agent:hook",
+          });
+          return { ok: true, key, deferred: true };
+        }),
+      }),
+    ),
+    createEmbeddedHookSessionResetQueue: vi.fn(() => ({
+      deferResetSession: vi.fn(),
+      flush: vi.fn(async () => {}),
+    })),
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
