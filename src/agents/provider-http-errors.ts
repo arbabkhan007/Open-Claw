@@ -16,6 +16,18 @@ const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+// Bound post-header body stalls so a provider that returns headers and then
+// stops sending chunks cannot hang the shared reader forever.
+const PROVIDER_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
+
+type ProviderResponseReadOptions = {
+  maxBytes?: number;
+  chunkTimeoutMs?: number;
+};
+
+function resolveProviderResponseIdleTimeoutMs(opts?: ProviderResponseReadOptions): number {
+  return opts?.chunkTimeoutMs ?? PROVIDER_RESPONSE_READ_IDLE_TIMEOUT_MS;
+}
 
 /** Returns a plain object view for provider JSON payloads when one exists. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -49,12 +61,16 @@ export async function readResponseTextLimited(
 export async function readProviderTextResponse(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
+  opts?: ProviderResponseReadOptions,
 ): Promise<string> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
+  const chunkTimeoutMs = resolveProviderResponseIdleTimeoutMs(opts);
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs: idleTimeoutMs }) =>
+      new Error(`${label}: text response stalled after ${idleTimeoutMs}ms`),
   });
   return new TextDecoder().decode(bytes);
 }
@@ -270,12 +286,16 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
 export async function readProviderJsonResponse<T>(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
+  opts?: ProviderResponseReadOptions,
 ): Promise<T> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
+  const chunkTimeoutMs = resolveProviderResponseIdleTimeoutMs(opts);
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs: idleTimeoutMs }) =>
+      new Error(`${label}: JSON response stalled after ${idleTimeoutMs}ms`),
   });
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as T;
@@ -340,15 +360,17 @@ export async function readProviderBinaryResponse(
   response: Response,
   label: string,
   kind = "binary",
-  opts?: {
-    maxBytes?: number;
-  },
+  opts?: ProviderResponseReadOptions,
 ): Promise<Uint8Array> {
   assertProviderBinaryResponseContent(response, label, kind);
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
+  const chunkTimeoutMs = resolveProviderResponseIdleTimeoutMs(opts);
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs: idleTimeoutMs }) =>
+      new Error(`${label}: ${kind} response stalled after ${idleTimeoutMs}ms`),
   });
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
