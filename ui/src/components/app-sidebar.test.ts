@@ -245,7 +245,10 @@ function createContext(
   agentsList: AgentsListResult | null = null,
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
-  const selectionState = { selectedId: selectedAgentId, scopeId: selectedAgentId };
+  const selectionState: { selectedId: string | null; scopeId: string | null } = {
+    selectedId: selectedAgentId,
+    scopeId: selectedAgentId,
+  };
   return {
     gateway,
     sessions,
