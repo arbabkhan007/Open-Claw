@@ -551,10 +551,12 @@ function computeSessionCompactKey(params: CopilotSessionCompatParams): string {
 }
 
 function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
+  const agentId = params.agentId ?? readAgentIdFromSessionKey(params.sessionKey);
   return {
     ...(params.runId ? { runId: params.runId } : {}),
-    agentId: params.agentId,
+    agentId,
     sessionKey: params.sessionKey,
+    resetSessionKey: params.sessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
     modelProviderId: params.provider,

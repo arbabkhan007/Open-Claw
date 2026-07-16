@@ -197,7 +197,8 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   if (!hookRunner?.hasHooks("after_compaction")) {
     return;
   }
-  const resetEnabled = params.ctx.modelSelectionLocked !== true;
+  const resetSessionKey = params.ctx.resetSessionKey?.trim();
+  const resetEnabled = params.ctx.modelSelectionLocked !== true && Boolean(resetSessionKey);
   const resetQueue =
     resetEnabled && !params.ctx.deferEmbeddedHookSessionReset
       ? createEmbeddedHookSessionResetQueue()
@@ -222,7 +223,7 @@ export async function runAgentHarnessAfterCompactionHook(params: {
           ? {
               api: buildEmbeddedHookApi({
                 agentId: params.ctx.agentId,
-                sessionKey: params.ctx.sessionKey,
+                sessionKey: resetSessionKey,
                 ...(deferResetSession ? { deferResetSession } : {}),
               }),
             }

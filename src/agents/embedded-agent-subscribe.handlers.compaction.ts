@@ -197,15 +197,19 @@ export function handleCompactionEnd(
         (resetQueue ? (request) => resetQueue.deferResetSession(request) : undefined);
       return (async () => {
         try {
+          const resetSessionKey = ctx.params.sessionKey?.trim();
           const hookContext = {
             ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
             ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
             sessionKey: ctx.params.sessionKey,
-            ...(hasResult && !wasAborted && ctx.params.modelSelectionLocked !== true
+            ...(hasResult &&
+            !wasAborted &&
+            ctx.params.modelSelectionLocked !== true &&
+            resetSessionKey
               ? {
                   api: buildEmbeddedHookApi({
                     agentId: ctx.params.agentId,
-                    sessionKey: ctx.params.sessionKey,
+                    sessionKey: resetSessionKey,
                     ...(deferResetSession ? { deferResetSession } : {}),
                   }),
                 }

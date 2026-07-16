@@ -23,6 +23,7 @@ export type AgentHarnessHookContext = {
   jobId?: string;
   agentId?: string;
   sessionKey?: string;
+  resetSessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
   modelProviderId?: string;

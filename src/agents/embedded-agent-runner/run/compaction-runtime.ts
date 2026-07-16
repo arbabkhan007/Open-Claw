@@ -102,6 +102,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       return;
     }
     try {
+      const resetSessionKey = params.sessionKey?.trim();
       await hookRunner.runAfterCompaction(
         {
           messageCount: -1,
@@ -114,12 +115,12 @@ export function createEmbeddedRunCompactionRuntime(input: {
         },
         {
           ...resolveActiveHookContext(),
-          ...(params.modelSelectionLocked === true
+          ...(params.modelSelectionLocked === true || !resetSessionKey
             ? {}
             : {
                 api: buildEmbeddedHookApi({
                   agentId: hookContext.agentId,
-                  sessionKey: hookContext.sessionKey,
+                  sessionKey: resetSessionKey,
                   deferResetSession: deferEmbeddedHookSessionReset,
                 }),
               }),

@@ -199,4 +199,38 @@ describe("runAgentHarnessAfterCompactionHook", () => {
     expect(afterCompaction).toHaveBeenCalledTimes(1);
     expect(deferResetSession).not.toHaveBeenCalled();
   });
+
+  it("binds resetSession to the canonical reset key instead of the hook session key", async () => {
+    const deferResetSession = vi.fn();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      expect(ctx.sessionKey).toBe("agent:agent-1:sandbox:policy");
+      await expect(ctx.api?.resetSession("new")).resolves.toMatchObject({
+        ok: true,
+        key: "agent:agent-1:discord:channel:123",
+        deferred: true,
+      });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+
+    await runAgentHarnessAfterCompactionHook({
+      sessionFile: "/tmp/session.jsonl",
+      compactedCount: 1,
+      ctx: {
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:sandbox:policy",
+        resetSessionKey: "agent:agent-1:discord:channel:123",
+        deferEmbeddedHookSessionReset: deferResetSession,
+      },
+    });
+
+    expect(afterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferResetSession).toHaveBeenCalledWith({
+      key: "agent:agent-1:discord:channel:123",
+      agentId: "agent-1",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+  });
 });

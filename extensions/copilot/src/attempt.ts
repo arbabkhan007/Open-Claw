@@ -376,6 +376,7 @@ export async function runCopilotAttempt(
     readString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
     readString((input as { sessionKey?: unknown }).sessionKey) ??
     readString(input.sessionId);
+  const resetSessionKey = readString((input as { sessionKey?: unknown }).sessionKey);
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
@@ -399,6 +400,7 @@ export async function runCopilotAttempt(
     jobId: input.jobId,
     agentId: sessionAgentId,
     sessionKey: sandboxSessionKey,
+    resetSessionKey,
     sessionId: input.sessionId,
     workspaceDir: resolvedWorkspaceForSandbox,
     modelProviderId: modelRef.provider,

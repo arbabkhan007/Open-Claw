@@ -2014,6 +2014,7 @@ describe("runCopilotAttempt", () => {
   it("marks a timeout during active SDK compaction", async () => {
     const deferredResetSession = vi.fn();
     const afterCompaction = vi.fn(async (_event, ctx) => {
+      expect(ctx.sessionKey).toBe("agent:main:sandbox:policy");
       await ctx.api?.resetSession("new");
     });
     initializeGlobalHookRunner(
@@ -2029,7 +2030,10 @@ describe("runCopilotAttempt", () => {
     });
 
     const result = await runCopilotAttempt(
-      makeParams({ deferEmbeddedHookSessionReset: deferredResetSession }),
+      makeParams({
+        sandboxSessionKey: "agent:main:sandbox:policy",
+        deferEmbeddedHookSessionReset: deferredResetSession,
+      }),
       { pool: makeFakePool(sdk) },
     );
 
