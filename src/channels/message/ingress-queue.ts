@@ -82,7 +82,7 @@ export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
 };
 
 /** Failed ingress event tombstone retained for duplicate detection and diagnostics. */
-export type ChannelIngressQueueFailedRecord = {
+export type ChannelIngressQueueFailedRecord<TPayload = unknown> = {
   id: string;
   channelId: string;
   accountId: string;
@@ -90,6 +90,7 @@ export type ChannelIngressQueueFailedRecord = {
   failedAt: number;
   reason: string;
   message?: string;
+  payload?: TPayload;
 };
 
 /** Retention options for pending, completed, and failed ingress queue rows. */
@@ -129,7 +130,7 @@ export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMeta
   | {
       kind: "failed";
       duplicate: true;
-      record: ChannelIngressQueueFailedRecord;
+      record: ChannelIngressQueueFailedRecord<TPayload>;
     };
 
 /** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
@@ -319,7 +320,8 @@ function completedRecord<TCompletedMetadata>(
   };
 }
 
-function failedRecord(row: ChannelIngressRow): ChannelIngressQueueFailedRecord {
+function failedRecord<TPayload>(row: ChannelIngressRow): ChannelIngressQueueFailedRecord<TPayload> {
+  const payload = parseJson(row.payload_json);
   return {
     id: row.event_id,
     channelId: row.channel_id,
@@ -328,6 +330,7 @@ function failedRecord(row: ChannelIngressRow): ChannelIngressQueueFailedRecord {
     failedAt: row.failed_at ?? row.updated_at,
     reason: row.failed_reason ?? "failed",
     ...(row.last_error === null ? {} : { message: row.last_error }),
+    ...(payload === null ? {} : { payload: payload as TPayload }),
   };
 }
 
@@ -403,7 +406,7 @@ function rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(
     return { kind: "completed", duplicate: true, record: completedRecord(row) };
   }
   if (row.status === "failed") {
-    return { kind: "failed", duplicate: true, record: failedRecord(row) };
+    return { kind: "failed", duplicate: true, record: failedRecord<TPayload>(row) };
   }
   if (row.status === "claimed") {
     const rec = claimedRecord<TPayload, TMetadata>(row);
@@ -1077,7 +1080,6 @@ export function createChannelIngressQueue<
             failed_at: failedAt,
             failed_reason: failOptions.reason,
             last_error: failOptions.message ?? null,
-            payload_json: "null",
             metadata_json: null,
             claim_token: null,
             claim_owner: null,
