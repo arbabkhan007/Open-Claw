@@ -8,7 +8,8 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { createQaCrablineTransportAdapter, testing } from "./crabline-transport.js";
+import { postCrablineInbound } from "./crabline-inbound.js";
+import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 
 function createSelection(channel: OpenClawCrablineChannelDriverSelection["channel"] = "telegram") {
   return {
@@ -37,10 +38,12 @@ describe("crabline transport", () => {
         }
         response.write('{"update":');
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       const address = server.address() as AddressInfo;
       try {
-        const result = testing.postCrablineInbound({
+        const result = postCrablineInbound({
           adapter: {
             channel: "telegram",
             manifest: {
