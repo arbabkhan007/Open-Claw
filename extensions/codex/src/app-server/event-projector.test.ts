@@ -119,19 +119,6 @@ afterEach(async () => {
   tempDirs.clear();
 });
 
-async function createProjectorWithHooks() {
-  const beforeCompaction = vi.fn();
-  const afterCompaction = vi.fn();
-  initializeGlobalHookRunner(
-    createMockPluginRegistry([
-      { hookName: "before_compaction", handler: beforeCompaction },
-      { hookName: "after_compaction", handler: afterCompaction },
-    ]),
-  );
-  const projector = await createProjector();
-  return { projector, beforeCompaction, afterCompaction };
-}
-
 function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
   return {
     didSendViaMessagingTool: false,
@@ -6599,7 +6586,24 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
-    const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const deferredResetSession = vi.fn();
+    const params = await createParams();
+    const beforeCompaction = vi.fn();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      await ctx.api?.resetSession();
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_compaction", handler: beforeCompaction },
+        { hookName: "after_compaction", handler: afterCompaction },
+      ]),
+    );
+    const projector = await createProjector({
+      ...params,
+      agentId: "agent-1",
+      sessionKey: "agent:main:session-1",
+      deferEmbeddedHookSessionReset: deferredResetSession,
+    });
     const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
@@ -6641,6 +6645,12 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(afterContext.runId).toBe("run-1");
     expect(afterContext.sessionId).toBe("session-1");
+    expect(deferredResetSession).toHaveBeenCalledWith({
+      key: "agent:main:session-1",
+      agentId: "agent-1",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
+    });
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {

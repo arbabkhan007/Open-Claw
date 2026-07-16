@@ -2012,7 +2012,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("marks a timeout during active SDK compaction", async () => {
-    const afterCompaction = vi.fn();
+    const deferredResetSession = vi.fn();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      await ctx.api?.resetSession("new");
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
     );
@@ -2025,7 +2028,10 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    const result = await runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const result = await runCopilotAttempt(
+      makeParams({ deferEmbeddedHookSessionReset: deferredResetSession }),
+      { pool: makeFakePool(sdk) },
+    );
 
     expect(result.timedOut).toBe(true);
     expect(result.timedOutDuringCompaction).toBe(true);
@@ -2042,6 +2048,12 @@ describe("runCopilotAttempt", () => {
       expect.objectContaining({ compactedCount: 3, sessionFile: "session.json" }),
       expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
     );
+    expect(deferredResetSession).toHaveBeenCalledWith({
+      key: "agent:main:session-1",
+      agentId: "agent-1",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
   });
 
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
