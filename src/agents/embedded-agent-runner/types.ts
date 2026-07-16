@@ -171,6 +171,8 @@ export type EmbeddedAgentRunMeta = {
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   yielded?: boolean;
+  /** Model-provided sessions_yield acknowledgment; consumed per attempt by the reply pipeline. */
+  yieldMessage?: string;
   error?: {
     kind:
       | "context_overflow"
