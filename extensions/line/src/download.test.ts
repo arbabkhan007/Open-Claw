@@ -243,7 +243,7 @@ describe("downloadLineMedia", () => {
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
   });
 
-  it("aborts a hung content request at the total readiness deadline", async () => {
+  it("aborts a hung content request at the total download deadline", async () => {
     let requestSignal: AbortSignal | undefined;
     fetchMock.mockImplementation(
       async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -258,12 +258,53 @@ describe("downloadLineMedia", () => {
 
     vi.useFakeTimers();
     const pending = downloadLineMedia("mid-hung", "token");
-    const rejection = expect(pending).rejects.toThrow(/did not become ready within 15 seconds/i);
+    const rejection = expect(pending).rejects.toThrow(/timed out after 15 seconds/i);
     await vi.advanceTimersByTimeAsync(15_000);
     await rejection;
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestSignal?.aborted).toBe(true);
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts a dripping content body after headers within the download deadline", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let dripTimer: ReturnType<typeof setInterval> | undefined;
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              dripTimer = setInterval(() => {
+                controller.enqueue(encoder.encode("x"));
+              }, 40);
+            },
+            cancel() {
+              if (dripTimer !== undefined) {
+                clearInterval(dripTimer);
+                dripTimer = undefined;
+              }
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    );
+
+    const pending = downloadLineMedia("mid-drip", "token", 10 * 1024 * 1024, {
+      timeoutMs: 1_000,
+    });
+    const rejection = expect(pending).rejects.toThrow(/timed out after 1 seconds/i);
+
+    await vi.waitFor(() => expect(saveMediaStreamMock).toHaveBeenCalledTimes(1));
+    expect(requestSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    expect(requestSignal?.aborted).toBe(true);
   });
 });
