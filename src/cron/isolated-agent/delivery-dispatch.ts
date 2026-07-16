@@ -2,13 +2,7 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
@@ -20,7 +14,6 @@ import {
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -53,6 +46,11 @@ import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
+import {
+  buildCronRequesterConsumedCredit,
+  creditCronRequesterConsumedDescendants,
+  type CronRequesterConsumedCredit,
+} from "./requester-consumed-credit.js";
 import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import {
@@ -60,44 +58,12 @@ import {
   type CronRunSessionCleanupOutcome,
 } from "./session-cleanup.js";
 import { loadCronSessionEntryLatest } from "./session.js";
+import { normalizeSilentReplyText } from "./silent-reply-normalization.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
-}
-
-type NormalizedSilentReplyText = {
-  text: string | undefined;
-  strippedTrailingSilentToken: boolean;
-};
-
-function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
-  if (!text) {
-    return { text, strippedTrailingSilentToken: false };
-  }
-  if (isSuppressedControlReplyText(text)) {
-    return { text: undefined, strippedTrailingSilentToken: false };
-  }
-
-  let next = text;
-  const hasLeadingSilentToken = startsWithSilentToken(next, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    next = stripLeadingSilentToken(next, SILENT_REPLY_TOKEN);
-  }
-
-  let strippedTrailingSilentToken = false;
-  if (hasLeadingSilentToken || next.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    const trimmedBefore = next.trim();
-    const stripped = stripSilentToken(next, SILENT_REPLY_TOKEN);
-    strippedTrailingSilentToken = stripped !== trimmedBefore;
-    next = stripped;
-  }
-
-  if (!next.trim() || isSuppressedControlReplyText(next)) {
-    return { text: undefined, strippedTrailingSilentToken };
-  }
-  return { text: next, strippedTrailingSilentToken };
 }
 
 /** Returns whether cron delivery should tolerate per-payload send failures. */
@@ -107,7 +73,6 @@ export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
 
 /** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
-
 type DispatchCronDeliveryParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
@@ -1008,6 +973,7 @@ export async function dispatchCronDelivery(
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
+  let pendingRequesterConsumedCredit: CronRequesterConsumedCredit | undefined;
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
@@ -1076,6 +1042,20 @@ export async function dispatchCronDelivery(
       delivered: false,
       deliveryAttempted: true,
       ...params.telemetry,
+    });
+  };
+  const creditRequesterConsumedDescendants = async (): Promise<void> => {
+    const credit = pendingRequesterConsumedCredit;
+    if (!credit) {
+      return;
+    }
+    pendingRequesterConsumedCredit = undefined;
+    await creditCronRequesterConsumedDescendants({
+      credit,
+      loadRuntime: loadDeliverySubagentRegistryRuntime,
+      logWarn: logCronDeliveryWarn,
+      jobId: params.job.id,
+      formatErrorMessage,
     });
   };
 
@@ -1446,7 +1426,7 @@ export async function dispatchCronDelivery(
     // doesn't match the narrow hint list). We still need to use the
     // descendant's output instead of the interim cron text.
     const completedDescendantReply = shouldCheckCompletedDescendants
-      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReplyWithRuns({
           sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         })
@@ -1463,10 +1443,22 @@ export async function dispatchCronDelivery(
         subagentFollowupSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
-          runStartedAt: params.runStartedAt,
-        });
+        const fallbackReply =
+          await subagentFollowupRuntime?.readDescendantSubagentFallbackReplyWithRuns({
+            sessionKey: subagentFollowupSessionKey,
+            runStartedAt: params.runStartedAt,
+          });
+        if (fallbackReply) {
+          finalReply = fallbackReply.text;
+          pendingRequesterConsumedCredit = buildCronRequesterConsumedCredit({
+            requesterSessionKey: subagentFollowupSessionKey,
+            runStartedAt: params.runStartedAt,
+            runIds: fallbackReply.consumedRunIds,
+            text: fallbackReply.text,
+            jobId: params.job.id,
+          });
+          await creditRequesterConsumedDescendants();
+        }
       }
       if (finalReply && activeSubagentRuns === 0) {
         outputText = finalReply;
@@ -1477,10 +1469,18 @@ export async function dispatchCronDelivery(
     } else if (completedDescendantReply) {
       // Descendants already finished before we got here. Use their output
       // directly instead of the cron agent's interim text.
-      outputText = completedDescendantReply;
-      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
-      synthesizedText = completedDescendantReply;
-      deliveryPayloads = [{ text: completedDescendantReply }];
+      outputText = completedDescendantReply.text;
+      summary = pickSummaryFromOutput(completedDescendantReply.text) ?? summary;
+      synthesizedText = completedDescendantReply.text;
+      deliveryPayloads = [{ text: completedDescendantReply.text }];
+      pendingRequesterConsumedCredit = buildCronRequesterConsumedCredit({
+        requesterSessionKey: subagentFollowupSessionKey,
+        runStartedAt: params.runStartedAt,
+        runIds: completedDescendantReply.consumedRunIds,
+        text: completedDescendantReply.text,
+        jobId: params.job.id,
+      });
+      await creditRequesterConsumedDescendants();
     }
     if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial

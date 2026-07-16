@@ -1,11 +1,25 @@
 /** Deterministic lookup helpers for plugin-registered cloud-worker providers. */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CloudWorkersConfig } from "../config/types.cloud-workers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
-import type { PluginRegistry } from "./registry-types.js";
-import type { WorkerProvider } from "./types.js";
 
-type WorkerProviderRegistryView = Pick<PluginRegistry, "workerProviders">;
+type WorkerProviderLike = {
+  id: string;
+  provision: (...args: never[]) => unknown;
+  inspect: (...args: never[]) => unknown;
+  resolveSshIdentity?: (...args: never[]) => unknown;
+  renew?: (...args: never[]) => unknown;
+  destroy: (...args: never[]) => unknown;
+};
+
+type WorkerProviderRegistrationLike<TProvider extends WorkerProviderLike> = {
+  pluginId: string;
+  provider: TProvider;
+};
+
+type WorkerProviderRegistryView<TProvider extends WorkerProviderLike = WorkerProviderLike> = {
+  workerProviders: Map<string, WorkerProviderRegistrationLike<TProvider>>;
+};
 type WorkerProviderValidation = { ok: true; id: string } | { ok: false; message: string };
 
 const compareText = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
@@ -17,7 +31,9 @@ export function normalizeWorkerProviderIds(providerIds: readonly string[]): stri
   return [...new Set(normalized)].toSorted(compareText);
 }
 
-export function collectConfiguredWorkerProviderIds(config: OpenClawConfig): string[] {
+export function collectConfiguredWorkerProviderIds(config: {
+  cloudWorkers?: CloudWorkersConfig;
+}): string[] {
   return normalizeWorkerProviderIds(
     Object.values(config.cloudWorkers?.profiles ?? {}).map((profile) => profile.provider),
   );
@@ -65,7 +81,7 @@ export function resolveDurableWorkerProviderAutoEnabledReasons(
 
 /** Validates the provider methods, normalized id, and manifest ownership contract. */
 export function validateWorkerProviderContract(
-  provider: WorkerProvider,
+  provider: WorkerProviderLike,
   declaredIds: readonly string[],
 ): WorkerProviderValidation {
   const missingMethod = (["provision", "inspect", "destroy"] as const).find(
@@ -95,11 +111,12 @@ export function validateWorkerProviderContract(
     ? { ok: true, id }
     : { ok: false, message: `plugin must declare contracts.workerProviders for provider: ${id}` };
 }
+
 /** Resolves one provider by its normalized manifest capability id. */
-export function resolveWorkerProvider(
-  registry: WorkerProviderRegistryView,
+export function resolveWorkerProvider<TProvider extends WorkerProviderLike>(
+  registry: WorkerProviderRegistryView<TProvider>,
   providerId: string,
-): WorkerProvider | undefined {
+): TProvider | undefined {
   const normalizedId = normalizeCapabilityProviderId(providerId);
   return normalizedId ? registry.workerProviders.get(normalizedId)?.provider : undefined;
 }
