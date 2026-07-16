@@ -67,14 +67,6 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
   );
 }
 
-/** Returns the preferred run for a child session, favoring active over ended runs. */
-function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-  return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    childSessionKey,
-  );
-}
-
 /** Returns whether a registry entry still has a live agent run context. */
 export function isSubagentRunLive(
   entry: Pick<SubagentRunRecord, "runId" | "endedAt"> | null | undefined,
