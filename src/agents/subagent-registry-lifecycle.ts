@@ -961,6 +961,29 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
+  const retireRunModeBundleMcpRuntime = async (cleanupParams: {
+    runId: string;
+    entry: SubagentRunRecord;
+    reason: string;
+  }) => {
+    if (cleanupParams.entry.spawnMode === "session") {
+      return;
+    }
+    await retireSessionMcpRuntimeForSessionKey({
+      sessionKey: cleanupParams.entry.childSessionKey,
+      reason: cleanupParams.reason,
+      preserveActiveLeases: true,
+      onError: (error, sessionId) => {
+        params.warn("failed to retire subagent bundle MCP runtime", {
+          error: buildSafeLifecycleErrorMeta(error),
+          sessionId,
+          runId: maskRunId(cleanupParams.runId),
+          childSessionKey: maskSessionKey(cleanupParams.entry.childSessionKey),
+        });
+      },
+    });
+  };
+
   const completeCleanupBookkeeping = (cleanupParams: {
     runId: string;
     entry: SubagentRunRecord;
@@ -985,17 +1008,10 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (cleanupParams.entry.spawnMode !== "session") {
       runCleanupTail("bundle MCP cleanup", async () => {
-        await retireSessionMcpRuntimeForSessionKey({
-          sessionKey: cleanupParams.entry.childSessionKey,
+        await retireRunModeBundleMcpRuntime({
+          runId: cleanupParams.runId,
+          entry: cleanupParams.entry,
           reason: "subagent-run-cleanup",
-          onError: (error, sessionId) => {
-            params.warn("failed to retire subagent bundle MCP runtime", {
-              error: buildSafeLifecycleErrorMeta(error),
-              sessionId,
-              runId: maskRunId(cleanupParams.runId),
-              childSessionKey: maskSessionKey(cleanupParams.entry.childSessionKey),
-            });
-          },
         });
       });
     }
@@ -1043,28 +1059,6 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     params.persist();
     retryDeferredCompletedAnnounces(cleanupParams.runId);
-  };
-
-  const retireRunModeBundleMcpRuntime = async (cleanupParams: {
-    runId: string;
-    entry: SubagentRunRecord;
-    reason: string;
-  }) => {
-    if (cleanupParams.entry.spawnMode === "session") {
-      return;
-    }
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: cleanupParams.entry.childSessionKey,
-      reason: cleanupParams.reason,
-      onError: (error, sessionId) => {
-        params.warn("failed to retire subagent bundle MCP runtime", {
-          error: buildSafeLifecycleErrorMeta(error),
-          sessionId,
-          runId: maskRunId(cleanupParams.runId),
-          childSessionKey: maskSessionKey(cleanupParams.entry.childSessionKey),
-        });
-      },
-    });
   };
 
   const finalizeSubagentCleanup = async (
