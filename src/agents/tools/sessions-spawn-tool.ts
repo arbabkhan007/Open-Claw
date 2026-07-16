@@ -26,11 +26,7 @@ import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
-import {
-  SUBAGENT_SPAWN_CONTEXT_MODES,
-  SUBAGENT_SPAWN_MODES,
-  spawnSubagentDirect,
-} from "../subagent-spawn.js";
+import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import { normalizeSubagentTaskName } from "../subagent-task-name.js";
 import {
   describeSessionsSpawnTool,
@@ -45,6 +41,10 @@ import {
   ToolInputError,
 } from "./common.js";
 import {
+  readSessionsSpawnAnnounceTarget,
+  sessionsSpawnRoutingSchemas,
+} from "./sessions-spawn-announce-target.js";
+import {
   cleanupUntrackedAcpSession,
   maybeSpawnVisibleSession,
   resolveTrackedSpawnMode,
@@ -54,7 +54,6 @@ import {
 } from "./sessions-spawn-visible.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
-const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 // Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
 const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
@@ -156,12 +155,7 @@ function createSessionsSpawnToolSchema(params: {
           ),
         }
       : {}),
-    mode: optionalStringEnum(spawnModes),
-    cleanup: optionalStringEnum(["delete", "keep"] as const),
-    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-    context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
-      description: "Native: omit/isolated clean; fork only needing requester transcript.",
-    }),
+    ...sessionsSpawnRoutingSchemas(spawnModes),
     lightContext: Type.Optional(
       Type.Boolean({
         description: "Light bootstrap; subagent only.",
@@ -290,6 +284,7 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+      const announceTarget = readSessionsSpawnAnnounceTarget(params);
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
@@ -468,6 +463,7 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           context,
+          announceTarget,
           lightContext,
           expectsCompletionMessage,
           attachments,

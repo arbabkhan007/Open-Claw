@@ -14,7 +14,6 @@ import {
 } from "../tasks/detached-task-runtime-contract.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
@@ -40,6 +39,7 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-params.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
@@ -165,30 +165,6 @@ export function markSubagentRunPausedAfterYield(params: {
   }
   return mutated;
 }
-
-export type RegisterSubagentRunParams = {
-  runId: string;
-  childSessionKey: string;
-  controllerSessionKey?: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  requesterDisplayKey: string;
-  task: string;
-  taskName?: string;
-  agentId?: string;
-  requesterAgentId?: string;
-  cleanup: "delete" | "keep";
-  label?: string;
-  model?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  runTimeoutSeconds?: number;
-  expectsCompletionMessage?: boolean;
-  spawnMode?: "run" | "session";
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
-  retainAttachmentsOnKeep?: boolean;
-};
 
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -762,6 +738,7 @@ export function createSubagentRunManager(params: {
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
+      announceTarget: registerParams.announceTarget,
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,

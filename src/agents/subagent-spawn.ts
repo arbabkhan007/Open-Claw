@@ -57,6 +57,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
+import { shouldAnnounceCompletionForInitialChildRun } from "./subagent-announce-target.js";
 import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
@@ -73,6 +74,7 @@ import {
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
 } from "./subagent-spawn-plan.js";
+import type { SpawnSubagentContext, SpawnSubagentParams } from "./subagent-spawn.params.js";
 import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
@@ -100,15 +102,11 @@ import {
   upsertSessionEntry,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
-import type {
-  SpawnSubagentContextMode,
-  SpawnSubagentMode,
-  SpawnSubagentSandboxMode,
-} from "./subagent-spawn.types.js";
+import type { SpawnSubagentContextMode, SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
-export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
+export { SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
@@ -140,50 +138,6 @@ let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
-
-type SpawnSubagentParams = {
-  task: string;
-  label?: string;
-  agentId?: string;
-  model?: string;
-  taskName?: string;
-  thinking?: string;
-  cwd?: string;
-  runTimeoutSeconds?: number;
-  thread?: boolean;
-  mode?: SpawnSubagentMode;
-  cleanup?: "delete" | "keep";
-  sandbox?: SpawnSubagentSandboxMode;
-  context?: SpawnSubagentContextMode;
-  lightContext?: boolean;
-  expectsCompletionMessage?: boolean;
-  attachments?: Array<{
-    name: string;
-    content: string;
-    encoding?: "utf8" | "base64";
-    mimeType?: string;
-  }>;
-  attachMountPath?: string;
-};
-
-type SpawnSubagentContext = {
-  agentSessionKey?: string;
-  /** Separate key used only for completion routing, not sandbox policy. */
-  completionOwnerKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  agentGroupId?: string | null;
-  agentGroupChannel?: string | null;
-  agentGroupSpace?: string | null;
-  agentMemberRoleIds?: string[];
-  requesterAgentIdOverride?: string;
-  /** Explicit workspace directory for subagent to inherit (optional). */
-  workspaceDir?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
-};
 
 type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -1149,6 +1103,7 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
+  const announceTarget = params.announceTarget;
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -1515,9 +1470,11 @@ export async function spawnSubagentDirect(
 
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
-  const shouldAnnounceCompletion = deliverInitialChildRunDirectly
-    ? false
-    : expectsCompletionMessage;
+  const shouldAnnounceCompletion = shouldAnnounceCompletionForInitialChildRun({
+    deliverInitialChildRunDirectly,
+    announceTarget,
+    expectsCompletionMessage,
+  });
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -1641,6 +1598,7 @@ export async function spawnSubagentDirect(
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
       expectsCompletionMessage: shouldAnnounceCompletion,
+      announceTarget,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,

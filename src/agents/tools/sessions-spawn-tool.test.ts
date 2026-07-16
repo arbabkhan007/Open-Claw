@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../subagent-spawn.js", () => ({
+  SUBAGENT_ANNOUNCE_TARGETS: ["parent"],
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
@@ -31,6 +32,12 @@ vi.mock("../acp-spawn.js", () => ({
 
 vi.mock("../subagent-registry.js", () => ({
   registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
+}));
+
+vi.mock("../../channels/plugins/thread-binding-api.js", () => ({
+  resolveBundledChannelThreadBindingDefaultPlacement: () => "child",
+  resolveBundledChannelThreadBindingInboundConversation: () => undefined,
+  loadBundledChannelThreadBindingApi: () => null,
 }));
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -249,6 +256,41 @@ describe("sessions_spawn tool", () => {
 
     expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
     expect(schema.properties?.timeoutSeconds).toBeUndefined();
+  });
+
+  it("exposes native announceTarget without coupling it to ACP streamTo", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        announceTarget?: { enum?: string[]; description?: string };
+        streamTo?: { enum?: string[]; description?: string };
+      };
+    };
+
+    expect(schema.properties?.announceTarget?.enum).toEqual(["parent"]);
+    expect(schema.properties?.announceTarget?.description).toContain("Native completion routing");
+    expect(schema.properties?.streamTo?.description).toContain("ACP only");
+    expect(schema.properties?.streamTo?.description).toContain("Ignored by subagent");
+
+    await tool.execute("call-native-parent", {
+      task: "investigate",
+      announceTarget: "parent",
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.announceTarget).toBe("parent");
+
+    await tool.execute("call-acp-parent", {
+      runtime: "acp",
+      task: "investigate with acp",
+      agentId: "codex",
+      announceTarget: "parent",
+    });
+
+    const acpArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
+    expect(acpArgs).not.toHaveProperty("announceTarget");
+    expect(acpArgs.streamTo).toBeUndefined();
   });
 
   it("advertises visible sessions with terse UI guidance", () => {

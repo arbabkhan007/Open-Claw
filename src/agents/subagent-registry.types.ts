@@ -6,6 +6,7 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -21,6 +22,7 @@ export type PendingFinalDeliveryPayload = {
   endedAt?: number;
   outcome?: SubagentRunOutcome;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   spawnMode?: SpawnSubagentMode;
   frozenResultText?: string | null;
   fallbackFrozenResultText?: string | null;
@@ -131,6 +133,7 @@ export type SubagentRunRecord = {
   /** Durable requester-stop policy until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;

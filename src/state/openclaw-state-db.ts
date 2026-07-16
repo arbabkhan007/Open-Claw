@@ -1346,7 +1346,6 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
     );
   }
 }
-
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
@@ -1539,6 +1538,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "subagent_runs", "announce_target TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
