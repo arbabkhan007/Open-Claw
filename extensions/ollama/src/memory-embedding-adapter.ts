@@ -8,6 +8,8 @@ import {
   createOllamaEmbeddingProvider,
 } from "./embedding-provider.js";
 
+const OLLAMA_EMBEDDING_CREDENTIAL_HEADERS = ["authorization", "x-api-key"];
+
 export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "ollama",
   defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
@@ -30,7 +32,10 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           baseUrl: client.baseUrl,
           model: client.model,
           outputDimensionality: client.outputDimensionality,
-          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
+          headers: sanitizeEmbeddingCacheHeaders(
+            client.headers,
+            OLLAMA_EMBEDDING_CREDENTIAL_HEADERS,
+          ),
         },
       },
     };
