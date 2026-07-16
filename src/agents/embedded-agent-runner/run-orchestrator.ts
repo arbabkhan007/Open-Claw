@@ -34,7 +34,7 @@ import {
 } from "../session-suspension.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import { createEmbeddedHookSessionResetQueue } from "./compaction-hooks.js";
+import { createEmbeddedHookSessionResetQueue } from "./compaction-hook-reset-api.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";

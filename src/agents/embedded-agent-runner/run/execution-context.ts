@@ -1,7 +1,7 @@
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
 import { resolveRunWorkspaceDir } from "../../workspace-run.js";
-import type { DeferEmbeddedHookSessionReset } from "../compaction-hooks.js";
+import type { DeferEmbeddedHookSessionReset } from "../compaction-hook-reset-api.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";

@@ -62,12 +62,11 @@ import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js"
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
 import {
-  asCompactionHookRunner,
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
-  runPostCompactionSideEffects,
   type DeferEmbeddedHookSessionReset,
-} from "./compaction-hooks.js";
+} from "./compaction-hook-reset-api.js";
+import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionHarnessRuntime,

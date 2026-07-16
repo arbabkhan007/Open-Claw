@@ -6,24 +6,19 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
-import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
+import {
+  buildEmbeddedHookApi,
+  createEmbeddedHookSessionResetQueue,
+  type DeferredEmbeddedHookSessionResetRequest,
+  type DeferEmbeddedHookSessionReset,
+  type EmbeddedHookApi,
+} from "./compaction-hook-reset-api.js";
 import { log } from "./logger.js";
 
-type EmbeddedHookApi = NonNullable<PluginHookAgentContext["api"]>;
-type EmbeddedHookSessionResetReason = "new" | "reset";
-type DeferredEmbeddedHookSessionResetRequest = {
-  key: string;
-  agentId?: string;
-  reason: EmbeddedHookSessionResetReason;
-  commandSource: string;
-};
-export type DeferEmbeddedHookSessionReset = (
-  request: DeferredEmbeddedHookSessionResetRequest,
-) => void;
 type CompactionHookContext = {
   sessionId: string;
   agentId: string;
@@ -32,68 +27,6 @@ type CompactionHookContext = {
   messageProvider?: string;
   api?: EmbeddedHookApi;
 };
-
-export function buildEmbeddedHookApi(params?: {
-  agentId?: string;
-  sessionKey?: string;
-  commandSource?: string;
-  deferResetSession?: DeferEmbeddedHookSessionReset;
-}): EmbeddedHookApi {
-  const sessionKey = params?.sessionKey?.trim();
-  return {
-    async resetSession(reason = "reset") {
-      if (reason !== "new" && reason !== "reset") {
-        throw new Error('resetSession only accepts reason "new" or "reset"');
-      }
-      if (!sessionKey) {
-        throw new Error("resetSession is unavailable without a current session key");
-      }
-      if (!params?.deferResetSession) {
-        throw new Error("resetSession is unavailable without a deferred lifecycle owner");
-      }
-      params.deferResetSession({
-        key: sessionKey,
-        ...(params?.agentId ? { agentId: params.agentId } : {}),
-        reason,
-        commandSource: params?.commandSource ?? "embedded-agent:hook",
-      });
-      return { ok: true, key: sessionKey, deferred: true };
-    },
-  };
-}
-
-export function createEmbeddedHookSessionResetQueue() {
-  const pending = new Map<string, DeferredEmbeddedHookSessionResetRequest>();
-  return {
-    deferResetSession(request: DeferredEmbeddedHookSessionResetRequest): void {
-      pending.set(request.key, request);
-    },
-    async flush(): Promise<void> {
-      const requests = Array.from(pending.values());
-      pending.clear();
-      if (requests.length === 0) {
-        return;
-      }
-      const { performGatewaySessionReset } = await import("../../gateway/session-reset-service.js");
-      for (const request of requests) {
-        try {
-          const result = await performGatewaySessionReset(request);
-          if (!result.ok) {
-            log.warn("deferred embedded hook session reset failed", {
-              key: request.key,
-              errorMessage: result.error.message,
-            });
-          }
-        } catch (err) {
-          log.warn("deferred embedded hook session reset failed", {
-            key: request.key,
-            errorMessage: formatErrorMessage(err),
-          });
-        }
-      }
-    },
-  };
-}
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;

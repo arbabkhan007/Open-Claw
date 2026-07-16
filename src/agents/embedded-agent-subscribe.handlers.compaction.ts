@@ -11,7 +11,7 @@ import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
   type DeferEmbeddedHookSessionReset,
-} from "./embedded-agent-runner/compaction-hooks.js";
+} from "./embedded-agent-runner/compaction-hook-reset-api.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";

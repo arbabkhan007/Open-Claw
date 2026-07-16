@@ -1,6 +1,9 @@
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { resolveCompactionSuccessorTranscript } from "../../../context-engine/types.js";
-import { buildEmbeddedHookApi, type DeferEmbeddedHookSessionReset } from "../compaction-hooks.js";
+import {
+  buildEmbeddedHookApi,
+  type DeferEmbeddedHookSessionReset,
+} from "../compaction-hook-reset-api.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";

@@ -16,7 +16,7 @@ import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
   type DeferEmbeddedHookSessionReset,
-} from "../embedded-agent-runner/compaction-hooks.js";
+} from "../embedded-agent-runner/compaction-hook-reset-api.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";

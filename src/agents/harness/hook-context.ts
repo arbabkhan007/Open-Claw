@@ -9,7 +9,7 @@ import type {
   PluginHookChannelContext,
   PluginHookContextWindowSource,
 } from "../../plugins/hook-types.js";
-import type { DeferEmbeddedHookSessionReset } from "../embedded-agent-runner/compaction-hooks.js";
+import type { DeferEmbeddedHookSessionReset } from "../embedded-agent-runner/compaction-hook-reset-api.js";
 
 /**
  * Input facts used to build the agent portion of plugin hook events.

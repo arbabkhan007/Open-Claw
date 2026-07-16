@@ -927,7 +927,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     buildEmbeddedRunPayloads: mockedBuildEmbeddedRunPayloads,
   }));
 
-  vi.doMock("./compaction-hooks.js", () => ({
+  vi.doMock("./compaction-hook-reset-api.js", () => ({
     buildEmbeddedHookApi: vi.fn(
       (params?: {
         agentId?: string;
@@ -956,6 +956,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
       deferResetSession: vi.fn(),
       flush: vi.fn(async () => {}),
     })),
+  }));
+
+  vi.doMock("./compaction-hooks.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 

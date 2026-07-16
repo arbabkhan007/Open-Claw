@@ -9,7 +9,7 @@ import {
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
-import type { DeferEmbeddedHookSessionReset } from "../compaction-hooks.js";
+import type { DeferEmbeddedHookSessionReset } from "../compaction-hook-reset-api.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,

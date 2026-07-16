@@ -12,7 +12,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
-import type { DeferEmbeddedHookSessionReset } from "./compaction-hooks.js";
+import type { DeferEmbeddedHookSessionReset } from "./compaction-hook-reset-api.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
