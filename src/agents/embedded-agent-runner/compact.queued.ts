@@ -915,7 +915,7 @@ async function compactResolvedContextEngine(
             const afterHookCtx = {
               ...hookCtx,
               sessionId: postCompactionSessionId,
-              ...(params.modelSelectionLocked === true
+              ...(params.modelSelectionLocked === true || !params.sessionKey?.trim()
                 ? {}
                 : {
                     api: buildEmbeddedHookApi({

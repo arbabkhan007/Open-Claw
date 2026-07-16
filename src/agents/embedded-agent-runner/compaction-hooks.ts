@@ -368,7 +368,7 @@ export async function runAfterCompactionHooks(params: {
         sessionKey: params.hookSessionKey,
         workspaceDir: params.workspaceDir,
         messageProvider: params.messageProvider,
-        ...(params.modelSelectionLocked === true
+        ...(params.modelSelectionLocked === true || params.missingSessionKey
           ? {}
           : {
               api: buildEmbeddedHookApi({

@@ -1899,6 +1899,16 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    performGatewaySessionResetMock.mockClear();
+    (hookRunner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, context: unknown) => {
+        const hookContext = context as {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        };
+        expect(hookContext.api?.resetSession).toBeUndefined();
+      },
+    );
+
     await runCompactionHooks({});
 
     expect(sessionHook("compact:before")?.sessionKey).toBe("session-1");
@@ -1915,6 +1925,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         sessionKey: "session-1",
       }),
     );
+    const pluginAfterContext = mockCallArg(hookRunner.runAfterCompaction, 0, 1) as {
+      api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+    };
+    expect(pluginAfterContext.api?.resetSession).toBeUndefined();
+    expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
   });
 
   it("applies validated transcript before hooks even when it becomes empty", async () => {
@@ -2610,6 +2625,35 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
     });
+  });
+
+  it("does not expose resetSession to engine-owned after_compaction without a real session key", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    performGatewaySessionResetMock.mockClear();
+    (hookRunner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, context: unknown) => {
+        const hookContext = context as {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        };
+        expect(hookContext.api?.resetSession).toBeUndefined();
+      },
+    );
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sessionKey: "  ",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+      sessionKey: TEST_SESSION_ID,
+    });
+    const pluginAfterContext = mockCallArg(hookRunner.runAfterCompaction, 0, 1) as {
+      api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+    };
+    expect(pluginAfterContext.api?.resetSession).toBeUndefined();
+    expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
   });
 
   it("passes the rotated session id to engine-owned after_compaction hooks", async () => {
