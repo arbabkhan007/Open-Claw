@@ -18,25 +18,43 @@ interface DownloadResult {
 const CONTENT_READY_MAX_ATTEMPTS = 6;
 const CONTENT_READY_BASE_DELAY_MS = 500;
 const CONTENT_READY_MAX_DELAY_MS = 4000;
-// Wall-clock for readiness polls and the content body. Clearing this after
-// headers let a dripping 200 body outlive the download budget forever.
-const LINE_MEDIA_DOWNLOAD_TIMEOUT_MS = 15_000;
+// Readiness polls only (202 → retry). Large video/audio may prepare for a while
+// on api-data.line.me; do not spend this budget on body transfer.
+const CONTENT_READY_TIMEOUT_MS = 15_000;
+// Body wall-clock after HTTP 200. Aligned with Slack/Feishu inbound media totals
+// so late readiness still gets a full transfer budget for the default 10MB cap.
+const LINE_MEDIA_BODY_TIMEOUT_MS = 120_000;
 const LINE_CONTENT_BASE_URL = "https://api-data.line.me/v2/bot/message";
 
 function contentBackoffDelayMs(attempt: number): number {
   return Math.min(CONTENT_READY_BASE_DELAY_MS * 2 ** attempt, CONTENT_READY_MAX_DELAY_MS);
 }
 
-function resolveLineMediaDownloadTimeoutMs(timeoutMs: number | undefined): number {
+function resolvePositiveTimeoutMs(timeoutMs: number | undefined, fallbackMs: number): number {
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
     return Math.floor(timeoutMs);
   }
-  return LINE_MEDIA_DOWNLOAD_TIMEOUT_MS;
+  return fallbackMs;
 }
 
-function formatLineMediaTimeoutError(messageId: string, timeoutMs: number, cause?: unknown): Error {
+function formatLineMediaReadyTimeoutError(
+  messageId: string,
+  timeoutMs: number,
+  cause?: unknown,
+): Error {
   return new Error(
-    `LINE media for message ${messageId} timed out after ${timeoutMs / 1000} seconds`,
+    `LINE media for message ${messageId} did not become ready within ${timeoutMs / 1000} seconds`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function formatLineMediaBodyTimeoutError(
+  messageId: string,
+  timeoutMs: number,
+  cause?: unknown,
+): Error {
+  return new Error(
+    `LINE media body for message ${messageId} timed out after ${timeoutMs / 1000} seconds`,
     cause === undefined ? undefined : { cause },
   );
 }
@@ -60,7 +78,7 @@ async function fetchLineContentWhenReady(
       if (!response.body) {
         throw new Error(`LINE media response for message ${messageId} had no body`);
       }
-      // Keep the caller-owned deadline alive through body persistence.
+      // Readiness deadline ends here; caller owns a separate body wall-clock.
       return Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
     }
 
@@ -84,61 +102,88 @@ export async function downloadLineMedia(
   messageId: string,
   channelAccessToken: string,
   maxBytes = 10 * 1024 * 1024,
-  options?: { originalFilename?: string; timeoutMs?: number; contentBaseUrl?: string },
+  options?: {
+    originalFilename?: string;
+    timeoutMs?: number;
+    bodyTimeoutMs?: number;
+    contentBaseUrl?: string;
+  },
 ): Promise<DownloadResult> {
-  const timeoutMs = resolveLineMediaDownloadTimeoutMs(options?.timeoutMs);
+  const readyTimeoutMs = resolvePositiveTimeoutMs(options?.timeoutMs, CONTENT_READY_TIMEOUT_MS);
+  const bodyTimeoutMs = resolvePositiveTimeoutMs(
+    options?.bodyTimeoutMs,
+    LINE_MEDIA_BODY_TIMEOUT_MS,
+  );
   const contentBaseUrl =
     typeof options?.contentBaseUrl === "string" && options.contentBaseUrl.trim()
       ? options.contentBaseUrl.replace(/\/+$/, "")
       : LINE_CONTENT_BASE_URL;
-  const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), timeoutMs);
-  deadline.unref();
+
+  const readyController = new AbortController();
+  const readyDeadline = setTimeout(() => readyController.abort(), readyTimeoutMs);
+  readyDeadline.unref();
   let content: Readable | undefined;
   try {
-    content = await fetchLineContentWhenReady(
-      messageId,
-      channelAccessToken,
-      controller.signal,
-      contentBaseUrl,
-    );
-    const onAbort = () => {
-      content?.destroy(formatLineMediaTimeoutError(messageId, timeoutMs));
-    };
-    if (controller.signal.aborted) {
-      onAbort();
-    } else {
-      controller.signal.addEventListener("abort", onAbort, { once: true });
-    }
-    let saved: Awaited<ReturnType<typeof saveMediaStream>>;
     try {
-      saved = await saveMediaStream(
-        content,
-        undefined,
-        "inbound",
-        maxBytes,
-        options?.originalFilename,
+      content = await fetchLineContentWhenReady(
+        messageId,
+        channelAccessToken,
+        readyController.signal,
+        contentBaseUrl,
       );
+    } catch (err) {
+      if (readyController.signal.aborted) {
+        throw formatLineMediaReadyTimeoutError(messageId, readyTimeoutMs, err);
+      }
+      throw err;
     } finally {
-      controller.signal.removeEventListener("abort", onAbort);
+      clearTimeout(readyDeadline);
     }
-    logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
 
-    return {
-      path: saved.path,
-      contentType: saved.contentType,
-      size: saved.size,
+    const bodyController = new AbortController();
+    const bodyDeadline = setTimeout(() => bodyController.abort(), bodyTimeoutMs);
+    bodyDeadline.unref();
+    const onAbort = () => {
+      content?.destroy(formatLineMediaBodyTimeoutError(messageId, bodyTimeoutMs));
     };
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw formatLineMediaTimeoutError(messageId, timeoutMs, err);
+    try {
+      if (bodyController.signal.aborted) {
+        onAbort();
+      } else {
+        bodyController.signal.addEventListener("abort", onAbort, { once: true });
+      }
+      let saved: Awaited<ReturnType<typeof saveMediaStream>>;
+      try {
+        saved = await saveMediaStream(
+          content,
+          undefined,
+          "inbound",
+          maxBytes,
+          options?.originalFilename,
+        );
+      } finally {
+        bodyController.signal.removeEventListener("abort", onAbort);
+      }
+      logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
+
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        size: saved.size,
+      };
+    } catch (err) {
+      if (bodyController.signal.aborted) {
+        throw formatLineMediaBodyTimeoutError(messageId, bodyTimeoutMs, err);
+      }
+      throw err;
+    } finally {
+      clearTimeout(bodyDeadline);
     }
+  } catch (err) {
     if (content) {
       content.destroy();
       await finished(content).catch(() => undefined);
     }
     throw err;
-  } finally {
-    clearTimeout(deadline);
   }
 }
