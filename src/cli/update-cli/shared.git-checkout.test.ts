@@ -2,115 +2,167 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { ensureGitCheckout } from "./shared.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createGitCheckout } from "./shared.js";
 
-async function createCheckout(
-  remotes: Array<{ name: string; url: string }>,
-  config: Array<[string, string]> = [],
-): Promise<string> {
+const CANONICAL_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+
+vi.mock("../../process/exec.js", () => ({ runCommandWithTimeout }));
+
+function seedRemoteMain(dir: string): void {
+  execFileSync("git", ["-C", dir, "update-ref", "refs/remotes/origin/main", "HEAD"]);
+}
+
+async function createHostileCheckout(setup: (dir: string) => void): Promise<string> {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-adopt-")));
   execFileSync("git", ["-C", dir, "init", "--quiet"]);
-  for (const remote of remotes) {
-    execFileSync("git", ["-C", dir, "remote", "add", remote.name, remote.url]);
-  }
-  for (const [key, value] of config) {
-    execFileSync("git", ["-C", dir, "config", key, value]);
-  }
-  await fs.writeFile(
-    path.join(dir, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-  );
+  execFileSync("git", ["-C", dir, "config", "user.name", "OpenClaw Test"]);
+  execFileSync("git", ["-C", dir, "config", "user.email", "test@openclaw.invalid"]);
+  execFileSync("git", ["-C", dir, "remote", "add", "origin", CANONICAL_REPO_URL]);
+  await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "openclaw" }));
+  execFileSync("git", ["-C", dir, "add", "package.json"]);
+  execFileSync("git", ["-C", dir, "commit", "--quiet", "-m", "seed hostile checkout"]);
+  setup(dir);
   return dir;
 }
 
-describe("ensureGitCheckout remote verification", () => {
-  it("adopts an existing checkout of the canonical repository", async () => {
-    const dir = await createCheckout([
-      { name: "origin", url: "https://github.com/openclaw/openclaw.git" },
-    ]);
+describe("createGitCheckout", () => {
+  beforeEach(() => {
+    runCommandWithTimeout.mockReset();
+    runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
+      if (argv[0] === "git" && argv[1] === "clone" && argv[3]) {
+        await fs.mkdir(path.join(argv[3], ".git"), { recursive: true });
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+  });
 
-    await expect(
-      ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env }),
-    ).resolves.toBeNull();
+  it("clones the canonical repository only when the destination does not exist", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-clone-")));
+    const dir = path.join(root, "checkout");
+
+    const result = await createGitCheckout({
+      dir,
+      timeoutMs: 30_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+
+    expect(result?.name).toBe("git clone");
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["git", "clone", CANONICAL_REPO_URL, dir],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GIT_CONFIG_GLOBAL: os.devNull,
+          GIT_CONFIG_NOSYSTEM: "1",
+        }),
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("ignores config injection that could rewrite the canonical clone URL", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-clone-")));
+    const dir = path.join(root, "checkout");
+
+    await createGitCheckout({
+      dir,
+      timeoutMs: 30_000,
+      env: {
+        PATH: process.env.PATH,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        GIT_CONFIG_GLOBAL: "/tmp/hostile-global-config",
+        GIT_CONFIG_PARAMETERS: "'url.https://evil.invalid/.insteadOf'='https://github.com/'",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "url.https://evil.invalid/.insteadOf",
+        GIT_CONFIG_VALUE_0: "https://github.com/",
+      },
+    });
+
+    const env = vi.mocked(runCommandWithTimeout).mock.calls[0]?.[1]?.env;
+    expect(env).toMatchObject({
+      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_NOSYSTEM: "1",
+    });
+    expect(env).not.toHaveProperty("GIT_CONFIG_PARAMETERS");
+    expect(env).not.toHaveProperty("GIT_CONFIG_COUNT");
+    expect(env).not.toHaveProperty("GIT_CONFIG_KEY_0");
+    expect(env).not.toHaveProperty("GIT_CONFIG_VALUE_0");
+  });
+
+  it("replaces only a checkout recorded by an earlier conversion", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-clone-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+
+    await createGitCheckout({ dir, timeoutMs: 30_000, env });
+    await fs.writeFile(path.join(dir, "partial-build"), "retained\n");
+    await createGitCheckout({ dir, timeoutMs: 30_000, env });
+
+    await expect(fs.stat(path.join(dir, "partial-build"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    { name: "https clone of another repository", url: "https://github.com/attacker/evil.git" },
-    { name: "lookalike host", url: "https://github.com.evil.test/openclaw/openclaw.git" },
-    { name: "local path remote", url: "/tmp/attacker-repo" },
-  ])("rejects an existing checkout whose remote is a $name", async ({ url }) => {
-    const dir = await createCheckout([{ name: "origin", url }]);
-
-    await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
-      /unexpected git remote/u,
-    );
-  });
-
-  it("rejects an existing checkout with a canonical origin plus a foreign remote", async () => {
-    const dir = await createCheckout([
-      { name: "origin", url: "https://github.com/openclaw/openclaw.git" },
-      { name: "backup", url: "https://github.com/attacker/evil.git" },
-    ]);
-
-    await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
-      /remote "backup"/u,
-    );
-  });
-
-  it("rejects an existing checkout with no remote at all", async () => {
-    const dir = await createCheckout([]);
-
-    await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
-      /no git remote/u,
-    );
-  });
-
-  it("rejects a canonical remote that insteadOf rewrites to another host", async () => {
-    const dir = await createCheckout(
-      [{ name: "origin", url: "https://github.com/openclaw/openclaw.git" }],
-      [["url.https://evil.example.test/.insteadOf", "https://github.com/openclaw/"]],
-    );
-
-    await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
-      /evil\.example\.test/u,
-    );
-  });
-
-  it("accepts a canonical remote reached through an insteadOf rewrite", async () => {
-    const dir = await createCheckout(
-      [{ name: "origin", url: "https://github.com/openclaw/openclaw.git" }],
-      [["url.ssh://git@github.com/.insteadOf", "https://github.com/"]],
-    );
-
-    await expect(
-      ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env }),
-    ).resolves.toBeNull();
-  });
-
-  it.each(["http://github.com/openclaw/openclaw.git", "git://github.com/openclaw/openclaw.git"])(
-    "rejects the unauthenticated remote transport %s",
-    async (url) => {
-      const dir = await createCheckout([{ name: "origin", url }]);
-
-      await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
-        /unexpected git remote/u,
-      );
+    {
+      name: "skipFetchAll",
+      setup: (dir: string) => {
+        execFileSync("git", ["-C", dir, "config", "remote.origin.skipFetchAll", "true"]);
+        seedRemoteMain(dir);
+      },
     },
-  );
+    {
+      name: "a hostile fetch refspec",
+      setup: (dir: string) => {
+        execFileSync("git", [
+          "-C",
+          dir,
+          "config",
+          "remote.origin.fetch",
+          "+refs/heads/safe:refs/remotes/origin/safe",
+        ]);
+        seedRemoteMain(dir);
+      },
+    },
+    {
+      name: "a pre-seeded remote-tracking ref",
+      setup: seedRemoteMain,
+    },
+  ])("rejects a canonical-url checkout containing $name", async ({ setup }) => {
+    const dir = await createHostileCheckout(setup);
 
-  it.each([
-    "git@github.com:openclaw/openclaw.git",
-    "ssh://git@github.com/openclaw/openclaw.git",
-    "https://github.com/openclaw/openclaw",
-    "https://github.com/OpenClaw/OpenClaw.git",
-    "https://github.com/openclaw/openclaw.GIT",
-    "git@github.com:/openclaw/openclaw.git",
-  ])("accepts equivalent canonical remote form %s", async (url) => {
-    const dir = await createCheckout([{ name: "origin", url }]);
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
+      /creates a fresh OpenClaw checkout and will not reuse existing directories/u,
+    );
+    await expect(fs.stat(dir)).resolves.toBeDefined();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
 
-    await expect(
-      ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env }),
-    ).resolves.toBeNull();
+  it("removes the directory it created when launching git clone throws", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-clone-")));
+    const dir = path.join(root, "checkout");
+    runCommandWithTimeout.mockRejectedValueOnce(new Error("unable to launch git"));
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
+      /unable to launch git/u,
+    );
+    await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects even an existing empty directory", async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-empty-")));
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
+      /OPENCLAW_GIT_DIR already exists/u,
+    );
   });
 });

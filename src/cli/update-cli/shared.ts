@@ -1,10 +1,12 @@
 // Shared update command primitives for channel resolution, install roots, and subprocess steps.
 import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
@@ -58,6 +60,53 @@ export type UpdateWizardOptions = {
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
+const MANAGED_CHECKOUT_MARKER = ".openclaw-update-managed";
+
+function managedCheckoutRecordPath(dir: string, env?: NodeJS.ProcessEnv): string {
+  const digest = createHash("sha256").update(path.resolve(dir)).digest("hex");
+  return path.join(resolveStateDir(env), "update-checkouts", `${digest}.token`);
+}
+
+async function readTrimmed(file: string): Promise<string | null> {
+  return await fs
+    .readFile(file, "utf8")
+    .then((value) => value.trim())
+    .catch(() => null);
+}
+
+export async function isManagedGitCheckoutRetry(
+  dir: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const [recordToken, markerToken] = await Promise.all([
+    readTrimmed(managedCheckoutRecordPath(dir, env)),
+    readTrimmed(path.join(dir, ".git", MANAGED_CHECKOUT_MARKER)),
+  ]);
+  return Boolean(recordToken && markerToken && recordToken === markerToken);
+}
+
+export async function completeManagedGitCheckout(
+  dir: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  await fs.rm(managedCheckoutRecordPath(dir, env), { force: true });
+  await fs.rm(path.join(dir, ".git", MANAGED_CHECKOUT_MARKER), { force: true });
+}
+
+/** Build a Git environment that cannot redirect the canonical repository through config. */
+export function createSanitizedGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const gitEnv = { ...(env ?? process.env) };
+  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  gitEnv.GIT_CONFIG_GLOBAL = os.devNull;
+  delete gitEnv.GIT_CONFIG_PARAMETERS;
+  delete gitEnv.GIT_CONFIG_COUNT;
+  for (const key of Object.keys(gitEnv)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u.test(key)) {
+      delete gitEnv[key];
+    }
+  }
+  return gitEnv;
+}
 
 /** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
 export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
@@ -75,11 +124,9 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
 }
 
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
-const AUTHENTICATED_REMOTE_PROTOCOLS = new Set(["https:", "ssh:"]);
 const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 /** Normalize a CLI tag/version/spec into the npm target form accepted by update flows. */
 export function normalizeTag(value?: string | null): string | null {
@@ -119,138 +166,6 @@ export async function resolveTargetVersion(
     env: options.env,
   });
   return res.version ?? null;
-}
-
-/** Return true when `root` is a local git checkout directory. */
-export async function isGitCheckout(root: string): Promise<boolean> {
-  try {
-    await fs.stat(path.join(root, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function isCorePackage(root: string): Promise<boolean> {
-  const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
-function normalizeGitRemoteUrl(url: string): string | null {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return null;
-  }
-  let host: string;
-  let repoPath: string;
-  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) {
-    let parsed: URL;
-    try {
-      parsed = new URL(trimmed);
-    } catch {
-      return null;
-    }
-    if (!AUTHENTICATED_REMOTE_PROTOCOLS.has(parsed.protocol)) {
-      return null;
-    }
-    host = parsed.hostname;
-    repoPath = parsed.pathname;
-  } else {
-    const scpLike = /^(?:[^@/]+@)?([^@/:]+):(.+)$/u.exec(trimmed);
-    if (!scpLike) {
-      return null;
-    }
-    host = scpLike[1] ?? "";
-    repoPath = scpLike[2] ?? "";
-  }
-  const normalizedHost = host.toLowerCase();
-  const normalizedPath = repoPath
-    .toLowerCase()
-    .replace(/^\/+/u, "")
-    .replace(/\/+$/u, "")
-    .replace(/\.git$/u, "");
-  if (!normalizedHost || !normalizedPath) {
-    return null;
-  }
-  return `${normalizedHost}/${normalizedPath}`;
-}
-
-function isCanonicalRepoUrl(url: string): boolean {
-  const normalized = normalizeGitRemoteUrl(url);
-  return normalized !== null && normalized === normalizeGitRemoteUrl(OPENCLAW_REPO_URL);
-}
-
-async function runGitProbe(params: {
-  dir: string;
-  argv: string[];
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string> {
-  const res = await runCommandWithTimeout(["git", "-C", params.dir, ...params.argv], {
-    env: params.env,
-    timeoutMs: params.timeoutMs,
-  });
-  if (res.code !== 0) {
-    const detail = trimLogTail(res.stderr, MAX_LOG_CHARS);
-    throw new Error(
-      `Unable to inspect the git checkout at ${params.dir}: \`git ${params.argv.join(" ")}\` exited with ${res.code}.${detail ? ` ${detail}` : ""}`,
-    );
-  }
-  return res.stdout;
-}
-
-function splitNonEmptyLines(value: string): string[] {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-async function readGitRemotes(params: {
-  dir: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<Array<{ name: string; url: string }>> {
-  const names = splitNonEmptyLines(await runGitProbe({ ...params, argv: ["remote"] }));
-  const remotes: Array<{ name: string; url: string }> = [];
-  for (const name of names) {
-    const urls = splitNonEmptyLines(
-      await runGitProbe({ ...params, argv: ["remote", "get-url", "--all", "--", name] }),
-    );
-    for (const url of urls) {
-      remotes.push({ name, url });
-    }
-  }
-  return remotes;
-}
-
-async function assertCanonicalCheckoutRemotes(params: {
-  dir: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const remotes = await readGitRemotes(params);
-  if (remotes.length === 0) {
-    throw new Error(
-      `OPENCLAW_GIT_DIR points at a checkout with no git remote: ${params.dir}. Source updates only build from ${OPENCLAW_REPO_URL}. Set OPENCLAW_GIT_DIR to an empty folder or a clone of ${OPENCLAW_REPO_URL}.`,
-    );
-  }
-  const foreign = remotes.find((remote) => !isCanonicalRepoUrl(remote.url));
-  if (foreign) {
-    throw new Error(
-      `OPENCLAW_GIT_DIR points at a checkout with an unexpected git remote: ${params.dir} (remote "${foreign.name}" is ${foreign.url}). Source updates only build from ${OPENCLAW_REPO_URL}. Set OPENCLAW_GIT_DIR to an empty folder or a clone of ${OPENCLAW_REPO_URL}.`,
-    );
-  }
-}
-
-/** Return true only for existing directories with no entries. */
-export async function isEmptyDir(targetPath: string): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(targetPath);
-    return entries.length === 0;
-  } catch {
-    return false;
-  }
 }
 
 /** Resolve the checkout path used by source-based self-update. */
@@ -346,55 +261,88 @@ export async function runUpdateStep(params: {
   };
 }
 
-/** Ensure the configured source-update directory exists and points at an OpenClaw checkout. */
-export async function ensureGitCheckout(params: {
+/** Create the source-update checkout without adopting any pre-existing directory state. */
+export async function createGitCheckout(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
-}): Promise<UpdateStepResult | null> {
-  const gitEnv = params.env ?? (await createGlobalInstallEnv());
-  const dirExists = await pathExists(params.dir);
-  if (!dirExists) {
-    await fs.mkdir(path.dirname(params.dir), { recursive: true });
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
-      env: gitEnv,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-    });
+  beforeReplaceManagedCheckout?: () => Promise<void>;
+}): Promise<UpdateStepResult> {
+  const recordPath = managedCheckoutRecordPath(params.dir, params.env);
+  const managedRetry = await isManagedGitCheckoutRetry(params.dir, params.env);
+  const cloneDir = managedRetry
+    ? path.join(
+        path.dirname(params.dir),
+        `.${path.basename(params.dir)}.replacement-${randomUUID()}`,
+      )
+    : params.dir;
+  const markerPath = path.join(cloneDir, ".git", MANAGED_CHECKOUT_MARKER);
+  if (managedRetry) {
+    await params.beforeReplaceManagedCheckout?.();
   }
-
-  if (!(await isGitCheckout(params.dir))) {
-    const empty = await isEmptyDir(params.dir);
-    if (!empty) {
+  await fs.mkdir(path.dirname(params.dir), { recursive: true });
+  try {
+    // Creating the destination ourselves closes the check/create race that
+    // would otherwise let an existing empty directory be adopted by git clone.
+    await fs.mkdir(cloneDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
       throw new Error(
-        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        `OPENCLAW_GIT_DIR already exists: ${params.dir}. Package-to-dev conversion creates a fresh OpenClaw checkout and will not reuse existing directories. Move it or set OPENCLAW_GIT_DIR to an unused path.`,
+        { cause: err },
       );
     }
+    throw err;
+  }
 
-    return await runUpdateStep({
+  try {
+    const gitEnv = createSanitizedGitEnv(params.env ?? (await createGlobalInstallEnv()));
+    const result = await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
-      cwd: params.dir,
+      argv: ["git", "clone", OPENCLAW_REPO_URL, cloneDir],
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
+    if (managedRetry && result.exitCode !== 0) {
+      await fs.rm(cloneDir, { recursive: true, force: true });
+    }
+    if (result.exitCode === 0) {
+      const token = randomUUID();
+      await fs.mkdir(path.dirname(recordPath), { recursive: true });
+      await fs.writeFile(markerPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      if (managedRetry) {
+        const backupDir = `${params.dir}.previous-${randomUUID()}`;
+        await fs.rename(params.dir, backupDir);
+        try {
+          await fs.rename(cloneDir, params.dir);
+          await fs.writeFile(recordPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+        } catch (err) {
+          await fs.rm(params.dir, { recursive: true, force: true });
+          await fs.rename(backupDir, params.dir);
+          throw err;
+        }
+        await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+      } else {
+        await fs.writeFile(recordPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      }
+    }
+    return result;
+  } catch (err) {
+    const cleanupError = await fs.rm(cloneDir, { recursive: true, force: true }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    if (cleanupError) {
+      throw new AggregateError(
+        [err, cleanupError],
+        `Git clone failed (${String(err)}) and its new checkout could not be removed (${String(cleanupError)})`,
+        { cause: err },
+      );
+    }
+    throw err;
   }
-
-  if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
-  }
-
-  await assertCanonicalCheckoutRemotes({
-    dir: params.dir,
-    timeoutMs: params.timeoutMs,
-    env: gitEnv,
-  });
-
-  return null;
 }
 
 /** Detect the package manager that owns a global/package OpenClaw install. */

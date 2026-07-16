@@ -14,8 +14,7 @@ import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import {
-  isEmptyDir,
-  isGitCheckout,
+  isManagedGitCheckoutRetry,
   parseTimeoutMsOrExit,
   resolveGitInstallDir,
   resolveUpdateRoot,
@@ -108,31 +107,24 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
   if (requestedChannel === "dev" && updateStatus.installKind !== "git") {
     const gitDir = resolveGitInstallDir();
-    const hasGit = await isGitCheckout(gitDir);
-    if (!hasGit) {
-      const dirExists = await pathExists(gitDir);
-      if (dirExists) {
-        const empty = await isEmptyDir(gitDir);
-        if (!empty) {
-          defaultRuntime.error(
-            `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
-      }
+    if ((await pathExists(gitDir)) && !(await isManagedGitCheckoutRetry(gitDir, process.env))) {
+      defaultRuntime.error(
+        `OPENCLAW_GIT_DIR already exists: ${gitDir}. Package-to-dev conversion creates a fresh OpenClaw checkout and will not reuse existing directories. Move it or set OPENCLAW_GIT_DIR to an unused path.`,
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
 
-      const ok = await confirm({
-        message: stylePromptMessage(
-          `Create a git checkout at ${gitDir}? (override via OPENCLAW_GIT_DIR)`,
-        ),
-        initialValue: true,
-      });
-      if (isCancel(ok) || !ok) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-        defaultRuntime.exit(0);
-        return;
-      }
+    const ok = await confirm({
+      message: stylePromptMessage(
+        `Create a fresh git checkout at ${gitDir}? (override via OPENCLAW_GIT_DIR)`,
+      ),
+      initialValue: true,
+    });
+    if (isCancel(ok) || !ok) {
+      defaultRuntime.log(theme.muted("Update cancelled."));
+      defaultRuntime.exit(0);
+      return;
     }
   }
 
