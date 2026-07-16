@@ -897,6 +897,8 @@ export function handleMessageUpdate(
     return;
   }
   if (deliveryPhase === "commentary") {
+    // Any withheld unphased prefix belongs to this narration; never flush it.
+    ctx.state.phasePendingBlockText = "";
     const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
     const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
     if (isResponsesCommentary && chunk) {
@@ -933,14 +935,25 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (
-      !skipLiveStream &&
-      !shouldUsePhaseAwareBlockReply &&
-      !isPhasePendingAnthropicText &&
-      !isPhasePendingCompletionsText
-    ) {
-      appendBlockReplyChunk(ctx, chunk);
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
+      if (isPhasePendingAnthropicText || isPhasePendingCompletionsText) {
+        ctx.state.phasePendingBlockText += chunk;
+      } else {
+        appendBlockReplyChunk(ctx, chunk);
+      }
     }
+  }
+  // Text that stays permanently phaseless has no later tagging point; deliver
+  // the withheld buffer at text_end so ordinary answers still reach durable
+  // block replies (same fallback the Responses WS buffering uses, #61968).
+  if (
+    evtType === "text_end" &&
+    !deliveryPhase &&
+    !skipLiveStream &&
+    ctx.state.phasePendingBlockText
+  ) {
+    appendBlockReplyChunk(ctx, ctx.state.phasePendingBlockText);
+    ctx.state.phasePendingBlockText = "";
   }
 
   if (skipLiveStream) {

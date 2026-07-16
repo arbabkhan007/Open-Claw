@@ -96,6 +96,38 @@ describe("subscribeEmbeddedAgentSession — Chat Completions pre-tool narration"
     expect(postedBlockReplyText(onBlockReply)).toContain("Here is the answer.");
   });
 
+  it("flushes withheld unphased text at text_end so ordinary answers stay deliverable", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-text-end-fallback",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 4, maxChars: 200 },
+    });
+
+    const answer = "An ordinary answer with no tool calls.";
+    emit({ type: "message_start", message: completionsAssistant("") });
+    emit({
+      type: "message_update",
+      message: completionsAssistant(answer),
+      assistantMessageEvent: { type: "text_delta", delta: answer },
+    });
+    // Completions text stays permanently unphased on ordinary turns; the
+    // text_end fallback must deliver what the withholding gate buffered.
+    emit({
+      type: "message_update",
+      message: completionsAssistant(answer),
+      assistantMessageEvent: { type: "text_end", contentIndex: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalled();
+    });
+    expect(postedBlockReplyText(onBlockReply)).toContain("An ordinary answer");
+  });
+
   it("still delivers a non-tool Chat Completions answer in full on a text_end channel", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();

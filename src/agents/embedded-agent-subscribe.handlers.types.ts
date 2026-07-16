@@ -94,6 +94,10 @@ export type EmbeddedAgentSubscribeState = {
 
   deltaBuffer: string;
   blockBuffer: string;
+  /** Unphased Anthropic/Completions text withheld from durable block replies
+   *  until the tool boundary resolves its phase; flushed at text_end when the
+   *  text stays permanently phaseless (ordinary answers). */
+  phasePendingBlockText: string;
   blockState: {
     thinking: boolean;
     final: boolean;
