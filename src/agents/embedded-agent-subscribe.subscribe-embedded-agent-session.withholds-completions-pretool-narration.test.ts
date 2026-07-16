@@ -128,6 +128,36 @@ describe("subscribeEmbeddedAgentSession — Chat Completions pre-tool narration"
     expect(postedBlockReplyText(onBlockReply)).toContain("An ordinary answer");
   });
 
+  it("keeps prefix-before-suffix order when text_end carries the reply tail", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-text-end-suffix-order",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 4, maxChars: 200 },
+    });
+
+    emit({ type: "message_start", message: completionsAssistant("") });
+    emit({
+      type: "message_update",
+      message: completionsAssistant("prefix "),
+      assistantMessageEvent: { type: "text_delta", delta: "prefix " },
+    });
+    // A text_end can deliver the final suffix; the withheld prefix must land first.
+    emit({
+      type: "message_update",
+      message: completionsAssistant("prefix suffix"),
+      assistantMessageEvent: { type: "text_end", contentIndex: 0, delta: "suffix" },
+    });
+
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalled();
+    });
+    expect(postedBlockReplyText(onBlockReply)).toContain("prefix suffix");
+  });
+
   it("still delivers a non-tool Chat Completions answer in full on a text_end channel", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();

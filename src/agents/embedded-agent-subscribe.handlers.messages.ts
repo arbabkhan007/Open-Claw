@@ -933,6 +933,20 @@ export function handleMessageUpdate(
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
+  // Text that stays permanently phaseless has no later tagging point; deliver
+  // the withheld buffer at text_end so ordinary answers still reach durable
+  // block replies (same fallback the Responses WS buffering uses, #61968).
+  // Flush before handling this event's own chunk: a text_end can carry the
+  // reply's suffix, which must land after the withheld prefix.
+  if (
+    evtType === "text_end" &&
+    !deliveryPhase &&
+    !skipLiveStream &&
+    ctx.state.phasePendingBlockText
+  ) {
+    appendBlockReplyChunk(ctx, ctx.state.phasePendingBlockText);
+    ctx.state.phasePendingBlockText = "";
+  }
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
@@ -942,18 +956,6 @@ export function handleMessageUpdate(
         appendBlockReplyChunk(ctx, chunk);
       }
     }
-  }
-  // Text that stays permanently phaseless has no later tagging point; deliver
-  // the withheld buffer at text_end so ordinary answers still reach durable
-  // block replies (same fallback the Responses WS buffering uses, #61968).
-  if (
-    evtType === "text_end" &&
-    !deliveryPhase &&
-    !skipLiveStream &&
-    ctx.state.phasePendingBlockText
-  ) {
-    appendBlockReplyChunk(ctx, ctx.state.phasePendingBlockText);
-    ctx.state.phasePendingBlockText = "";
   }
 
   if (skipLiveStream) {
