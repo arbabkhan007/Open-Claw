@@ -1674,7 +1674,6 @@ function sanitizeCompletionsReasoningReplayFields(
     }
   }
 }
-
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
@@ -1682,13 +1681,14 @@ export function buildOpenAICompletionsParams(
 ) {
   const compat = getCompat(model);
   const compatDetection = detectOpenAICompletionsCompat(model);
-  const completionsContext = context.systemPrompt
-    ? {
-        ...context,
-        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-      }
-    : context;
-  let messages = convertMessages(model as never, completionsContext, compat as never);
+  const disableBoundaryAwareCache = compat.disableBoundaryAwareCache;
+  const completionsContext =
+    context.systemPrompt && !disableBoundaryAwareCache
+      ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
+      : context;
+  let messages = convertMessages(model as never, completionsContext, compat as never, {
+    preserveSystemPromptCacheBoundary: disableBoundaryAwareCache,
+  });
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   sanitizeCompletionsReasoningReplayFields(messages, {
     preserveOpenRouterReasoning:
