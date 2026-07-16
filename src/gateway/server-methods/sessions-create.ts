@@ -303,6 +303,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
       parentSessionKey: p.parentSessionKey,
+      pluginRuntimeOwnerId: client?.internal?.pluginRuntimeOwnerId,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {
