@@ -474,6 +474,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  presentation?: import("./session-presentation.js").SessionPresentation;
   spawnedBy?: string;
   parentSessionKey?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */

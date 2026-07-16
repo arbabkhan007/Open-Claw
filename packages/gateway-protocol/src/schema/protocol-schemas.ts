@@ -362,6 +362,7 @@ import {
   SecretsResolveResultSchema,
 } from "./secrets.js";
 import { SessionPlacementProtocolSchemas } from "./session-placement.js";
+import * as SessionPresentationSchemas from "./session-presentation.js";
 import {
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
@@ -609,6 +610,9 @@ export const ProtocolSchemas = {
 
   // Session lifecycle, message routing, compaction, and usage accounting.
   SessionsListParams: SessionsListParamsSchema,
+  SessionPresentationFamily: SessionPresentationSchemas.SessionPresentationFamilySchema,
+  SessionPresentationTitleSource: SessionPresentationSchemas.SessionPresentationTitleSourceSchema,
+  SessionPresentation: SessionPresentationSchemas.SessionPresentationSchema,
   SessionCatalogCapabilities: SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: SessionCatalogDescriptorSchema,
   SessionCatalogSession: SessionCatalogSessionSchema,

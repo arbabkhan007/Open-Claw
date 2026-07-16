@@ -4,6 +4,7 @@ export { validateApprovalGetResult } from "./approval-result-validators.js";
 export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+export * from "./schema/session-presentation.js";
 import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";

@@ -105,6 +105,7 @@ import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format
 import { listGatewayAgentIds } from "./agent-list.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import { buildSessionPresentationForRow } from "./session-presentation.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -1906,7 +1907,6 @@ export function buildGatewaySessionRow(params: {
   const lightweight = params.lightweightListRow === true;
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const now = params.now ?? Date.now();
-  const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
   const subject = entry?.subject;
@@ -1914,15 +1914,14 @@ export function buildGatewaySessionRow(params: {
   const space = entry?.space;
   const id = parsed?.id;
   const origin = entry?.origin;
-  const originLabel = origin?.label;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
-  // A user-assigned label is an explicit rename; it must win over stored
-  // channel-derived display names or renames silently vanish on refresh.
-  // Group sessions prefer the human chat title (subject/#channel) over the
-  // stored compact token displayName (e.g. "slack:g-general").
+  // Labels and human group titles outrank transport-derived display names.
+  const presentationDisplayName = isGroupSession
+    ? buildGroupDisplayTitle({ subject, groupChannel, space })
+    : entry?.displayName;
   const displayName =
     entry?.label ??
-    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
+    presentationDisplayName ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -1934,7 +1933,7 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    originLabel;
+    origin?.label;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
@@ -2150,14 +2149,11 @@ export function buildGatewaySessionRow(params: {
       lastMessagePreview = fields.lastMessagePreview;
     }
   }
-
-  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
-  const thinkingModel = rowModel ?? DEFAULT_MODEL;
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
-    provider: thinkingProvider,
-    model: thinkingModel,
+    provider: rowModelProvider ?? DEFAULT_PROVIDER,
+    model: rowModel ?? DEFAULT_MODEL,
     sessionKey: acpSessionKey,
     entry,
     modelCatalog: params.modelCatalog,
@@ -2177,9 +2173,9 @@ export function buildGatewaySessionRow(params: {
   });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
-
   return {
     key,
+    presentation: buildSessionPresentationForRow(params, sessionAgentId, presentationDisplayName),
     spawnedBy: subagentOwner || entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
@@ -2202,7 +2198,7 @@ export function buildGatewaySessionRow(params: {
     space,
     chatType: entry?.chatType,
     origin,
-    updatedAt,
+    updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     pinned: entry?.pinnedAt !== undefined,
