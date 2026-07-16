@@ -842,15 +842,16 @@ export async function runPluginInstallCommand(params: {
   if (!resolvesToLocalPath && (gitSpec || npmPackPath !== null || clawhubSpec)) {
     request = { ...request, installKind: "plugin" };
   }
-  const bundledPreNpmPlan = resolvesToLocalPath
-    ? null
-    : resolveBundledInstallPlanBeforeNpm({
-        rawSpec: raw,
-        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-      });
   const officialExternalPlan = resolvesToLocalPath
     ? null
     : resolveCatalogOfficialExternalInstallPlan(raw);
+  const bundledPreNpmPlan =
+    resolvesToLocalPath || officialExternalPlan?.source === "clawhub"
+      ? null
+      : resolveBundledInstallPlanBeforeNpm({
+          rawSpec: raw,
+          findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+        });
   if (bundledPreNpmPlan || officialExternalPlan) {
     request = { ...request, installKind: "plugin" };
   }
@@ -1193,7 +1194,7 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  if (officialExternalPlan) {
+  if (officialExternalPlan?.source === "npm") {
     const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
       installMode,
@@ -1214,7 +1215,13 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  if (clawhubSpec) {
+  const clawhubInstallSpec =
+    officialExternalPlan?.source === "clawhub"
+      ? officialExternalPlan.clawhubSpec
+      : clawhubSpec
+        ? raw
+        : undefined;
+  if (clawhubInstallSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
       ...resolveClawHubRiskAcknowledgementCliOptions({
@@ -1222,8 +1229,9 @@ export async function runPluginInstallCommand(params: {
         action: "installing",
       }),
       mode: installMode,
-      spec: raw,
+      spec: clawhubInstallSpec,
       extensionsDir,
+      expectedPluginId: officialExternalPlan?.pluginId,
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
@@ -1238,7 +1246,7 @@ export async function runPluginInstallCommand(params: {
       pluginId: result.pluginId,
       install: {
         ...buildClawHubPluginInstallRecordFields(result.clawhub),
-        spec: raw,
+        spec: clawhubInstallSpec,
         installPath: result.targetDir,
       },
       invalidateRuntimeCache,
