@@ -5,11 +5,17 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureGitCheckout } from "./shared.js";
 
-async function createCheckout(remotes: Array<{ name: string; url: string }>): Promise<string> {
+async function createCheckout(
+  remotes: Array<{ name: string; url: string }>,
+  config: Array<[string, string]> = [],
+): Promise<string> {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-adopt-")));
   execFileSync("git", ["-C", dir, "init", "--quiet"]);
   for (const remote of remotes) {
     execFileSync("git", ["-C", dir, "remote", "add", remote.name, remote.url]);
+  }
+  for (const [key, value] of config) {
+    execFileSync("git", ["-C", dir, "config", key, value]);
   }
   await fs.writeFile(
     path.join(dir, "package.json"),
@@ -60,11 +66,45 @@ describe("ensureGitCheckout remote verification", () => {
     );
   });
 
+  it("rejects a canonical remote that insteadOf rewrites to another host", async () => {
+    const dir = await createCheckout(
+      [{ name: "origin", url: "https://github.com/openclaw/openclaw.git" }],
+      [["url.https://evil.example.test/.insteadOf", "https://github.com/openclaw/"]],
+    );
+
+    await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
+      /evil\.example\.test/u,
+    );
+  });
+
+  it("accepts a canonical remote reached through an insteadOf rewrite", async () => {
+    const dir = await createCheckout(
+      [{ name: "origin", url: "https://github.com/openclaw/openclaw.git" }],
+      [["url.ssh://git@github.com/.insteadOf", "https://github.com/"]],
+    );
+
+    await expect(
+      ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env }),
+    ).resolves.toBeNull();
+  });
+
+  it.each(["http://github.com/openclaw/openclaw.git", "git://github.com/openclaw/openclaw.git"])(
+    "rejects the unauthenticated remote transport %s",
+    async (url) => {
+      const dir = await createCheckout([{ name: "origin", url }]);
+
+      await expect(ensureGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
+        /unexpected git remote/u,
+      );
+    },
+  );
+
   it.each([
     "git@github.com:openclaw/openclaw.git",
     "ssh://git@github.com/openclaw/openclaw.git",
     "https://github.com/openclaw/openclaw",
     "https://github.com/OpenClaw/OpenClaw.git",
+    "https://github.com/openclaw/openclaw.GIT",
   ])("accepts equivalent canonical remote form %s", async (url) => {
     const dir = await createCheckout([{ name: "origin", url }]);
 

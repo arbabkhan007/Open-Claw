@@ -939,9 +939,10 @@ describe("update-cli", () => {
           await fs.writeFile(path.join(destination, "openclaw-9999.0.0.tgz"), "packed\n", "utf8");
         }
       }
-      if (argv[0] === "git" && argv[3] === "config" && argv[4] === "--get-regexp") {
+      if (argv[0] === "git" && argv[3] === "remote") {
+        const isGetUrl = argv[4] === "get-url";
         return {
-          stdout: "remote.origin.url https://github.com/openclaw/openclaw.git\n",
+          stdout: isGetUrl ? "https://github.com/openclaw/openclaw.git\n" : "origin\n",
           stderr: "",
           code: 0,
           signal: null,

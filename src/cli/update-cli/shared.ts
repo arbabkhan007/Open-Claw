@@ -75,6 +75,7 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
 }
 
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const AUTHENTICATED_REMOTE_PROTOCOLS = new Set(["https:", "ssh:"]);
 const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
@@ -153,15 +154,18 @@ function normalizeGitRemoteUrl(url: string): string | null {
     } catch {
       return null;
     }
+    if (!AUTHENTICATED_REMOTE_PROTOCOLS.has(parsed.protocol)) {
+      return null;
+    }
     host = parsed.hostname;
     repoPath = parsed.pathname;
   }
   const normalizedHost = host.toLowerCase();
   const normalizedPath = repoPath
+    .toLowerCase()
     .replace(/^\/+/u, "")
     .replace(/\/+$/u, "")
-    .replace(/\.git$/u, "")
-    .toLowerCase();
+    .replace(/\.git$/u, "");
   if (!normalizedHost || !normalizedPath) {
     return null;
   }
@@ -173,23 +177,45 @@ function isCanonicalRepoUrl(url: string): boolean {
   return normalized !== null && normalized === normalizeGitRemoteUrl(OPENCLAW_REPO_URL);
 }
 
+async function runGitProbe(params: {
+  dir: string;
+  argv: string[];
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const res = await runCommandWithTimeout(["git", "-C", params.dir, ...params.argv], {
+    env: params.env,
+    timeoutMs: params.timeoutMs,
+  });
+  if (res.code !== 0) {
+    const detail = trimLogTail(res.stderr, MAX_LOG_CHARS);
+    throw new Error(
+      `Unable to inspect the git checkout at ${params.dir}: \`git ${params.argv.join(" ")}\` exited with ${res.code}.${detail ? ` ${detail}` : ""}`,
+    );
+  }
+  return res.stdout;
+}
+
+function splitNonEmptyLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 async function readGitRemotes(params: {
   dir: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<Array<{ name: string; url: string }>> {
-  const res = await runCommandWithTimeout(
-    ["git", "-C", params.dir, "config", "--get-regexp", String.raw`^remote\..*\.url$`],
-    { env: params.env, timeoutMs: params.timeoutMs },
-  );
-  if (res.code !== 0) {
-    return [];
-  }
+  const names = splitNonEmptyLines(await runGitProbe({ ...params, argv: ["remote"] }));
   const remotes: Array<{ name: string; url: string }> = [];
-  for (const line of res.stdout.split("\n")) {
-    const match = /^remote\.(.+)\.url\s+(.+)$/u.exec(line.trim());
-    if (match?.[1] && match[2]) {
-      remotes.push({ name: match[1], url: match[2].trim() });
+  for (const name of names) {
+    const urls = splitNonEmptyLines(
+      await runGitProbe({ ...params, argv: ["remote", "get-url", "--all", "--", name] }),
+    );
+    for (const url of urls) {
+      remotes.push({ name, url });
     }
   }
   return remotes;
