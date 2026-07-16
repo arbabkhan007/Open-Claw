@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DiscordError } from "./internal/rest-errors.js";
 import { DISCORD_WEBHOOK_TIMEOUT_MS, sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const cfg = {
@@ -12,6 +13,25 @@ const cfg = {
     },
   },
 } as OpenClawConfig;
+
+async function settleWithin(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<"pending" | "settled"> {
+  let settled = false;
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, timeoutMs);
+  });
+  return settled ? "settled" : "pending";
+}
 
 async function listenNeverRespondServer(): Promise<{
   baseUrl: string;
@@ -38,14 +58,55 @@ async function listenNeverRespondServer(): Promise<{
   };
 }
 
+function stalledBodyResponse(params: {
+  status: number;
+  signal?: AbortSignal;
+  headers?: HeadersInit;
+}): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      params.signal?.addEventListener(
+        "abort",
+        () => controller.error(new DOMException("Discord webhook timed out", "AbortError")),
+        { once: true },
+      );
+    },
+  });
+  return new Response(body, {
+    status: params.status,
+    headers: params.headers ?? { "content-type": "application/json" },
+  });
+}
+
 describe("sendWebhookMessageDiscord timeouts", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("exports the Discord REST outbound timeout budget", () => {
+  it("uses the Discord REST outbound timeout budget by default", () => {
     expect(DISCORD_WEBHOOK_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it("keeps a never-responding webhook pending without a request signal (negative control)", async () => {
+    const fixture = await listenNeverRespondServer();
+    const hangMs = 200;
+    try {
+      const pending = fetch(`${fixture.baseUrl}/api/v10/webhooks/123/abc?wait=true`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "hello" }),
+      });
+      expect(await settleWithin(pending, hangMs)).toBe("pending");
+      expect(fixture.requestCount()).toBe(1);
+      // Abort the orphan so the suite can exit cleanly.
+      void pending.then(
+        (response) => response.body?.cancel().catch(() => undefined),
+        () => undefined,
+      );
+    } finally {
+      await fixture.close();
+    }
   });
 
   it("aborts webhook response body reads that exceed the request deadline", async () => {
@@ -53,19 +114,7 @@ describe("sendWebhookMessageDiscord timeouts", () => {
     let observedSignal: AbortSignal | undefined;
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       observedSignal = init?.signal ?? undefined;
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          observedSignal?.addEventListener(
-            "abort",
-            () => controller.error(new DOMException("Discord webhook timed out", "AbortError")),
-            { once: true },
-          );
-        },
-      });
-      return new Response(body, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return stalledBodyResponse({ status: 200, signal: observedSignal });
     });
     vi.spyOn(globalThis, "fetch").mockImplementation(fetcher);
 
@@ -84,6 +133,41 @@ describe("sendWebhookMessageDiscord timeouts", () => {
 
     await vi.advanceTimersByTimeAsync(10_000);
     await rejection;
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("does not convert a stalled error-body deadline into DiscordError", async () => {
+    vi.useFakeTimers();
+    let observedSignal: AbortSignal | undefined;
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      observedSignal = init?.signal ?? undefined;
+      return stalledBodyResponse({ status: 500, signal: observedSignal });
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetcher);
+
+    let caught: unknown;
+    const sendPromise = sendWebhookMessageDiscord("hello", {
+      cfg,
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+      timeoutMs: 5_000,
+    }).then(
+      () => {
+        throw new Error("expected webhook send to reject on deadline");
+      },
+      (error: unknown) => {
+        caught = error;
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sendPromise;
+
+    expect(caught).toBeDefined();
+    expect(caught).not.toBeInstanceOf(DiscordError);
+    expect(String(caught)).toMatch(/timed out|abort/i);
     expect(observedSignal?.aborted).toBe(true);
   });
 

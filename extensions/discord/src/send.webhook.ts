@@ -77,9 +77,15 @@ function isDiscordWebhookDeadlineError(error: unknown): boolean {
 }
 
 async function throwWebhookResponseError(response: Response): Promise<never> {
-  const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES).catch(
-    () => "",
-  );
+  let raw = "";
+  try {
+    raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES);
+  } catch (error) {
+    // Do not convert a deadline abort into a DiscordError with an empty body.
+    if (isDiscordWebhookDeadlineError(error)) {
+      throw error;
+    }
+  }
   const parsed = coerceWebhookErrorBody(raw);
   if (response.status === 429) {
     throw new RateLimitError(response, {
