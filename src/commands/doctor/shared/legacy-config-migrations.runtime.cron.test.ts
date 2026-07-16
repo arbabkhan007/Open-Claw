@@ -121,6 +121,29 @@ describe("cron.sessionRetention zero-duration migration", () => {
     expect(changes).toHaveLength(0);
   });
 
+  // ── Migration preserves unrelated cron config ────────────────
+
+  it("preserves valid cron.runLog when removing zero sessionRetention", () => {
+    const changes: string[] = [];
+    const raw = { cron: { sessionRetention: "0h", runLog: { maxBytes: 4096, keepLines: 500 } } };
+    migration.apply(raw, changes);
+
+    expect(raw.cron).not.toHaveProperty("sessionRetention");
+    expect(raw.cron).toHaveProperty("runLog");
+    expect(raw.cron?.runLog).toEqual({ maxBytes: 4096, keepLines: 500 });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toContain("0h");
+  });
+
+  it("preserves valid cron.runLog when sessionRetention is positive (no-op)", () => {
+    const changes: string[] = [];
+    const raw = { cron: { sessionRetention: "7d", runLog: { maxBytes: 4096 } } };
+    migration.apply(raw, changes);
+
+    expect(raw.cron).toEqual({ sessionRetention: "7d", runLog: { maxBytes: 4096 } });
+    expect(changes).toHaveLength(0);
+  });
+
   // ── Rule re-applies after migration ──────────────────────────
 
   it("rule no longer matches after migration removed the zero value", () => {
