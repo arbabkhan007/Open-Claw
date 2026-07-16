@@ -214,7 +214,7 @@ describe("compaction lifecycle logging", () => {
       type: "compaction_start",
       reason: "threshold",
     });
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "threshold",
       result: { kept: 12 },
@@ -264,7 +264,7 @@ describe("compaction lifecycle logging", () => {
       type: "compaction_start",
       reason: "manual",
     });
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "manual",
       result: undefined,
@@ -313,7 +313,7 @@ describe("compaction lifecycle logging", () => {
     handleCompactionStart(ctx, {
       type: "compaction_start",
     });
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       result: { kept: 12 },
       willRetry: false,
@@ -444,7 +444,7 @@ describe("handleCompactionEnd", () => {
       initialCount: 1,
     });
 
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "threshold",
       result: { kept: 12 },
@@ -489,7 +489,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
@@ -524,7 +524,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const staleAssistant = messages[1] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
@@ -556,7 +556,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
@@ -588,7 +588,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const secondAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
@@ -616,7 +616,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const freshAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(freshAssistant.usage).toEqual(freshUsage);

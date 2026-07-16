@@ -133,7 +133,7 @@ describe("compaction hook wiring", () => {
       aborted?: boolean;
     },
   ) {
-    handleCompactionEnd(
+    return handleCompactionEnd(
       ctx as never,
       {
         type: "compaction_end",
