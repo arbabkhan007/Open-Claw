@@ -5,7 +5,7 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hooks.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
   resolveSessionWorkStartError,

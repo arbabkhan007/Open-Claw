@@ -7,7 +7,7 @@ import {
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hooks.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,

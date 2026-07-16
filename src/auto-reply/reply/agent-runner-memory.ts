@@ -10,7 +10,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hooks.js";
+import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
