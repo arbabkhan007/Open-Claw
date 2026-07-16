@@ -111,11 +111,15 @@ export function createEmbeddedRunCompactionRuntime(input: {
         },
         {
           ...resolveActiveHookContext(),
-          api: buildEmbeddedHookApi({
-            agentId: hookContext.agentId,
-            sessionKey: hookContext.sessionKey,
-            deferResetSession: deferEmbeddedHookSessionReset,
-          }),
+          ...(params.modelSelectionLocked === true
+            ? {}
+            : {
+                api: buildEmbeddedHookApi({
+                  agentId: hookContext.agentId,
+                  sessionKey: hookContext.sessionKey,
+                  deferResetSession: deferEmbeddedHookSessionReset,
+                }),
+              }),
         },
       );
     } catch (error) {

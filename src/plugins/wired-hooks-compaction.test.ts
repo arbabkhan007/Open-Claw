@@ -182,7 +182,7 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("calls runAfterCompaction when willRetry is false", () => {
+  it("calls runAfterCompaction when willRetry is false", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = createCompactionEndCtx({
@@ -193,7 +193,7 @@ describe("compaction hook wiring", () => {
       compactionCount: 1,
     });
 
-    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
 
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({
@@ -236,7 +236,7 @@ describe("compaction hook wiring", () => {
       compactionCount: 1,
     });
 
-    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
 
     await expect.poll(() => hookMocks.performGatewaySessionReset.mock.calls.length).toBe(1);
     expect(hookMocks.performGatewaySessionReset).toHaveBeenCalledWith({
@@ -247,7 +247,7 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("does not call runAfterCompaction when willRetry is true but still increments counter", () => {
+  it("does not call runAfterCompaction when willRetry is true but still increments counter", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = createCompactionEndCtx({
@@ -256,7 +256,7 @@ describe("compaction hook wiring", () => {
       withRetryHooks: true,
     });
 
-    runCompactionEnd(ctx, { willRetry: true, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, { willRetry: true, result: { summary: "compacted" } });
 
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
     // Counter is incremented even with willRetry — compaction succeeded (#38905)
@@ -278,13 +278,13 @@ describe("compaction hook wiring", () => {
       { willRetry: false, result: { summary: "compacted" }, aborted: true },
     ],
     ["does not increment counter when result is undefined", { willRetry: false }],
-  ] as const)("%s", (_name, event) => {
+  ] as const)("%s", async (_name, event) => {
     const ctx = createCompactionEndCtx({ runId: "r3c" });
-    runCompactionEnd(ctx, event);
+    await runCompactionEnd(ctx, event);
     expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
   });
 
-  it("resets stale assistant usage after final compaction", () => {
+  it("resets stale assistant usage after final compaction", async () => {
     const messages = [
       { role: "user", content: "hello" },
       {
@@ -310,7 +310,7 @@ describe("compaction hook wiring", () => {
       getLastCompactionTokensAfter: vi.fn(() => undefined),
     };
 
-    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
 
     const assistantOne = messages[1] as { usage?: unknown };
     const assistantTwo = messages[2] as { usage?: unknown };
@@ -318,7 +318,7 @@ describe("compaction hook wiring", () => {
     expect(assistantTwo.usage).toEqual(makeZeroUsageSnapshot());
   });
 
-  it("does not clear assistant usage while compaction is retrying", () => {
+  it("does not clear assistant usage while compaction is retrying", async () => {
     const messages = [
       {
         role: "assistant",
@@ -336,7 +336,7 @@ describe("compaction hook wiring", () => {
       getCompactionCount: () => 0,
     };
 
-    runCompactionEnd(ctx, { willRetry: true });
+    await runCompactionEnd(ctx, { willRetry: true });
 
     const assistant = messages[0] as { usage?: unknown };
     expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });

@@ -264,7 +264,11 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
 
-async function runCompactionHooks(params: { sessionKey?: string; messageProvider?: string }) {
+async function runCompactionHooks(params: {
+  sessionKey?: string;
+  messageProvider?: string;
+  modelSelectionLocked?: boolean;
+}) {
   // Build metrics through the production helper so hook payload assertions stay
   // aligned with compaction token accounting.
   const originalMessages = sessionMessages.slice(1) as AgentMessage[];
@@ -300,6 +304,7 @@ async function runCompactionHooks(params: { sessionKey?: string; messageProvider
     summaryLength: "summary".length,
     tokensBefore: 120,
     firstKeptEntryId: "entry-1",
+    modelSelectionLocked: params.modelSelectionLocked,
   });
 }
 
@@ -1866,6 +1871,30 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       reason: "new",
       commandSource: "embedded-agent:hook",
     });
+  });
+
+  it("does not expose resetSession in after_compaction for model-locked sessions", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    performGatewaySessionResetMock.mockClear();
+    (hookRunner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, context: unknown) => {
+        const hookContext = context as {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        };
+        expect(hookContext.api?.resetSession).toBeUndefined();
+      },
+    );
+
+    await runCompactionHooks({
+      sessionKey: TEST_SESSION_KEY,
+      modelSelectionLocked: true,
+    });
+
+    const pluginAfterContext = mockCallArg(hookRunner.runAfterCompaction, 0, 1) as {
+      api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+    };
+    expect(pluginAfterContext.api?.resetSession).toBeUndefined();
+    expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
   });
 
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {

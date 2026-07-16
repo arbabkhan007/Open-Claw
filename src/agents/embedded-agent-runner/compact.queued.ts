@@ -916,11 +916,17 @@ async function compactResolvedContextEngine(
             const afterHookCtx = {
               ...hookCtx,
               sessionId: postCompactionSessionId,
-              api: buildEmbeddedHookApi({
-                agentId: sessionAgentId,
-                sessionKey: hookSessionKey,
-                ...(deferHookResetSession ? { deferResetSession: deferHookResetSession } : {}),
-              }),
+              ...(params.modelSelectionLocked === true
+                ? {}
+                : {
+                    api: buildEmbeddedHookApi({
+                      agentId: sessionAgentId,
+                      sessionKey: hookSessionKey,
+                      ...(deferHookResetSession
+                        ? { deferResetSession: deferHookResetSession }
+                        : {}),
+                    }),
+                  }),
             };
             await hookRunner.runAfterCompaction(
               {
