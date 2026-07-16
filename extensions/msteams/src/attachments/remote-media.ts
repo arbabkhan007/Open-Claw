@@ -7,6 +7,12 @@ import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+// Align with Mattermost/Zalo/Tlon media downloads: header wait and body idle
+// are separate failure modes. Without readIdleTimeoutMs, a large attachment
+// that stalls mid-chunk can hang the inbound media save forever.
+const MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+const MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
+
 /**
  * Direct save path used when the caller supplies the already-guarded fetch
  * implementation. This lets Teams-specific auth fallback own the request
@@ -26,6 +32,7 @@ async function saveRemoteMediaDirect(params: {
       sourceUrl: params.url,
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
+      readIdleTimeoutMs: MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
       fallbackContentType: params.contentTypeHint,
       originalFilename: params.originalFilename,
     });
@@ -69,6 +76,8 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
       ssrfPolicy: params.ssrfPolicy,
+      responseHeaderTimeoutMs: MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      readIdleTimeoutMs: MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
       fallbackContentType: params.contentTypeHint,
       originalFilename,
     });
