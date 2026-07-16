@@ -102,7 +102,10 @@ export function handleCompactionStart(
 }
 
 /** Handles compaction completion, retry, and incomplete events. */
-export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: CompactionEndEvent) {
+export function handleCompactionEnd(
+  ctx: EmbeddedAgentSubscribeContext,
+  evt: CompactionEndEvent,
+): void | Promise<void> {
   const reason = normalizeCompactionReason(evt.reason);
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = false;
@@ -192,24 +195,29 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       const deferResetSession: DeferEmbeddedHookSessionReset | undefined =
         ctx.params.deferEmbeddedHookSessionReset ??
         (resetQueue ? (request) => resetQueue.deferResetSession(request) : undefined);
-      void (async () => {
+      return (async () => {
         try {
+          const hookContext = {
+            ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+            ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+            sessionKey: ctx.params.sessionKey,
+            ...(hasResult && !wasAborted
+              ? {
+                  api: buildEmbeddedHookApi({
+                    agentId: ctx.params.agentId,
+                    sessionKey: ctx.params.sessionKey,
+                    ...(deferResetSession ? { deferResetSession } : {}),
+                  }),
+                }
+              : {}),
+          };
           await hookRunnerEnd.runAfterCompaction(
             {
               messageCount: ctx.params.session.messages?.length ?? 0,
               compactedCount: ctx.getCompactionCount(),
               sessionFile: ctx.params.session.sessionFile,
             },
-            {
-              ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
-              ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
-              sessionKey: ctx.params.sessionKey,
-              api: buildEmbeddedHookApi({
-                agentId: ctx.params.agentId,
-                sessionKey: ctx.params.sessionKey,
-                ...(deferResetSession ? { deferResetSession } : {}),
-              }),
-            },
+            hookContext,
           );
         } catch (err) {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);

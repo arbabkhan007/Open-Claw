@@ -117,8 +117,8 @@ function makeCompactionSummaryMessage(timestamp?: number): AgentMessage {
   } as AgentMessage;
 }
 
-function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
-  handleCompactionEnd(ctx, {
+function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void | Promise<void> {
+  return handleCompactionEnd(ctx, {
     type: "compaction_end",
     reason: "threshold",
     result: { kept: 12 },
@@ -343,8 +343,12 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
-  it("uses the run-owned reset queue for subscription after_compaction hooks", async () => {
+  it("awaits subscription after_compaction before using the run-owned reset queue", async () => {
     const deferredRequests: unknown[] = [];
+    let releaseHook: (() => void) | undefined;
+    const hookGate = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
     const runAfterCompaction = vi.fn(
       async (
         _event: unknown,
@@ -352,6 +356,7 @@ describe("handleCompactionEnd", () => {
           api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
         },
       ) => {
+        await hookGate;
         await expect(hookContext.api?.resetSession?.("reset")).resolves.toMatchObject({
           ok: true,
           deferred: true,
@@ -372,19 +377,55 @@ describe("handleCompactionEnd", () => {
       },
     });
 
-    finishCompaction(ctx);
+    const handled = finishCompaction(ctx);
 
     await vi.waitFor(() => {
       expect(runAfterCompaction).toHaveBeenCalledTimes(1);
-      expect(deferredRequests).toEqual([
-        {
-          key: "main",
-          agentId: "test-agent",
-          reason: "reset",
-          commandSource: "embedded-agent:hook",
-        },
-      ]);
     });
+    expect(deferredRequests).toEqual([]);
+    releaseHook?.();
+    await handled;
+    expect(deferredRequests).toEqual([
+      {
+        key: "main",
+        agentId: "test-agent",
+        reason: "reset",
+        commandSource: "embedded-agent:hook",
+      },
+    ]);
+  });
+
+  it("does not expose resetSession for incomplete terminal after_compaction hooks", async () => {
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        expect(hookContext.api).toBeUndefined();
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "main",
+      initialCount: 0,
+      deferEmbeddedHookSessionReset: vi.fn(),
+    });
+
+    await handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(runAfterCompaction).toHaveBeenCalledTimes(1);
   });
 
   it("reconciles the session store after a successful compaction end event", async () => {
