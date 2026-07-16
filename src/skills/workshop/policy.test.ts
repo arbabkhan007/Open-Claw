@@ -85,6 +85,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
         toolName: "skill_workshop",
         toolParams: { action, proposal_id: proposal.record.id },
         workspaceDir,
+        config: pendingApprovalConfig,
       });
       expect(lifecycleResult?.params).toEqual({
         action,
