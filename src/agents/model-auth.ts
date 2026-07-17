@@ -952,6 +952,40 @@ function shouldResolvePluginSyntheticAuth(params: {
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
 }
 
+/**
+ * True when a provider is confirmed to expose a plugin-owned synthetic-auth hook
+ * (e.g. an anthropic-vertex GCP-ADC plugin). Gateway-isolated callers use this to
+ * decide whether to keep plugin synthetic auth reachable while stored-profile
+ * fallback is off, without paying for plugin discovery on providers that have no
+ * such hook. Fails closed: when the plugin ref state is not authoritatively
+ * complete, returns false so the resolver stays on its env/config path (matching
+ * the pre-decoupling behavior for non-plugin providers like openai).
+ */
+export function providerHasPluginSyntheticAuthHook(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  modelApi?: string;
+}): boolean {
+  const refState = resolveRuntimeSyntheticAuthProviderRefState({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  });
+  if (!refState.complete || refState.refs.length === 0) {
+    return false;
+  }
+  const eligibleRefs = new Set(
+    normalizeUniqueStringEntries(refState.refs.map((ref) => normalizeProviderId(ref))),
+  );
+  return listProviderSyntheticAuthRefs({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelApi: params.modelApi,
+  }).some((ref) => eligibleRefs.has(ref));
+}
+
 /** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
@@ -1207,6 +1241,11 @@ export async function resolveApiKeyForProvider(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
+  /** Keep provider plugin synthetic-auth (e.g. GCP-ADC) reachable even when
+   *  auth-profile fallback is off. Defaults to tracking allowAuthProfileFallback
+   *  so existing callers are unchanged; gateway-isolated direct attempts pass
+   *  true to preserve plugin synthetic auth without re-opening stored profiles. */
+  allowPluginSyntheticAuth?: boolean;
   /** Skip plugin setup fallback when the prepared route already excludes it. */
   skipSetupProviderFallback?: boolean;
   modelId?: string;
@@ -1649,7 +1688,11 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
-    allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
+    // Plugin synthetic-auth is a provider-owned credential hook, distinct from
+    // stored-profile discovery. Keep it available on its own flag so a gateway
+    // attempt can disable profile fallback yet still resolve GCP-ADC-style auth.
+    allowPluginSyntheticAuth:
+      params.allowPluginSyntheticAuth ?? params.allowAuthProfileFallback !== false,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
@@ -1870,6 +1913,7 @@ export async function getApiKeyForModel(params: {
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
+  allowPluginSyntheticAuth?: boolean;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
@@ -1884,6 +1928,7 @@ export async function getApiKeyForModel(params: {
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
     allowAuthProfileFallback: params.allowAuthProfileFallback,
+    allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,
