@@ -127,7 +127,9 @@ export function buildMcpHttpFetch(params: {
       init: request.init,
       fetchImpl: fetchWithUndiciGuard,
       maxRedirects: MCP_HTTP_MAX_REDIRECTS,
-      allowCrossOriginUnsafeRedirectReplay: true,
+      // MCP transport keeps the secure default: a cross-origin 30x redirect must
+      // not replay the original POST body/method, so the fetch-guard strips both.
+      allowCrossOriginUnsafeRedirectReplay: false,
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
       ...(request.signal ? { signal: request.signal } : {}),
