@@ -135,7 +135,11 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({ runId: "enabled-audit", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentAuditEvent({
+      runId: "enabled-audit",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     expect(auditTestState.recorded).toBe(1);
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
@@ -149,9 +153,13 @@ describe("startGatewayEventSubscriptions", () => {
     emitAgentAuditEvent({
       runId: "disabled-private",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
-    emitAgentEvent({ runId: "disabled-public", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "disabled-public",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
     expect(auditTestState.recorded).toBe(0);
     await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
     warn.mockClear();
@@ -163,7 +171,11 @@ describe("startGatewayEventSubscriptions", () => {
   it("logs lazy agent event handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
