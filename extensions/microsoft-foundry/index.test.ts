@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -37,6 +37,7 @@ const {
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -48,6 +49,7 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     execFileSync: execFileSyncMock,
+    spawn: spawnMock,
   };
 });
 
@@ -2043,4 +2045,84 @@ describe("isAnthropicFoundryDeployment", () => {
     },
   );
 });
+describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
+  it("reassembles split-byte UTF-8 across spawned process stderr chunks", async () => {
+    const { PassThrough } = await import("node:stream");
+    const { EventEmitter } = await import("node:events");
+
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+
+    // Build a fake ChildProcess that mirrors spawn()'s return shape
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      pid: 99999,
+    });
+
+    spawnMock.mockReturnValue(child as any);
+
+    const loginPromise = azLoginDeviceCodeWithOptions({});
+
+    // Write a 4-byte UTF-8 smiley (U+1F60A = 0xF0 0x9F 0x98 0x8A)
+    // split across two stderr writes at the exact byte boundary where
+    // raw Buffer.toString() would produce U+FFFD per chunk.
+    // With setEncoding("utf8") the stream decoder reassembles the full
+    // code point before emitting the data event.
+    stderr.write(Buffer.from([0xf0, 0x9f]));
+    stderr.write(Buffer.from([0x98, 0x8a]));
+    stderr.end();
+    stdout.end();
+
+    child.emit("close", 1);
+
+    const err = await loginPromise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    // The error message contains the cleanly reassembled smiley, not U+FFFD
+    expect((err as Error).message).toBe("az login exited with code 1: 😊");
+  });
+
+  it("real-spawn: setEncoding prevents split-byte corruption in child process output", async () => {
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+
+    // Spawn a real Node.js child that writes a 4-byte smiley split across
+    // two chunks with a delay, simulating the same pipe behavior that
+    // azLoginDeviceCodeWithOptions would see from a real Azure CLI process.
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+const out = Buffer.from([0xf0, 0x9f, 0x98, 0x8a]);
+process.stdout.write(out.subarray(0, 2));
+setTimeout(() => {
+  process.stdout.write(out.subarray(2));
+  process.stdout.end();
+}, 10);
+`,
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    // Same stateful decoder that the production fix applies
+    child.stdout?.setEncoding("utf8");
+
+    const chunks: string[] = [];
+    child.stdout?.on("data", (chunk: string) => {
+      chunks.push(chunk);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.on("close", () => resolve());
+      child.on("error", reject);
+    });
+
+    // Without setEncoding each partial Buffer would .toString() to U+FFFD;
+    // with it the decoder reassembles the full code point.
+    expect(chunks.join("")).toBe("\u{1F60A}");
+    expect(chunks.join("")).not.toContain("�");
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
