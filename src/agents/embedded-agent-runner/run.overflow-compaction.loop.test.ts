@@ -1,5 +1,9 @@
 // Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ToolOutcomeObservation,
+  ToolOutcomeObserver,
+} from "../agent-tools.before-tool-call.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -76,6 +80,24 @@ function expectTruncationScopeSessionFile(callIndex: number, sessionFile: string
 
 function makeUserMessage(content: string = baseParams.prompt) {
   return { role: "user" as const, content, timestamp: 1 };
+}
+
+function emitRepeatedToolFailures(
+  onToolOutcome: ToolOutcomeObserver | undefined,
+  count: number,
+): void {
+  const observation: ToolOutcomeObservation = {
+    toolName: "message",
+    argsHash: "same-target",
+    resultHash: "same-error",
+    isError: true,
+  };
+  for (let i = 0; i < count; i += 1) {
+    onToolOutcome?.({
+      ...observation,
+      toolCallOrdinal: i,
+    });
+  }
 }
 
 describe("overflow compaction in run loop", () => {
@@ -222,6 +244,47 @@ describe("overflow compaction in run loop", () => {
     });
 
     expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
+  });
+
+  it("does not abort deterministic live tool failures unless loop detection is enabled", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      emitRepeatedToolFailures(
+        (attemptParams as { onToolOutcome?: ToolOutcomeObserver }).onToolOutcome,
+        5,
+      );
+      return makeAttemptResult({ promptError: null });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...baseParams,
+      config: undefined,
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("aborts deterministic live tool failures when loop detection is enabled", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      emitRepeatedToolFailures(
+        (attemptParams as { onToolOutcome?: ToolOutcomeObserver }).onToolOutcome,
+        5,
+      );
+      return makeAttemptResult({ promptError: null });
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: {
+          tools: {
+            loopDetection: {
+              enabled: true,
+            },
+          },
+        } as never,
+      }),
+    ).rejects.toThrow("CRITICAL: tool message failed 5 times");
   });
 
   it("does not wait for post-run auth-profile success bookkeeping before returning", async () => {

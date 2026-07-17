@@ -1055,7 +1055,22 @@ export async function runPreflightCompactionIfNeeded(params: {
       ownerNumbers: params.followupRun.run.ownerNumbers,
       deferEmbeddedHookSessionReset: (request) =>
         hookSessionResetQueue.deferResetSession(
-          withEmbeddedHookSessionResetAssertion(request, assertCurrentHookResetSession),
+          withEmbeddedHookSessionResetAssertion(
+            {
+              ...request,
+              onCommitted: (commit) => {
+                request.onCommitted?.(commit);
+                params.opts?.onSessionMetadataChanges?.([
+                  {
+                    sessionKey: commit.key,
+                    ...(request.agentId ? { agentId: request.agentId } : {}),
+                    reason: request.reason,
+                  },
+                ]);
+              },
+            },
+            assertCurrentHookResetSession,
+          ),
         ),
       abortSignal: params.replyOperation.abortSignal,
     });

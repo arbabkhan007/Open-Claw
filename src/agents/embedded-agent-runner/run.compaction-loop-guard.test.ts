@@ -178,9 +178,18 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: {
+          tools: {
+            loopDetection: {
+              enabled: true,
+            },
+          },
+        } as never,
+      }),
+    ).rejects.toBeInstanceOf(PostCompactionLoopPersistedError);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
@@ -464,6 +473,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       config: {
         tools: {
           loopDetection: {
+            enabled: true,
             postCompactionGuard: { windowSize: 2 },
           },
         },
@@ -512,6 +522,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       config: {
         tools: {
           loopDetection: {
+            enabled: true,
             postCompactionGuard: { windowSize: 2 },
           },
         },
@@ -635,9 +646,12 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: { tools: { loopDetection: { enabled: true } } } as never,
+      }),
+    ).rejects.toBeInstanceOf(PostCompactionLoopPersistedError);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);

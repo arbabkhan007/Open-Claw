@@ -36,9 +36,14 @@ const ensureMemoryFlushTargetFileMock = vi.fn();
 const emitAgentEventMock = vi.fn();
 const TEST_MAX_FLUSH_FAILURES = 3;
 const gatewaySessionResetMocks = vi.hoisted(() => ({
-  performGatewaySessionReset: vi.fn(async (_request: { assertCurrent?: () => void }) => ({
-    ok: true,
-  })),
+  performGatewaySessionReset: vi.fn(
+    async (_request: {
+      assertCurrent?: () => void;
+      onCommitted?: (commit: { key: string; sessionId: string }) => void;
+    }) => ({
+      ok: true,
+    }),
+  ),
 }));
 
 vi.mock("../../gateway/session-reset-service.js", () => ({
@@ -159,6 +164,7 @@ type CompactEmbeddedAgentSessionParams = {
     reason: "new" | "reset";
     commandSource: string;
     assertCurrent?: () => void;
+    onCommitted?: (commit: { key: string; sessionId: string }) => void;
   }) => void;
   modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
@@ -1460,6 +1466,81 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(gatewaySessionResetMocks.performGatewaySessionReset).toHaveBeenCalledOnce();
+  });
+
+  it("notifies subscribers when preflight after-compaction resets commit", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+    };
+    const metadataChanges = vi.fn();
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:main",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          tokensAfter: 42,
+        },
+      };
+    });
+    gatewaySessionResetMocks.performGatewaySessionReset.mockImplementationOnce(async (request) => {
+      request.onCommitted?.({
+        key: "agent:main:main",
+        sessionId: "session-reset",
+      });
+      return { ok: true };
+    });
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      opts: { onSessionMetadataChanges: metadataChanges },
+    });
+
+    expect(metadataChanges).toHaveBeenCalledWith([
+      {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        reason: "new",
+      },
+    ]);
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {

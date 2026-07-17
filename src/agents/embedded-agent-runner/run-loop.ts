@@ -200,10 +200,10 @@ export async function runPreparedEmbeddedLoop(
   });
   const postCompactionGuard = createPostCompactionLoopGuard(
     resolvedLoopDetectionConfig?.postCompactionGuard,
-    { enabled: resolvedLoopDetectionConfig?.enabled !== false },
+    { enabled: resolvedLoopDetectionConfig?.enabled === true },
   );
   const liveToolFailureGuard = createLiveToolFailureLoopGuard(resolvedLoopDetectionConfig, {
-    enabled: resolvedLoopDetectionConfig?.enabled !== false,
+    enabled: resolvedLoopDetectionConfig?.enabled === true,
   });
   let postCompactionAbortController: AbortController | undefined;
   let toolOutcomeAbortError:
