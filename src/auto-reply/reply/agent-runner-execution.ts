@@ -257,7 +257,10 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
         runtimeConfig,
         liveModelSwitchRuntimeEntry,
         runId,
-        runAbortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+        runAbortSignal:
+          params.replyOperation?.abortSignal && params.opts?.abortSignal
+            ? AbortSignal.any([params.replyOperation.abortSignal, params.opts.abortSignal])
+            : (params.replyOperation?.abortSignal ?? params.opts?.abortSignal),
         currentTurnImages,
         state: fallbackCycleState,
         presentation,
