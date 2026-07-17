@@ -24,6 +24,8 @@ export type McpServerToolFilterConfig = {
 export type McpServerConfig = {
   /** Set false to keep the saved definition while excluding it from runtime/probe sessions. */
   enabled?: boolean;
+  /** Operator alias: `disabled: true` is folded into `enabled: false`, excluding it from runtime/probe sessions. */
+  disabled?: boolean;
   /** Stdio transport: command to spawn. */
   command?: string;
   /** Stdio transport: arguments for the command. */

@@ -4,6 +4,10 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
+  canonicalizeConfiguredMcpServer,
+  normalizeConfiguredMcpServers,
+} from "./mcp-config-normalize.js";
+import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -361,6 +365,57 @@ describe("config mcp config", () => {
         clientCert: "/tmp/client.crt",
         clientKey: "/tmp/client.key",
       });
+    });
+  });
+
+  it("honors the disabled alias so a disabled server is not spawn-eligible", async () => {
+    // Every spawn path reads configured servers through normalizeConfiguredMcpServers
+    // and then keeps only entries with `enabled !== false`.
+    const spawnEligible = (servers: Record<string, Record<string, unknown>>) =>
+      Object.entries(servers)
+        .filter(([, server]) => server.enabled !== false)
+        .map(([name]) => name);
+
+    const normalized = normalizeConfiguredMcpServers({
+      active: { command: "uvx", args: ["active-mcp"] },
+      off: { command: "uvx", args: ["off-mcp"], disabled: true },
+    });
+
+    // The disabled alias folds into the canonical `enabled: false` flag.
+    expect(normalized.off).toEqual({ command: "uvx", args: ["off-mcp"], enabled: false });
+    expect(normalized.active).not.toHaveProperty("disabled");
+
+    // ... so the spawn-selection predicate drops it while keeping active servers.
+    expect(spawnEligible(normalized)).toEqual(["active"]);
+  });
+
+  it("canonicalizes the disabled alias when saving MCP config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          command: "uvx",
+          args: ["remote-mcp"],
+          disabled: true,
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        command: "uvx",
+        args: ["remote-mcp"],
+        enabled: false,
+      });
+
+      // The write-path canonicalizer folds the alias the same way.
+      expect(
+        canonicalizeConfiguredMcpServer({ command: "uvx", args: ["x"], disabled: true }),
+      ).toEqual({ command: "uvx", args: ["x"], enabled: false });
     });
   });
 });
