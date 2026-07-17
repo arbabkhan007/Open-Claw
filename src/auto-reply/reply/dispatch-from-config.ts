@@ -784,7 +784,12 @@ async function dispatchReplyFromConfigInner(
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
+    const effectiveAbortSignal = getDispatchAbortSignal();
+    if (effectiveAbortSignal?.aborted) {
+      return false;
+    }
     const result = await routeReplyToOriginating(payload, {
+      abortSignal: effectiveAbortSignal,
       kind: mode === "terminal" ? "final" : "tool",
     });
     if (result) {
@@ -794,6 +799,9 @@ async function dispatchReplyFromConfigInner(
         );
       }
       return result.ok;
+    }
+    if (effectiveAbortSignal?.aborted) {
+      return false;
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"
@@ -1136,7 +1144,10 @@ async function dispatchReplyFromConfigInner(
         } satisfies ReplyPayload;
         // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
         // their prefix, so seed that live context only when no cross-channel route is used.
-        const result = await routeReplyToOriginating(payload, { responsePrefixContext });
+        const result = await routeReplyToOriginating(payload, {
+          abortSignal: getDispatchAbortSignal(),
+          responsePrefixContext,
+        });
         if (result) {
           queuedFinal = result.ok;
           if (isRoutedReplyDelivered(result)) {
