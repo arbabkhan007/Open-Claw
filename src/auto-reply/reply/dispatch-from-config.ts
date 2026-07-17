@@ -1161,7 +1161,12 @@ async function dispatchReplyFromConfigInner(
         } else {
           markInboundDedupeReplayUnsafe();
           params.replyOptions?.onModelSelected?.(modelSelection);
-          queuedFinal = dispatcher.sendFinalReply(payload);
+          // Post-route abort guard: if the signal fired during routeReply,
+          // suppress the direct-dispatcher fallback so the acknowledgement
+          // is not delivered on the wrong surface.
+          if (!getDispatchAbortSignal()?.aborted) {
+            queuedFinal = dispatcher.sendFinalReply(payload);
+          }
         }
       } else {
         logVerbose(
