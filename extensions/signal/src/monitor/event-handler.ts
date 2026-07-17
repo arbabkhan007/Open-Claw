@@ -36,7 +36,7 @@ import {
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isReplySessionInitConflictError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -102,13 +102,7 @@ import type {
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
-function isSignalReplySessionInitConflictError(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-}
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -784,7 +778,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           return;
         }
         lastError = err;
-        if (!isSignalReplySessionInitConflictError(err)) {
+        if (!isReplySessionInitConflictError(err)) {
           throw err;
         }
       }
@@ -802,7 +796,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     try {
       await flushSignalInboundEntries(entries);
     } catch (err) {
-      if (!isSignalReplySessionInitConflictError(err)) {
+      if (!isReplySessionInitConflictError(err)) {
         throw err;
       }
       if (deps.abortSignal?.aborted) {

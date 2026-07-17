@@ -15,7 +15,10 @@ import {
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  isReplySessionInitConflictError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -109,7 +112,6 @@ const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
@@ -123,13 +125,7 @@ function resolveRetryableWhatsAppInboundError(
   if (error instanceof WhatsAppRetryableInboundError) {
     return error;
   }
-  const hasSessionInitConflict = collectErrorGraphCandidates(error, (current) => [
-    current.cause,
-    current.error,
-  ]).some((candidate) =>
-    REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-  if (!hasSessionInitConflict) {
+  if (!isReplySessionInitConflictError(error)) {
     return null;
   }
   return new WhatsAppRetryableInboundError(formatErrorMessage(error), { cause: error });
