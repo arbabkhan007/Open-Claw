@@ -151,6 +151,7 @@ export async function queryOllamaModelShowInfo(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return {};
       }
       const data = await readProviderJsonResponse<{
@@ -338,6 +339,7 @@ export async function fetchOllamaModels(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { reachable: true, models: [] };
       }
       const data = await readProviderJsonResponse<OllamaTagsResponse>(
