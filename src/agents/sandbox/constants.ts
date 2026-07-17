@@ -27,6 +27,7 @@ export const DEFAULT_TOOL_ALLOW = [
   "edit",
   "apply_patch",
   "image",
+  "message",
   "sessions_list",
   "sessions_history",
   "sessions_search",
