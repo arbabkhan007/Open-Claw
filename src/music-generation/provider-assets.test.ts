@@ -158,7 +158,9 @@ describe("downloadGeneratedMusicAsset", () => {
         });
         // Drip bytes forever so a body read would consume the full deadline.
         const drip = () => {
-          if (res.writableEnded || res.destroyed) return;
+          if (res.writableEnded || res.destroyed) {
+            return;
+          }
           res.write("e");
           dripTimers.add(setTimeout(drip, 15));
         };
