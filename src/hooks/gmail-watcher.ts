@@ -70,6 +70,13 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
+  let spawnFailed = false;
+  // Carry a bounded tail across stderr chunks so split patterns such as
+  // "address alre" + "ady in use" are classified before the close handler
+  // decides whether to stop restarts or to schedule a 5 s respawn. Restart
+  // policy waits for `close` (stdio drained) rather than `exit`, because Node
+  // can deliver the final stderr fragment after `exit`.
+  let stderrTail = "";
   const invocation = resolveGogServeInvocation(args);
 
   const child = spawn(invocation.command, invocation.args, {
@@ -93,26 +100,42 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.error(`gog stderr error: ${String(err)}`);
   });
   child.stderr?.on("data", (data: Buffer) => {
-    const line = data.toString().trim();
+    const chunk = data.toString();
+    // Classify the untruncated combined text so a cross-boundary marker is
+    // detected even when the combined length exceeds the 512-byte retention
+    // window.  Only then truncate the tail for bounded memory.
+    const combined = stderrTail + chunk;
+    if (!addressInUse && isAddressInUseError(combined)) {
+      addressInUse = true;
+    }
+    stderrTail = combined.slice(-512);
+    const line = chunk.trim();
     if (!line) {
       return;
-    }
-    if (isAddressInUseError(line)) {
-      addressInUse = true;
     }
     log.warn(`[gog] ${line}`);
   });
 
   child.on("error", (err) => {
+    // A failed spawn still emits `close`, but has no pid. Preserve the
+    // non-retry behavior for launch failures without suppressing restarts
+    // after errors from an already-running child.
+    if (child.pid === undefined) {
+      spawnFailed = true;
+    }
     log.error(`gog process error: ${String(err)}`);
   });
 
-  child.on("exit", (code, signal) => {
+  child.on("close", (code, signal) => {
     // If a newer watcher has replaced this child, do not respawn.
     if (watcherProcess !== null && watcherProcess !== child) {
       return;
     }
     if (shuttingDown) {
+      return;
+    }
+    if (spawnFailed) {
+      watcherProcess = null;
       return;
     }
     if (addressInUse) {

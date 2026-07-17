@@ -115,7 +115,7 @@ describe("startGmailWatcher", () => {
         reason: "startup cancelled",
       });
 
-      spawnedChildren[0]?.emit("exit", 1, null);
+      spawnedChildren[0]?.emit("close", 1, null);
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(mocks.spawn).toHaveBeenCalledTimes(2);
@@ -352,7 +352,7 @@ describe("startGmailWatcher", () => {
       expect(spawnedChildren).toHaveLength(1);
 
       // Process crashes (exit code 1). This queues a 5s respawn timeout.
-      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("exit", 1, null);
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("close", 1, null);
 
       // Before the 5s timer fires, a config reload triggers re-entry.
       // The re-entry guard should cancel the stale respawn timeout.
@@ -393,5 +393,192 @@ describe("startGmailWatcher", () => {
     });
 
     await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });
+  });
+
+  it("does not respawn when the child process fails to spawn", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<EventEmitter & { kill: ReturnType<typeof vi.fn> }> = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const mockedChild = Object.assign(child, { kill: vi.fn() });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      spawnedChildren[0]?.emit("error", new Error("spawn gog ENOENT"));
+      spawnedChildren[0]?.emit("close", -2, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops restarts when address-in-use marker is split across stderr chunks", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      // Emit the "address already in use" marker split across two chunks
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      stderr?.emit("data", Buffer.from("address alre"));
+      stderr?.emit("data", Buffer.from("ady in use\n"));
+
+      // Close (stdio drained) should detect addressInUse and stop restarts.
+      spawnedChildren[0]?.emit("close", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1); // No respawn
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops restarts when final bind marker arrives after exit but before close", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      // First fragment only — incomplete marker at exit time.
+      stderr?.emit("data", Buffer.from("address alre"));
+      spawnedChildren[0]?.emit("exit", 1, null);
+      // Final fragment arrives after exit (Node allows this); close drains stdio.
+      stderr?.emit("data", Buffer.from("ady in use\n"));
+      spawnedChildren[0]?.emit("close", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1); // No respawn
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops restarts when cross-boundary marker completes but combined exceeds retention window", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      // First chunk — marker prefix only ("address alre", 12 bytes).
+      stderr?.emit("data", Buffer.from("address alre"));
+      // Second chunk completes the marker ("ady in use ") then adds noise so
+      // the combined length (~824 bytes) exceeds the 512-byte retention window.
+      // The trailing half ("ady in use" + padding) does NOT independently
+      // match the address-in-use regex, so a truncate-before-classify bug would
+      // miss the completed marker and still respawn.
+      const tail = "ady in use " + "x".repeat(800);
+      stderr?.emit("data", Buffer.from(tail));
+
+      // Close (stdio drained) must detect addressInUse from the untruncated
+      // combined text and stop restarts.
+      spawnedChildren[0]?.emit("close", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1); // No respawn
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still respawns on non-bind stderr split across chunks", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      // Emit a non-bind error split across chunks
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      stderr?.emit("data", Buffer.from("some erro"));
+      stderr?.emit("data", Buffer.from("r message\n"));
+
+      spawnedChildren[0]?.emit("close", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(2); // Respawn happened
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
