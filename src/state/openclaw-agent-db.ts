@@ -83,6 +83,7 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 11;
+const OPENCLAW_AGENT_MAX_COMPATIBLE_SCHEMA_VERSION = 12;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -181,14 +182,22 @@ function logSlowAgentDatabaseOpen(params: {
 
 function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
+  if (userVersion > OPENCLAW_AGENT_MAX_COMPATIBLE_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
       "OpenClaw agent database",
       pathname,
       userVersion,
-      OPENCLAW_AGENT_SCHEMA_VERSION,
+      OPENCLAW_AGENT_MAX_COMPATIBLE_SCHEMA_VERSION,
     );
   }
+}
+
+function isSupportedCurrentAgentSchemaVersion(schemaVersion: number | null): boolean {
+  return (
+    schemaVersion !== null &&
+    schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION &&
+    schemaVersion <= OPENCLAW_AGENT_MAX_COMPATIBLE_SCHEMA_VERSION
+  );
 }
 
 function migratedSessionColumn(
@@ -650,22 +659,22 @@ export function assertOpenClawAgentDatabaseForMaintenance(
   assertExistingSchemaOwner(metadata, agentId, options.pathname);
 
   const userVersion = readSqliteUserVersion(database);
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
+  if (userVersion > OPENCLAW_AGENT_MAX_COMPATIBLE_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
       "OpenClaw agent database",
       options.pathname,
       userVersion,
-      OPENCLAW_AGENT_SCHEMA_VERSION,
+      OPENCLAW_AGENT_MAX_COMPATIBLE_SCHEMA_VERSION,
     );
   }
-  if (userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+  if (!isSupportedCurrentAgentSchemaVersion(userVersion)) {
     throw new Error(
       `OpenClaw agent database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+  if (metadata.schemaVersion !== userVersion) {
     throw new Error(
-      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
+      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
   assertSqliteSchemaContains(
@@ -753,7 +762,10 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       }
       backfillSessionEntryProvenance(db, previousVersion);
       const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+      const schemaVersion = isSupportedCurrentAgentSchemaVersion(previousVersion)
+        ? previousVersion
+        : OPENCLAW_AGENT_SCHEMA_VERSION;
+      db.exec(`PRAGMA user_version = ${schemaVersion};`);
       const now = Date.now();
       executeSqliteQuerySync(
         db,
@@ -762,7 +774,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
           .values({
             meta_key: "primary",
             role: "agent",
-            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+            schema_version: schemaVersion,
             agent_id: agentId,
             app_version: null,
             created_at: now,
@@ -771,7 +783,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
           .onConflict((conflict) =>
             conflict.column("meta_key").doUpdateSet({
               role: "agent",
-              schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+              schema_version: schemaVersion,
               agent_id: agentId,
               app_version: null,
               updated_at: now,
@@ -800,13 +812,19 @@ export function ensureOpenClawAgentDatabaseSchema(
   ensureAgentSchema(db, agentId, pathname);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   if (options.register === true) {
-    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+    registerAgentDatabase({
+      agentId,
+      path: pathname,
+      schemaVersion: readSqliteUserVersion(db),
+      env: options.env,
+    });
   }
 }
 
 function registerAgentDatabase(params: {
   agentId: string;
   path: string;
+  schemaVersion: number;
   env?: NodeJS.ProcessEnv;
 }): void {
   let sizeBytes: number | null = null;
@@ -826,13 +844,13 @@ function registerAgentDatabase(params: {
           .values({
             agent_id: params.agentId,
             path: params.path,
-            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+            schema_version: params.schemaVersion,
             last_seen_at: lastSeenAt,
             size_bytes: sizeBytes,
           })
           .onConflict((conflict) =>
             conflict.columns(["agent_id", "path"]).doUpdateSet({
-              schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+              schema_version: params.schemaVersion,
               last_seen_at: lastSeenAt,
               size_bytes: sizeBytes,
             }),
@@ -1051,7 +1069,12 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   try {
-    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+    registerAgentDatabase({
+      agentId,
+      path: pathname,
+      schemaVersion: readSqliteUserVersion(db),
+      env: options.env,
+    });
   } catch (error) {
     closeCachedOpenClawAgentDatabase(database);
     throw error;
