@@ -109,7 +109,7 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
 const runLaunchctlQuietly = (args: string[]) =>
-  runExec("launchctl", args, { logOutput: false }).catch(() => undefined);
+  runExec("launchctl", args, { logOutput: false, timeoutMs: 5_000 }).catch(() => undefined);
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
