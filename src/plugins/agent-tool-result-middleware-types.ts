@@ -43,4 +43,10 @@ export type AgentToolResultMiddlewareOptions = {
   runtimes?: AgentToolResultMiddlewareRuntime[];
   /** @deprecated Use runtimes. */
   harnesses?: AgentToolResultMiddlewareHarness[];
+  /**
+   * Exact tool names this middleware targets; omitted means every tool.
+   * Scoped middleware is skipped for non-matching tools and lets harness
+   * adapters avoid native hook fan-out for uncovered tools.
+   */
+  matcher?: readonly string[];
 };

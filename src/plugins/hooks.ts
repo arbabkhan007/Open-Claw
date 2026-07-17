@@ -94,6 +94,11 @@ import type {
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
 } from "./hook-types.js";
+import {
+  pluginToolMatcherCoversTool,
+  pluginToolScopeFromMatchers,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 // Re-export types for consumers
 
@@ -106,6 +111,8 @@ type HookRunnerLogger = {
 type HookFailurePolicy = "fail-open" | "fail-closed";
 export type VoidHookRunOptions = {
   unrefTimeout?: boolean;
+  /** When set, hooks with a tool matcher that excludes this tool are skipped. */
+  matcherToolName?: string;
 };
 
 type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
@@ -181,6 +188,8 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
+  /** When set, hooks with a tool matcher that excludes this tool are skipped. */
+  matcherToolName?: string;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -226,6 +235,16 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
   pluginId: string,
 ): PluginHookRegistration<K>[] {
   return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
+}
+
+function filterHooksByToolMatcher<K extends PluginHookName>(
+  hooks: PluginHookRegistration<K>[],
+  matcherToolName: string | undefined,
+): PluginHookRegistration<K>[] {
+  if (matcherToolName === undefined) {
+    return hooks;
+  }
+  return hooks.filter((hook) => pluginToolMatcherCoversTool(hook.matcher, matcherToolName));
 }
 
 /**
@@ -547,7 +566,10 @@ export function createHookRunner(
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     optionsValue: VoidHookRunOptions = {},
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = filterHooksByToolMatcher(
+      getHooksForName(registry, hookName),
+      optionsValue.matcherToolName,
+    );
     if (hooks.length === 0) {
       return;
     }
@@ -583,7 +605,10 @@ export function createHookRunner(
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     policy: ModifyingHookPolicy<K, TResult> = {},
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = filterHooksByToolMatcher(
+      getHooksForName(registry, hookName),
+      policy.matcherToolName,
+    );
     if (hooks.length === 0) {
       return undefined;
     }
@@ -1216,6 +1241,7 @@ export function createHookRunner(
       event,
       ctx,
       {
+        matcherToolName: event.toolName,
         mergeResults: (acc, next, reg) => {
           if (acc?.block === true) {
             return acc;
@@ -1250,7 +1276,7 @@ export function createHookRunner(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    return runVoidHook("after_tool_call", event, ctx, { matcherToolName: event.toolName });
   }
 
   /**
@@ -1582,6 +1608,15 @@ export function createHookRunner(
     return registry.typedHooks.some((h) => h.hookName === hookName);
   }
 
+  /** Union of registered tool matchers for a tool hook; any unscoped hook forces match-all. */
+  function getToolHookMatcherScope(
+    hookName: "before_tool_call" | "after_tool_call",
+  ): PluginToolMatcherScope {
+    return pluginToolScopeFromMatchers(
+      getHooksForName(registry, hookName).map((hook) => hook.matcher),
+    );
+  }
+
   /**
    * Get count of registered hooks for a given hook name.
    */
@@ -1643,6 +1678,7 @@ export function createHookRunner(
     runResolveExecEnv,
     // Utility
     hasHooks,
+    getToolHookMatcherScope,
     getHookCount,
   };
 }
