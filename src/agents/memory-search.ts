@@ -194,6 +194,30 @@ function getConfiguredMemoryEmbeddingProvider(
   }
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
+    // When a provider matches a built-in adapter (e.g. "openai") but has a custom
+    // base URL, skip the direct adapter so memory embeddings use the configured
+    // endpoint instead of the default public API.
+    // Only skip for explicitly OpenAI-compatible APIs declared on non-OpenAI
+    // provider ids.  The canonical "openai" adapter already reads baseUrl
+    // from config, so skipping it is unnecessary and drops the default model.
+    const providerConfig = cfg.models?.providers?.[providerId] as
+      | { baseUrl?: string; api?: string }
+      | undefined;
+    if (providerConfig) {
+      const hasCustomBaseUrl = Boolean(providerConfig.baseUrl?.trim());
+      const isExplicitOpenAICompat = Boolean(
+        providerConfig.api &&
+        (providerConfig.api === "openai" ||
+          providerConfig.api === "openai-completions" ||
+          providerConfig.api === "openai-responses"),
+      );
+      // Keep the direct adapter when the provider id IS "openai" — the
+      // adapter already honors canonical baseUrl.  Only skip for non-OpenAI
+      // provider ids explicitly set to api: "openai" with a custom baseUrl.
+      if (hasCustomBaseUrl && isExplicitOpenAICompat && providerId !== "openai") {
+        return undefined;
+      }
+    }
     return directAdapter;
   }
   const genericAdapter = getEmbeddingProvider(providerId, cfg);
