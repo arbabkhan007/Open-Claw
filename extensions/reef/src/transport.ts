@@ -1,4 +1,4 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithTimeout, readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import WebSocket from "ws";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
@@ -17,6 +17,9 @@ const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 // Stalled TCP peers that never complete the HTTP upgrade would otherwise hang
 // forever — ws defaults to no handshakeTimeout. Match sibling channel WS budgets.
 const REEF_WS_HANDSHAKE_MS = 30_000;
+// Stalled TCP peers that never complete the HTTP request would otherwise hang
+// forever; cap relay REST requests at a sibling-channel-consistent deadline.
+const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -170,11 +173,16 @@ export class ReefTransportClient {
     bytes: Uint8Array,
     headers: Record<string, string>,
   ): Promise<T> {
-    const response = await this.fetcher(new URL(path, this.relayUrl), {
-      method,
-      headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-      ...(bytes.length ? { body: bytes as BodyInit } : {}),
-    });
+    const response = await fetchWithTimeout(
+      new URL(path, this.relayUrl).toString(),
+      {
+        method,
+        headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
+        ...(bytes.length ? { body: bytes as BodyInit } : {}),
+      },
+      REEF_RELAY_REQUEST_TIMEOUT_MS,
+      this.fetcher,
+    );
     if (!response.ok) {
       let message = `relay HTTP ${response.status}`;
       try {
