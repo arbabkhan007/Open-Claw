@@ -1,6 +1,3 @@
-/**
- * Resolves memory-search source, sync, and ranking configuration.
- */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -53,6 +50,7 @@ export type ResolvedMemorySearchConfig = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   outputDimensionality?: number;
   local: {
     modelPath?: string;
@@ -397,6 +395,8 @@ function mergeConfig(
     inputType,
     queryInputType,
     documentInputType,
+    queryInstructionTemplate:
+      overrides?.queryInstructionTemplate ?? defaults?.queryInstructionTemplate ?? false,
     outputDimensionality,
     local,
     store,
