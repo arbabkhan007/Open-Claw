@@ -61,6 +61,10 @@ const NATIVE_HOOK_RELAY_EVENTS = [
 ] as const;
 
 const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
+const NATIVE_HOOK_RELAY_SYSTEMD_RUN_CANDIDATE_PATHS = [
+  "/usr/bin/systemd-run",
+  "/bin/systemd-run",
+] as const;
 
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
 export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
@@ -578,6 +582,22 @@ function resolveNativeHookRelayCommandTimeoutMs(
   return Math.min(configured, override);
 }
 
+function resolveNativeHookRelaySystemdRunPath(): string | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  if (!process.env.XDG_RUNTIME_DIR?.trim()) {
+    return undefined;
+  }
+  const configuredPath = process.env.OPENCLAW_SYSTEMD_RUN_PATH?.trim();
+  if (configuredPath) {
+    return existsSync(configuredPath) ? configuredPath : undefined;
+  }
+  return NATIVE_HOOK_RELAY_SYSTEMD_RUN_CANDIDATE_PATHS.find((candidatePath) =>
+    existsSync(candidatePath),
+  );
+}
+
 export function buildNativeHookRelayCommand(params: {
   provider: NativeHookRelayProvider;
   relayId: string;
@@ -611,7 +631,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
-  return shellQuoteArgs([
+  const relayCommand = [
     ...nicePrefix,
     ...argv,
     "hooks",
@@ -629,6 +649,24 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
       : []),
     "--timeout",
     String(timeoutMs),
+  ];
+  const systemdRunPath = resolveNativeHookRelaySystemdRunPath();
+  if (!systemdRunPath) {
+    return shellQuoteArgs(relayCommand);
+  }
+  return shellQuoteArgs([
+    systemdRunPath,
+    "--user",
+    "--scope",
+    "--quiet",
+    "-p",
+    "CPUQuota=25%",
+    "-p",
+    "MemoryMax=512M",
+    "-p",
+    "TasksMax=32",
+    "--",
+    ...relayCommand,
   ]);
 }
 
