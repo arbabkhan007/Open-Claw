@@ -12,6 +12,7 @@ import {
 import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { toErrorObject } from "./errors.js";
+import { readTailscaleStatusJson } from "./tailscale-status.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -117,11 +118,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       continue;
     }
     try {
-      const { stdout } = await exec(candidate, ["status", "--json"], {
-        timeoutMs: 5000,
-        maxBuffer: 400_000,
-      });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+      const parsed = await readTailscaleStatusJson(candidate, exec, parsePossiblyNoisyJsonObject);
       const self =
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)
