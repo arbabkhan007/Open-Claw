@@ -281,11 +281,66 @@ describe("tailscale helpers", () => {
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
   });
 
-  it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
+  it("hasTailscaleFunnelRouteForPort returns false on malformed status output", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout: "warning: stale state\n{not json}\n",
     });
 
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
+  });
+});
+
+function getTailscaleTestApi() {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.tailscaleTestApi")
+  ] as
+    | {
+        testing: {
+          parsePossiblyNoisyJsonObject: (stdout: string) => Record<string, unknown>;
+        };
+      }
+    | undefined;
+  if (!api) {
+    throw new Error("Tailscale test API not found — did the module initialize?");
+  }
+  return api.testing;
+}
+
+describe("parsePossiblyNoisyJsonObject", () => {
+  it("returns empty object when stdout is entirely malformed", async () => {
+    await import("./tailscale.js");
+    const { parsePossiblyNoisyJsonObject } = getTailscaleTestApi();
+    const result = parsePossiblyNoisyJsonObject("connection refused");
+    expect(result).toEqual({});
+  });
+
+  it("returns empty object when stdout is non-JSON error text", async () => {
+    await import("./tailscale.js");
+    const { parsePossiblyNoisyJsonObject } = getTailscaleTestApi();
+    const result = parsePossiblyNoisyJsonObject("tailscaled is not running");
+    expect(result).toEqual({});
+  });
+
+  it("extracts JSON object even when surrounded by noise", async () => {
+    await import("./tailscale.js");
+    const { parsePossiblyNoisyJsonObject } = getTailscaleTestApi();
+    const result = parsePossiblyNoisyJsonObject(
+      'warning: stale state\n{"Self": {"DNSName": "test.ts.net"}}\n',
+    );
+    expect(result).toEqual({ Self: { DNSName: "test.ts.net" } });
+  });
+
+  it("parses clean JSON object", async () => {
+    await import("./tailscale.js");
+    const { parsePossiblyNoisyJsonObject } = getTailscaleTestApi();
+    const result = parsePossiblyNoisyJsonObject('{"key": "value"}');
+    expect(result).toEqual({ key: "value" });
+  });
+
+  it("returns empty object for empty stdout", async () => {
+    await import("./tailscale.js");
+    const { parsePossiblyNoisyJsonObject } = getTailscaleTestApi();
+    const result = parsePossiblyNoisyJsonObject("");
+    expect(result).toEqual({});
   });
 });
