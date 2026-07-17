@@ -161,4 +161,93 @@ describe("resolveWebProviderDefinition", () => {
       },
     });
   });
+
+  it("falls back to auto-detect when runtime metadata names an unavailable provider", () => {
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: { selectedProvider: "removed-provider" },
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider, runtimeMetadata }) => ({
+        name: provider.id,
+        runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+      }),
+    });
+
+    expect(resolved).toEqual({
+      provider: {
+        id: "custom",
+      },
+      definition: {
+        name: "custom",
+        runtimeSelectedProvider: "custom",
+      },
+    });
+  });
+
+  it("clears stale provider credential metadata after runtime metadata fallback", () => {
+    const staleRuntimeMetadata = {
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+    };
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: staleRuntimeMetadata,
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider, runtimeMetadata }) => ({
+        name: provider.id,
+        runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+        runtimeSelectedProviderKeySource: runtimeMetadata?.selectedProviderKeySource,
+      }),
+    });
+
+    expect(resolved).toEqual({
+      provider: {
+        id: "custom",
+      },
+      definition: {
+        name: "custom",
+        runtimeSelectedProvider: "custom",
+        runtimeSelectedProviderKeySource: undefined,
+      },
+    });
+    expect(staleRuntimeMetadata).toEqual({
+      selectedProvider: "removed-provider",
+      selectedProviderKeySource: "missing",
+    });
+  });
+
+  it("does not replace an unavailable explicit provider id with auto-detect", () => {
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: undefined,
+      providerId: "missing-provider",
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider }) => ({
+        name: provider.id,
+      }),
+    });
+
+    expect(resolved).toBeNull();
+  });
 });

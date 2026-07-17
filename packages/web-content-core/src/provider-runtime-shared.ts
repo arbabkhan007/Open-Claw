@@ -280,12 +280,7 @@ export function resolveWebProviderDefinition<
     toolConfig: params.toolConfig,
     providers,
   });
-  const providerId =
-    params.providerId ?? params.runtimeMetadata?.selectedProvider ?? autoProviderId;
-  if (!providerId) {
-    return null;
-  }
-  const provider =
+  const resolveProvider = (providerId: string) =>
     providers.find((entry) => entry.id === providerId) ??
     providers.find(
       (entry) =>
@@ -297,14 +292,33 @@ export function resolveWebProviderDefinition<
           providerId,
         }),
     );
+  let provider: TProvider | undefined;
+  if (params.providerId !== undefined) {
+    provider = params.providerId ? resolveProvider(params.providerId) : undefined;
+  } else {
+    const runtimeProviderId = params.runtimeMetadata?.selectedProvider;
+    provider = runtimeProviderId ? resolveProvider(runtimeProviderId) : undefined;
+    if (!provider && autoProviderId) {
+      provider = resolveProvider(autoProviderId);
+    }
+  }
   if (!provider) {
     return null;
   }
+  const runtimeMetadata =
+    params.runtimeMetadata?.selectedProvider &&
+    params.runtimeMetadata.selectedProvider !== provider.id
+      ? ({
+          ...params.runtimeMetadata,
+          selectedProvider: provider.id,
+          selectedProviderKeySource: undefined,
+        } as TRuntimeMetadata)
+      : params.runtimeMetadata;
   const definition = params.createTool({
     provider,
     config: params.config,
     toolConfig: params.toolConfig,
-    runtimeMetadata: params.runtimeMetadata,
+    runtimeMetadata,
   });
   if (!definition) {
     return null;
