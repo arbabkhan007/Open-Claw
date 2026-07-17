@@ -26,7 +26,7 @@ type ReplyRunKey = string;
 
 type ReplyBackendKind = "embedded" | "cli";
 
-type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded" | "stuck_recovery";
 
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
@@ -111,7 +111,10 @@ type ReplyOperationFailureCode =
   | "run_stalled"
   | "run_failed";
 
-type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_for_stuck_recovery";
 
 type ReplyOperationResult =
   | { kind: "completed" }
@@ -193,6 +196,7 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): boolean;
   abortForRestart(): boolean;
+  abortForStuckRecovery(): boolean;
 };
 
 type ReplyRunRegistry = {
@@ -547,6 +551,7 @@ export function createReplyOperation(params: {
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
+  let stuckRecovery: { backend: ReplyBackendHandle; cancellingBackend: boolean } | undefined;
   const startedAtMs = Date.now();
   let lastActivityAtMs = startedAtMs;
   const upstreamAbortSignal = params.upstreamAbortSignal;
@@ -575,6 +580,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    stuckRecovery = undefined;
     terminalSettleTimer.clear();
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
@@ -619,18 +625,31 @@ export function createReplyOperation(params: {
     terminalSettleTimer.scheduleOnce(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
   };
 
+  const finishStuckRecovery = () => {
+    if (!stuckRecovery) {
+      return;
+    }
+    stuckRecovery = undefined;
+    terminalSettleTimer.clear();
+  };
+
   const abortWithReason = (
     reason: ReplyBackendCancelReason,
     abortReason: unknown,
     opts?: { abortedCode?: ReplyOperationAbortCode },
   ) => {
+    const backend = getAttachedBackend(operation);
+    const backendAlreadyRecovering = backend === stuckRecovery?.backend;
+    finishStuckRecovery();
     if (opts?.abortedCode && !result) {
       setResult({ kind: "aborted", code: opts.abortedCode });
       detachUpstreamAbort();
     }
     phase = "aborted";
     abortInternally(abortReason);
-    getAttachedBackend(operation)?.cancel(reason);
+    if (!backendAlreadyRecovering) {
+      backend?.cancel(reason);
+    }
   };
 
   const operation: ReplyOperation = {
@@ -785,10 +804,15 @@ export function createReplyOperation(params: {
           result.kind === "aborted"
             ? result.code === "aborted_for_restart"
               ? "restart"
-              : "user_abort"
+              : result.code === "aborted_for_stuck_recovery"
+                ? "stuck_recovery"
+                : "user_abort"
             : "superseded",
         );
         return;
+      }
+      if (stuckRecovery && handle !== stuckRecovery.backend) {
+        finishStuckRecovery();
       }
       recordActivity();
       attachedBackendByOperation.set(operation, handle);
@@ -802,6 +826,7 @@ export function createReplyOperation(params: {
       }
     },
     freezeAbort() {
+      finishStuckRecovery();
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
       finalizationLease.begin();
@@ -842,6 +867,9 @@ export function createReplyOperation(params: {
       }
     },
     abortByUser() {
+      if (stuckRecovery?.cancellingBackend) {
+        return false;
+      }
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
@@ -877,11 +905,52 @@ export function createReplyOperation(params: {
       }
       return true;
     },
+    abortForStuckRecovery() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
+      const phaseBeforeAbort = phase;
+      abortWithReason("stuck_recovery", new Error("Agent run aborted for stuck recovery"), {
+        abortedCode: "aborted_for_stuck_recovery",
+      });
+      if (
+        (isReplyOperationPreBackendPhase(phaseBeforeAbort) || !getAttachedBackend(operation)) &&
+        !retainStateUntilCompleteOperations.has(operation)
+      ) {
+        clearState();
+      } else {
+        scheduleTerminalSettle();
+      }
+      return true;
+    },
   };
 
   expireReplyOperationByOperation.set(operation, (reason) => {
     if (replyRunState.activeRunsByKey.get(currentSessionKey) !== operation) {
       return false;
+    }
+    const backend = getAttachedBackend(operation);
+    if (reason === "stuck_recovery" && phase === "running" && backend?.kind === "embedded") {
+      if (backend === stuckRecovery?.backend) {
+        return true;
+      }
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
+      const recovery = { backend, cancellingBackend: true };
+      stuckRecovery = recovery;
+      try {
+        backend.cancel("stuck_recovery");
+      } finally {
+        if (stuckRecovery === recovery) {
+          recovery.cancellingBackend = false;
+        }
+      }
+      scheduleTerminalSettle();
+      diag.warn(
+        `reply run stale recovery: cancelled active attempt sessionKey=${currentSessionKey} reason=${reason} phase=${phase} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
+      return true;
     }
     // Set the terminal result BEFORE cancelling the backend: cancel can
     // synchronously re-enter abortByUser() from the run loop's abort handler,
@@ -892,7 +961,9 @@ export function createReplyOperation(params: {
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }
-    getAttachedBackend(operation)?.cancel("superseded");
+    if (backend !== stuckRecovery?.backend) {
+      backend?.cancel(reason === "stuck_recovery" ? "stuck_recovery" : "superseded");
+    }
     abortInternally(createAbortError("Reply operation expired as stale"));
     diag.warn(
       `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
@@ -933,6 +1004,13 @@ export function createReplyOperation(params: {
           result,
         )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
       );
+      if (stuckRecovery && !result) {
+        abortFrozenOperations.add(operation);
+        detachUpstreamAbort();
+        setResult({ kind: "failed", code: "run_stalled" });
+        phase = "failed";
+        abortInternally(createAbortError("Reply operation stuck recovery did not settle"));
+      }
       clearState();
     },
   });
@@ -1162,10 +1240,19 @@ export function queueReplyRunMessage(
   return true;
 }
 
-export function abortReplyRunBySessionId(sessionId: string): boolean {
+export function abortReplyRunBySessionId(
+  sessionId: string,
+  reason: ReplyBackendCancelReason = "user_abort",
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   if (!operation) {
     return false;
+  }
+  if (reason === "restart") {
+    return operation.abortForRestart();
+  }
+  if (reason === "stuck_recovery") {
+    return operation.abortForStuckRecovery();
   }
   return operation.abortByUser();
 }

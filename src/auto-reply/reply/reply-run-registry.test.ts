@@ -499,6 +499,7 @@ describe("reply run registry", () => {
     expect(operation.abortSignal.aborted).toBe(false);
     expect(operation.abortByUser()).toBe(false);
     expect(operation.abortForRestart()).toBe(false);
+    expect(operation.abortForStuckRecovery()).toBe(false);
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
     expect(operation.phase).toBe("failed");
     expect(cancel).not.toHaveBeenCalled();
@@ -642,6 +643,41 @@ describe("reply run registry", () => {
     }
   });
 
+  it("force-releases a running stuck-recovery abort when the owner never returns", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:hung-stuck-recovery",
+        sessionId: "session-hung-stuck-recovery",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+
+      expect(operation.abortForStuckRecovery()).toBe(true);
+      expect(operation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_stuck_recovery",
+      });
+      expect(cancel).toHaveBeenCalledWith("stuck_recovery");
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - 1);
+      expect(replyRunRegistry.get("agent:main:hung-stuck-recovery")).toBe(operation);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(replyRunRegistry.get("agent:main:hung-stuck-recovery")).toBeUndefined();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps late owner complete harmless after forced terminal release", async () => {
     vi.useFakeTimers();
     try {
@@ -696,20 +732,176 @@ describe("reply run registry", () => {
       sessionId: "reentrant-session",
       resetTriggered: false,
     });
+    const cancel = vi.fn(() => {
+      operation.abortByUser();
+    });
     operation.attachBackend({
       kind: "embedded",
       // Mirrors the run loop's abort handler: backend cancellation propagates
       // synchronously back into a user-shaped abort on the same operation.
-      cancel: () => {
-        operation.abortByUser();
-      },
+      cancel,
       isStreaming: () => true,
     });
     operation.setPhase("running");
 
     expect(expireStaleReplyOperation(operation, "no_activity")).toBe(true);
+    expect(cancel).toHaveBeenCalledWith("superseded");
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
     expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBeUndefined();
+  });
+
+  it("keeps the reply caller live while a stuck embedded attempt hands off to fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:stuck-recovery-fallback",
+        sessionId: "session-stuck-recovery-fallback",
+        resetTriggered: false,
+      });
+      const primaryCancel = vi.fn(() => {
+        expect(operation.abortByUser()).toBe(false);
+      });
+      const primaryBackend = {
+        kind: "embedded" as const,
+        cancel: primaryCancel,
+        isStreaming: () => true,
+      };
+      operation.attachBackend(primaryBackend);
+      operation.setPhase("running");
+
+      expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+      expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+      expect(primaryCancel).toHaveBeenCalledWith("stuck_recovery");
+      expect(primaryCancel).toHaveBeenCalledTimes(1);
+      expect(operation.result).toBeNull();
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(replyRunRegistry.get("agent:main:stuck-recovery-fallback")).toBe(operation);
+
+      operation.detachBackend(primaryBackend);
+      const fallbackCancel = vi.fn();
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: fallbackCancel,
+        isStreaming: () => true,
+      });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+
+      expect(fallbackCancel).not.toHaveBeenCalled();
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(replyRunRegistry.get("agent:main:stuck-recovery-fallback")).toBe(operation);
+      operation.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets user cancellation terminate the reply during stuck recovery", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:user-aborts-stuck-recovery",
+      sessionId: "session-user-aborts-stuck-recovery",
+      resetTriggered: false,
+    });
+    const cancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+
+    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+    expect(operation.abortByUser()).toBe(true);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledWith("stuck_recovery");
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(operation.abortSignal.aborted).toBe(true);
+    operation.complete();
+  });
+
+  it("terminally cancels stuck recovery when the embedded owner never returns", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:stuck-recovery-owner-hung",
+        sessionId: "session-stuck-recovery-owner-hung",
+        resetTriggered: false,
+      });
+      const cancel = vi.fn();
+      operation.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+
+      expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledWith("stuck_recovery");
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(replyRunRegistry.get("agent:main:stuck-recovery-owner-hung")).toBeUndefined();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("terminally expires stuck recovery without a live embedded backend", () => {
+    const queuedOperation = createReplyOperation({
+      sessionKey: "agent:main:queued-stuck-recovery",
+      sessionId: "session-queued-stuck-recovery",
+      resetTriggered: false,
+    });
+
+    expect(expireStaleReplyOperation(queuedOperation, "stuck_recovery")).toBe(true);
+    expect(queuedOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(queuedOperation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:queued-stuck-recovery")).toBeUndefined();
+
+    const cliOperation = createReplyOperation({
+      sessionKey: "agent:main:cli-stuck-recovery",
+      sessionId: "session-cli-stuck-recovery",
+      resetTriggered: false,
+    });
+    const cliCancel = vi.fn();
+    cliOperation.attachBackend({
+      kind: "cli",
+      cancel: cliCancel,
+      isStreaming: () => true,
+    });
+    cliOperation.setPhase("running");
+
+    expect(expireStaleReplyOperation(cliOperation, "stuck_recovery")).toBe(true);
+    expect(cliCancel).toHaveBeenCalledWith("stuck_recovery");
+    expect(cliOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(cliOperation.abortSignal.aborted).toBe(true);
+    expect(replyRunRegistry.get("agent:main:cli-stuck-recovery")).toBeUndefined();
+  });
+
+  it("rejects stuck expiry while the embedded backend is finalizing", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:finalizing-stuck-expiry",
+      sessionId: "session-finalizing-stuck-expiry",
+      resetTriggered: false,
+    });
+    const cancel = vi.fn();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => false,
+      isAbortable: () => false,
+    });
+    operation.setPhase("running");
+
+    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(operation.result).toBeNull();
+    expect(operation.abortSignal.aborted).toBe(false);
+    operation.complete();
   });
 
   it("cancels terminal settle when the owner clears state first", async () => {
@@ -832,6 +1024,30 @@ describe("reply run registry", () => {
 
     operation.complete();
     expect(replyRunRegistry.isActive("agent:main:restart-finalizing")).toBe(false);
+  });
+
+  it("rejects stuck recovery aborts while the attached backend is finalizing", () => {
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:stuck-recovery-finalizing",
+      sessionId: "session-stuck-recovery-finalizing",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => false,
+      isAbortable: () => false,
+    });
+    operation.setPhase("running");
+
+    expect(operation.abortForStuckRecovery()).toBe(false);
+    expect(replyRunRegistry.isActive("agent:main:stuck-recovery-finalizing")).toBe(true);
+    expect(operation.result).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+
+    operation.complete();
+    expect(replyRunRegistry.isActive("agent:main:stuck-recovery-finalizing")).toBe(false);
   });
 
   it("keeps abort frozen after the backend detaches for reply delivery", () => {

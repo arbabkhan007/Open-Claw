@@ -1,14 +1,24 @@
 // Stuck session recovery integration tests cover end-to-end recovery diagnostics.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { FailoverError } from "../agents/failover-error.js";
+import { runWithModelFallback } from "../agents/model-fallback.js";
+import { makeModelFallbackCfg } from "../agents/test-helpers/model-fallback-config-fixture.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
-import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  getQueueSize,
+  resetCommandLane,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
   testing as recoveryTesting,
@@ -29,6 +39,14 @@ async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promi
     setImmediate(resolve);
   });
   expect(settled).toBe(false);
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("stuck session recovery integration", () => {
@@ -302,5 +320,131 @@ describe("stuck session recovery integration", () => {
 
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
+  });
+
+  it("keeps queued turns behind a reply that continues through model fallback", async () => {
+    const sessionKey = `agent:main:stuck-lane-${Date.now()}`;
+    const sessionId = `session-stuck-lane-${Date.now()}`;
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    setCommandLaneConcurrency(lane, 1);
+
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+
+    const primaryStarted = deferred();
+    const primaryCancelled = deferred();
+    const fallbackStarted = deferred();
+    const finishFallback = deferred();
+    const events: string[] = [];
+
+    const primaryBackend = {
+      kind: "embedded" as const,
+      cancel: vi.fn((reason?: string) => {
+        events.push(`primary-cancel:${reason ?? "unknown"}`);
+        operation.detachBackend(primaryBackend);
+        clearActiveEmbeddedRun(sessionId, primaryHandle, sessionKey, undefined, "stuck_recovery");
+        primaryCancelled.resolve();
+      }),
+      isStreaming: () => true,
+    };
+    const primaryHandle: EmbeddedAgentQueueHandle = {
+      queueMessage: async () => {},
+      isStreaming: primaryBackend.isStreaming,
+      isCompacting: () => false,
+      cancel: primaryBackend.cancel,
+      abort: primaryBackend.cancel,
+    };
+    operation.attachBackend(primaryBackend);
+    setActiveEmbeddedRun(sessionId, primaryHandle, sessionKey);
+
+    const fallbackBackend = {
+      kind: "embedded" as const,
+      cancel: vi.fn(),
+      isStreaming: () => true,
+    };
+    const fallbackHandle: EmbeddedAgentQueueHandle = {
+      queueMessage: async () => {},
+      isStreaming: fallbackBackend.isStreaming,
+      isCompacting: () => false,
+      cancel: fallbackBackend.cancel,
+      abort: fallbackBackend.cancel,
+    };
+
+    const run = vi.fn(async (provider: string, model: string) => {
+      if (provider === "probe" && model === "primary") {
+        primaryStarted.resolve();
+        await primaryCancelled.promise;
+        throw new FailoverError("primary model stalled", {
+          provider,
+          model,
+          reason: "timeout",
+        });
+      }
+      operation.attachBackend(fallbackBackend);
+      setActiveEmbeddedRun(sessionId, fallbackHandle, sessionKey);
+      events.push("fallback-started");
+      fallbackStarted.resolve();
+      await finishFallback.promise;
+      clearActiveEmbeddedRun(sessionId, fallbackHandle, sessionKey);
+      operation.detachBackend(fallbackBackend);
+      events.push("fallback-completed");
+      return "fallback ok";
+    });
+
+    const activeReply = enqueueCommandInLane(lane, async () => {
+      try {
+        const result = await runWithModelFallback({
+          cfg: makeModelFallbackCfg({
+            agents: {
+              defaults: {
+                model: {
+                  primary: "probe/primary",
+                  fallbacks: ["probe/fallback"],
+                },
+              },
+            },
+          }),
+          provider: "probe",
+          model: "primary",
+          abortSignal: operation.abortSignal,
+          run,
+        });
+        return result.result;
+      } finally {
+        operation.complete();
+      }
+    });
+
+    await primaryStarted.promise;
+    const queuedTurn = enqueueCommandInLane(lane, async () => {
+      events.push("queued-turn-started");
+      return "queued ok";
+    });
+    expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+
+    let queuedStartedBeforeFallbackCompleted = false;
+    let recoveryReleased = -1;
+    try {
+      const recovery = await recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        ageMs: 180_000,
+        queueDepth: 1,
+        allowActiveAbort: true,
+      });
+      recoveryReleased = recovery && "released" in recovery ? recovery.released : 0;
+      await fallbackStarted.promise;
+      queuedStartedBeforeFallbackCompleted = events.includes("queued-turn-started");
+    } finally {
+      finishFallback.resolve();
+    }
+
+    await expect(activeReply).resolves.toBe("fallback ok");
+    await expect(queuedTurn).resolves.toBe("queued ok");
+    expect(recoveryReleased).toBe(0);
+    expect(queuedStartedBeforeFallbackCompleted).toBe(false);
+    expect(events.indexOf("queued-turn-started")).toBeGreaterThan(
+      events.indexOf("fallback-completed"),
+    );
   });
 });

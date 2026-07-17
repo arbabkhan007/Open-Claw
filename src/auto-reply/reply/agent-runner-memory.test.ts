@@ -78,6 +78,7 @@ function createReplyOperation(): TestReplyOperation {
     markAcceptedSteeredInboundAudio: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
     markDeferredMaintenanceWaitEnded: vi.fn(),
+    abortForStuckRecovery: vi.fn(),
   };
 }
 

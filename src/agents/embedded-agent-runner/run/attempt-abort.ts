@@ -1,12 +1,16 @@
 /**
  * Releases attempt resources when an embedded-agent run aborts.
  */
-import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
+import {
+  countActivePotentialSideEffectToolExecutions,
+  countActiveToolExecutions,
+} from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
+import { classifyStuckRecoveryAbort } from "./stuck-recovery-abort.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AbortLockReleaseLog = {
@@ -16,6 +20,7 @@ type AbortLockReleaseLog = {
 export type EmbeddedAttemptAbortStatePort = {
   markAborted: () => void;
   markExternalAbort: () => void;
+  markIdleTimedOut: () => void;
   markTimedOut: () => void;
   markTimedOutDuringCompaction: () => void;
   markTimedOutDuringToolExecution: () => void;
@@ -43,6 +48,38 @@ function createTimeoutAbortReason(): Error {
   const error = new Error("request timed out");
   error.name = "TimeoutError";
   return error;
+}
+
+/** Routes watchdog recovery through existing timeout semantics only for replay-safe phases. */
+export function abortEmbeddedAttemptForStuckRecovery(input: {
+  abortRun: RunAbort;
+  modelCallActive: boolean;
+  compactionActive: boolean;
+  runId: string;
+  state: Pick<
+    EmbeddedAttemptAbortStatePort,
+    "markIdleTimedOut" | "markTimedOutDuringCompaction" | "markTimedOutDuringToolExecution"
+  >;
+}): boolean {
+  const classification = classifyStuckRecoveryAbort({
+    modelCallActive: input.modelCallActive,
+    compactionActive: input.compactionActive,
+    activePotentialSideEffectToolExecutions: countActivePotentialSideEffectToolExecutions(
+      input.runId,
+    ),
+  });
+  if (classification === "external_abort") {
+    return false;
+  }
+  if (classification === "model_idle_timeout") {
+    input.state.markIdleTimedOut();
+  } else if (classification === "compaction_timeout") {
+    input.state.markTimedOutDuringCompaction();
+  } else {
+    input.state.markTimedOutDuringToolExecution();
+  }
+  input.abortRun(true, createTimeoutAbortReason());
+  return true;
 }
 
 /** Owns the external AbortSignal listener and its handoff to the live session. */

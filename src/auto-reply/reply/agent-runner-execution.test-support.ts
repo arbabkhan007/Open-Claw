@@ -405,6 +405,7 @@ export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }
       fail: failMock,
       abortByUser: vi.fn(() => true),
       abortForRestart: vi.fn(() => true),
+      abortForStuckRecovery: vi.fn(),
       markTerminalRecovery: vi.fn(),
       markAcceptedSteeredInboundAudio: vi.fn(),
     },
