@@ -61,7 +61,14 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   // #82853 — Signal group IDs (opaque). Encoded to match prior behavior exactly.
   { channel: "signal", peerKinds: new Set(["group"]), span: "segment", unscoped: true },
   // #75670 — Matrix room IDs (opaque, embedded `:server`) plus thread event suffix.
-  { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
+  // #102313 — Matrix MXIDs on DM keys that carry the channel (per-channel-peer,
+  // per-account-channel-peer). Channel-agnostic per-peer keys cannot enroll here.
+  {
+    channel: "matrix",
+    peerKinds: new Set(["channel", "group", "direct"]),
+    span: "tail",
+    unscoped: true,
+  },
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
@@ -203,7 +210,8 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
         };
         // Preserve tails behind nested or malformed ownership wrappers without
         // treating an inner channel-shaped identity as a runtime route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
+        const scopedKind = peerKind === "direct" ? `(?:[^:]*:)?${kind}` : kind;
+        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${scopedKind}:`, "i");
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
