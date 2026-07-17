@@ -5,6 +5,7 @@ export {
   createPluginStateKeyedStore as createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
 export {
   createPluginBlobStoreForTests,
