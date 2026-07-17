@@ -998,7 +998,6 @@ function getWebSocketReadyState(socket: WebSocketLike): number | undefined {
 
 function isWebSocketReusable(socket: WebSocketLike): boolean {
   const readyState = getWebSocketReadyState(socket);
-  // If readyState is unavailable, assume the runtime keeps it open/reusable.
   return readyState === undefined || readyState === 1;
 }
 
@@ -1012,6 +1011,11 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
   } catch {}
 }
 
+function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketConnection): void {
+  if (websocketSessionCache.get(sessionId) === entry) {
+    websocketSessionCache.delete(sessionId);
+  }
+}
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -1021,7 +1025,7 @@ function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocke
       return;
     }
     closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-    websocketSessionCache.delete(sessionId);
+    deleteOwnedWebSocketSession(sessionId, entry);
   }, SESSION_WEBSOCKET_CACHE_TTL_MS);
 }
 
@@ -1145,7 +1149,7 @@ async function acquireWebSocket(
         release: ({ keep } = {}) => {
           if (!keep || !isWebSocketReusable(cached.socket)) {
             closeWebSocketSilently(cached.socket);
-            websocketSessionCache.delete(sessionId);
+            deleteOwnedWebSocketSession(sessionId, cached);
             return;
           }
           cached.busy = false;
@@ -1180,9 +1184,7 @@ async function acquireWebSocket(
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);
         }
-        if (websocketSessionCache.get(sessionId) === entry) {
-          websocketSessionCache.delete(sessionId);
-        }
+        deleteOwnedWebSocketSession(sessionId, entry);
         return;
       }
       entry.busy = false;
