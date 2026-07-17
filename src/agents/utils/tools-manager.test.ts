@@ -208,6 +208,30 @@ describe("ensureTool", () => {
     expect(release).toHaveBeenCalledOnce();
     expect(readFileSync(destination)).toEqual(Buffer.from(body));
   });
+  it("bounds release-check JSON response body to prevent unbounded buffering", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    // Assert that successful release-check responses go through a bounded JSON
+    // reader, so a compromised or misconfigured GitHub endpoint cannot force
+    // unbounded buffering through response.json().
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ tag_name: "v10.2.0" }), { status: 200 }),
+        release: releaseCheckRelease,
+        finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+      })
+      .mockResolvedValueOnce({
+        response: new Response("binary-bytes", { status: 200 }),
+        release: downloadRelease,
+        finalUrl: "https://github.com/sharkdp/fd/releases/download/v10.2.0/archive.tar.gz",
+      });
+
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+
+    expect(releaseCheckRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
 });
 
 describe("ensureTool exit-status handling", () => {
