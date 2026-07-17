@@ -52,6 +52,8 @@ function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: 5000,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -82,6 +84,8 @@ function processIdentity(pid) {
     const start = childProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       maxBuffer: 4096,
+      timeout: 5000,
+      killSignal: "SIGKILL",
     }).trim();
     return start || null;
   } catch (error) {
@@ -255,7 +259,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       const watchdogChildProcess = require("node:child_process");
       const identity = (pid) => {
         try {
-          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
+          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 5000, killSignal: "SIGKILL" }).trim() || null;
         } catch (error) {
           if (error && error.status === 1) return null;
           throw error;
@@ -317,7 +321,7 @@ if (
 }
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 5000, killSignal: "SIGKILL" }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {
@@ -329,6 +333,8 @@ function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
+    timeout: 5000,
+    killSignal: "SIGKILL",
   });
   const rows = new Map();
   for (const line of output.split("\n")) {
@@ -426,7 +432,7 @@ if (
 }
 function identity(pid) {
   try {
-    return require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
+    return require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 5000, killSignal: "SIGKILL" }).trim() || null;
   } catch (error) {
     if (error && error.status === 1) return null;
     throw error;
