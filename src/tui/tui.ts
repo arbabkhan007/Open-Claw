@@ -122,7 +122,10 @@ export function resolveCodexCliBin(): string | null {
     const lookupCmd =
       process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
     // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
+    const raw = execFileSync(lookupCmd, ["codex"], {
+      encoding: "utf8",
+      timeout: 5_000,
+    }).trim();
     return raw.split(/\r?\n/)[0] || null;
   } catch {
     return null;

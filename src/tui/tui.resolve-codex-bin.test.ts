@@ -41,7 +41,7 @@ describe("resolveCodexCliBin", () => {
     expect(execFileSyncMock).toHaveBeenCalledWith(
       path.win32.join("D:\\Windows", "System32", "where.exe"),
       ["codex"],
-      { encoding: "utf8" },
+      { encoding: "utf8", timeout: 5_000 },
     );
   });
 });
