@@ -45,7 +45,7 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { buildExecUpdateResult } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -660,8 +660,7 @@ export async function runExecProcess(opts: {
     if (session.backgrounded || session.exited || updatesDisabled) {
       return;
     }
-    const tailText = session.tail || session.aggregated;
-    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
+    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
@@ -670,19 +669,18 @@ export async function runExecProcess(opts: {
     // chain on process exit (Layer 1) and by `disableUpdates()` on abort
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
-    opts.onUpdate({
-      content: [
-        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
-      ],
-      details: {
+    opts.onUpdate(
+      buildExecUpdateResult({
         status: "running",
         sessionId,
         pid: session.pid ?? undefined,
         startedAt,
         cwd: session.cwd,
+        tailText: session.tail || session.aggregated,
         tail: session.tail,
-      },
-    });
+        warnings: opts.warnings,
+      }),
+    );
   };
 
   const handleStdout = (data: string) => {
