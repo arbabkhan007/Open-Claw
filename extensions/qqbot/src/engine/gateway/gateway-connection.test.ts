@@ -252,6 +252,54 @@ describe("GatewayConnection disconnect status", () => {
     await started;
   });
 
+  it("reconnects after the ws library terminates the connection on an oversize frame", async () => {
+    // When ws rejects a frame above maxPayload it emits an error, closes
+    // the connection with code 1006 (CLOSE_ABNORMAL), and the gateway
+    // must schedule a reconnect so the channel recovers automatically.
+    const onDisconnected = vi.fn();
+    const onError = vi.fn();
+    const firstWs = new FakeWebSocket();
+    const secondWs = new FakeWebSocket();
+    createQQWSClientMock.mockResolvedValueOnce(firstWs).mockResolvedValueOnce(secondWs);
+
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+      onDisconnected,
+      onError,
+    });
+    const started = connection.start();
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(1);
+    });
+
+    firstWs.emit("open");
+    // ws emits an error when a frame exceeds maxPayload
+    firstWs.emit("error", new Error("Max payload size exceeded"));
+    // ws then terminates the connection
+    firstWs.emit("close", 1006, Buffer.from("Max payload size exceeded"));
+
+    expect(onError).toHaveBeenCalled();
+    expect(onDisconnected).toHaveBeenCalledWith({
+      reason: "close code 1006",
+      fatal: false,
+    });
+
+    // Reconnect backoff kicks in and a new WebSocket is created
+    await vi.advanceTimersByTimeAsync(1_100);
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(2);
+    });
+
+    controller.abort();
+    await started;
+  });
+
   it("does not report a disconnect for the close caused by an intentional abort", async () => {
     const onDisconnected = vi.fn();
     const { ws, controller, started } = await startConnection({ onDisconnected });

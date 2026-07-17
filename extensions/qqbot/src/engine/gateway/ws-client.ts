@@ -8,9 +8,13 @@ import WebSocket from "ws";
 // releases GatewayConnection.isConnecting, and allows reconnects.
 const QQBOT_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 
-// Reject inbound frames above 1 MB so a single overgrown gateway event cannot
-// pin memory. Every other channel ws client sets a maxPayload (Discord: 16 MB,
-// Slack, Signal, Mattermost: 1 MB).
+// Bound inbound gateway frames at 1 MiB so a single overgrown payload cannot
+// pin memory before JSON.parse. QQ Bot gateway frames are JSON envelopes only —
+// media and file attachments travel through HTTP upload APIs, never the
+// WebSocket. The largest valid inbound event (GROUP_AT_MESSAGE_CREATE carrying
+// attached message content, mentions, msg_elements, and metadata) stays well
+// under 1 MiB. This follows the JSON-only channel precedent: Slack, Signal, and
+// Mattermost all use the same 1 MiB cap for their gateway WebSocket clients.
 const QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 interface QQWSClientOptions {
