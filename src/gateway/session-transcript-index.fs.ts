@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
+  selectSessionTranscriptActiveEntries,
 } from "../config/sessions/transcript-tree.js";
 import {
   extractJsonNullableStringFieldPrefix,
@@ -190,28 +191,6 @@ async function visitTranscriptJsonLines(
   }
 }
 
-function buildActiveTreeEntries(params: {
-  byId: Map<string, IndexedRawEntry>;
-  leafId?: string | null;
-}): IndexedRawEntry[] {
-  const out: IndexedRawEntry[] = [];
-  const seen = new Set<string>();
-  let currentId = params.leafId;
-  while (currentId) {
-    if (seen.has(currentId)) {
-      return [];
-    }
-    seen.add(currentId);
-    const entry = params.byId.get(currentId);
-    if (!entry) {
-      break;
-    }
-    out.push(entry);
-    currentId = entry.parentId ?? undefined;
-  }
-  return out.toReversed();
-}
-
 function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry[] {
   const entries: IndexedTranscriptEntry[] = [];
   let seq = 0;
@@ -280,17 +259,17 @@ async function buildSessionTranscriptIndex(
 
   const tree = scanSessionTranscriptTree(rawEntries.map((entry) => entry.record));
   const rawByRecord = new Map(rawEntries.map((entry) => [entry.record, entry]));
-  const byId = new Map<string, IndexedRawEntry>();
   for (const node of tree.nodes) {
     const rawEntry = rawByRecord.get(node.entry);
     if (rawEntry) {
       rawEntry.parentId = node.parentId;
-      byId.set(node.id, rawEntry);
     }
   }
-  const activeRawEntries = tree.hasExplicitLeafUpdate
-    ? buildActiveTreeEntries({ byId, leafId: tree.leafId })
-    : rawEntries;
+  const activeRawEntries = selectSessionTranscriptActiveEntries({
+    entries: rawEntries,
+    records: rawEntries.map((entry) => entry.record),
+    tree,
+  });
   return {
     filePath,
     mtimeMs: stat.mtimeMs,
