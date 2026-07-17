@@ -14,6 +14,7 @@ import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveManagedImageAttachmentLimits } from "./managed-image-attachment-limits.js";
 import {
   insertManagedImageRecord,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
@@ -53,13 +54,14 @@ vi.mock("./session-transcript-readers.js", () => ({
 }));
 
 const {
-  DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS,
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
-  handleManagedOutgoingImageHttpRequest,
-  resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
+const { readManagedOutgoingImageDownloadUrl } =
+  await import("./managed-image-attachments-download.js");
+const { handleManagedOutgoingImageHttpRequest } =
+  await import("./managed-image-attachments-http.js");
 
 type RequestResult = {
   statusCode: number;
@@ -69,6 +71,12 @@ type RequestResult = {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
+const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
+  maxBytes: 12 * 1024 * 1024,
+  maxWidth: 4096,
+  maxHeight: 4096,
+  maxPixels: 20_000_000,
+} as const;
 
 async function createPngDataUrl(width: number, height: number): Promise<string> {
   const buffer = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
@@ -396,6 +404,72 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     await expect(fs.access(recordPath)).resolves.toBeUndefined();
   });
 
+  it("resolves managed image route bytes for authenticated RPC artifact downloads", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: pathName,
+            openUrl: pathName,
+          },
+        ],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await readManagedOutgoingImageDownloadUrl({
+      url: pathName,
+      expectedSessionKey: sessionKey,
+      stateDir,
+    });
+
+    expect(download?.contentType).toBe("image/png");
+    expect(download?.sizeBytes).toBe(14);
+    expect(download?.data.toString("utf-8")).toBe("original-image");
+  });
+
+  it("does not resolve managed image bytes across artifact session scopes", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+
+    await expect(
+      readManagedOutgoingImageDownloadUrl({
+        url: pathName,
+        expectedSessionKey: "agent:other:main",
+        stateDir,
+      }),
+    ).resolves.toBe(null);
+    expect(readSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve managed image bytes after the transcript reference is gone", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue([]);
+
+    await expect(
+      readManagedOutgoingImageDownloadUrl({
+        url: pathName,
+        expectedSessionKey: sessionKey,
+        stateDir,
+      }),
+    ).resolves.toBe(null);
+  });
+
   it("rejects unauthenticated requests before serving bytes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 
@@ -457,6 +531,18 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
       method: "POST",
       headers: { "x-openclaw-requester-session-key": sessionKey },
+    });
+
+    expect(result.statusCode).toBe(405);
+  });
+
+  it("rejects non-GET methods before validating shape-matched attachment ids", async () => {
+    const { sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/not-a-uuid/full`,
+      method: "POST",
     });
 
     expect(result.statusCode).toBe(405);

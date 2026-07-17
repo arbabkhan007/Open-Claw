@@ -2,9 +2,7 @@
 // Validates, stores, serves, and cleans up outgoing image attachments.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -17,50 +15,32 @@ import {
   readImageProbeFromHeader,
 } from "../media/media-services.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
-  authorizeGatewayHttpRequestOrReply,
-  resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
-} from "./http-utils.js";
+  type ManagedImageAttachmentLimits,
+  type ManagedImageAttachmentLimitsConfig,
+  resolveManagedImageAttachmentLimits,
+} from "./managed-image-attachment-limits.js";
+import { buildManagedOutgoingImageRoute } from "./managed-image-attachment-route.js";
 import {
-  attachManagedImageRecordToMessage,
+  recordMatchesTranscriptMessage,
+  type SessionManagedOutgoingAttachmentIndex,
+} from "./managed-image-attachment-transcript.js";
+import {
   claimManagedImageRecordCleanupIfCurrent,
   deleteClaimedManagedImageRecord,
   insertManagedImageRecord,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-  readManagedImageRecord,
+  resolveManagedImageOriginalPath,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry, resolveSessionHistoryTranscriptPathAsync } from "./session-utils.js";
 
-const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
+export {
+  attachManagedOutgoingImagesToMessage,
+  recordMatchesTranscriptMessage,
+} from "./managed-image-attachment-transcript.js";
+
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
-const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
-  maxBytes: 12 * 1024 * 1024,
-  maxWidth: 4096,
-  maxHeight: 4096,
-  maxPixels: 20_000_000,
-} as const;
-
-export type ManagedImageAttachmentLimits = {
-  maxBytes: number;
-  maxWidth: number;
-  maxHeight: number;
-  maxPixels: number;
-};
-
-type ManagedImageAttachmentLimitsConfig = Partial<
-  Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
->;
 
 type ParsedImageDataUrl =
   | { kind: "not-data-url" }
@@ -74,43 +54,6 @@ type CleanupManagedOutgoingImageRecordsResult = {
   deletedFileCount: number;
   retainedCount: number;
 };
-
-type SessionManagedOutgoingAttachmentIndex = Set<string>;
-
-type SessionManagedOutgoingAttachmentIndexCacheEntry = {
-  transcriptPath: string;
-  mtimeMs: number;
-  size: number;
-  index: SessionManagedOutgoingAttachmentIndex;
-};
-type SessionManagedOutgoingAttachmentTranscriptStat = Omit<
-  SessionManagedOutgoingAttachmentIndexCacheEntry,
-  "index"
->;
-
-const sessionManagedOutgoingAttachmentIndexCache = new Map<
-  string,
-  SessionManagedOutgoingAttachmentIndexCacheEntry
->();
-const MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES = 500;
-
-function buildSessionManagedOutgoingAttachmentIndexCacheKey(
-  sessionKey: string,
-  agentId?: string,
-): string {
-  return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
-}
-
-export function resolveManagedImageAttachmentLimits(
-  config?: ManagedImageAttachmentLimitsConfig | null,
-): ManagedImageAttachmentLimits {
-  return {
-    maxBytes: config?.maxBytes ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxBytes,
-    maxWidth: config?.maxWidth ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxWidth,
-    maxHeight: config?.maxHeight ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxHeight,
-    maxPixels: config?.maxPixels ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels,
-  };
-}
 
 function formatLimitMiB(bytes: number): string {
   if (bytes < 1024 * 1024) {
@@ -226,20 +169,6 @@ async function resizeManagedImageBufferToLimits(params: {
   };
 }
 
-function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
-  if (
-    !path.isAbsolute(record.original.mediaRoot) ||
-    record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
-    !record.original.mediaId ||
-    record.original.mediaId.includes("/") ||
-    record.original.mediaId.includes("\\") ||
-    record.original.mediaId.includes("\0")
-  ) {
-    throw new Error("Managed image record has an unsafe media identity");
-  }
-  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
-}
-
 function resolveManagedImageOriginalsDir(stateDir: string): string {
   const runtimeMediaRoot =
     path.resolve(stateDir) === path.resolve(resolveStateDir())
@@ -301,10 +230,6 @@ async function deleteAgedOrphanManagedImageFiles(params: {
     }
   }
   return deletedCount;
-}
-
-function buildOutgoingVariantUrl(sessionKey: string, attachmentId: string, variant: "full") {
-  return `${OUTGOING_IMAGE_ROUTE_PREFIX}/${encodeURIComponent(sessionKey)}/${attachmentId}/${variant}`;
 }
 
 function deriveAltText(source: string, index: number) {
@@ -502,7 +427,7 @@ function resolveManagedImageRecordAgentId(
 }
 
 function buildManagedImageBlock(record: ManagedImageRecord): ManagedImageBlock {
-  const fullUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
+  const fullUrl = buildManagedOutgoingImageRoute(record.sessionKey, record.attachmentId);
   return {
     type: "image",
     url: fullUrl,
@@ -512,10 +437,6 @@ function buildManagedImageBlock(record: ManagedImageRecord): ManagedImageBlock {
     width: record.original.width,
     height: record.original.height,
   };
-}
-
-function buildManagedOutgoingAttachmentRefKey(messageId: string, attachmentId: string) {
-  return `${messageId}::${attachmentId}`;
 }
 
 function buildManagedImageResizeWarningBlock(params: {
@@ -542,275 +463,6 @@ function asArray(value: string[] | undefined | null) {
   return Array.isArray(value)
     ? value.filter((item) => typeof item === "string" && item.trim())
     : [];
-}
-
-function parseManagedOutgoingRoute(value: string) {
-  try {
-    const parsed = new URL(value, "http://localhost");
-    const match = parsed.pathname.match(/^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/full$/);
-    if (!match) {
-      return null;
-    }
-    if (
-      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(
-        expectDefined(match[2], "managed image attachments regex capture 2"),
-      )
-    ) {
-      return null;
-    }
-    return {
-      sessionKey: decodeURIComponent(
-        expectDefined(match[1], "managed image attachments regex capture 1"),
-      ),
-      attachmentId: match[2],
-    };
-  } catch {
-    return null;
-  }
-}
-
-function collectManagedOutgoingAttachmentRefs(
-  blocks: readonly Record<string, unknown>[] | undefined,
-  expectedSessionKey?: string,
-) {
-  const refs = new Map<string, { attachmentId: string; sessionKey: string }>();
-  for (const block of blocks ?? []) {
-    if (block?.type !== "image") {
-      continue;
-    }
-    for (const candidate of [block.url, block.openUrl]) {
-      if (typeof candidate !== "string") {
-        continue;
-      }
-      const parsed = parseManagedOutgoingRoute(candidate);
-      if (!parsed) {
-        continue;
-      }
-      if (expectedSessionKey && parsed.sessionKey !== expectedSessionKey) {
-        continue;
-      }
-      const attachmentId = expectDefined(parsed.attachmentId, "managed image attachment id");
-      refs.set(attachmentId, {
-        attachmentId,
-        sessionKey: parsed.sessionKey,
-      });
-    }
-  }
-  return [...refs.values()];
-}
-
-function getCachedSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  agentId: string | undefined,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
-) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
-  const cached = sessionManagedOutgoingAttachmentIndexCache.get(cacheKey);
-  if (!cached) {
-    return null;
-  }
-  if (
-    cached.transcriptPath !== stat.transcriptPath ||
-    cached.mtimeMs !== stat.mtimeMs ||
-    cached.size !== stat.size
-  ) {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-    return null;
-  }
-  sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  sessionManagedOutgoingAttachmentIndexCache.set(cacheKey, cached);
-  return cached.index;
-}
-
-function setCachedSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  agentId: string | undefined,
-  stat: SessionManagedOutgoingAttachmentTranscriptStat,
-  index: SessionManagedOutgoingAttachmentIndex,
-) {
-  sessionManagedOutgoingAttachmentIndexCache.set(
-    buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId),
-    {
-      transcriptPath: stat.transcriptPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      index,
-    },
-  );
-  while (
-    sessionManagedOutgoingAttachmentIndexCache.size >
-    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES
-  ) {
-    const oldestKey = sessionManagedOutgoingAttachmentIndexCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    sessionManagedOutgoingAttachmentIndexCache.delete(oldestKey);
-  }
-}
-
-function sameManagedOutgoingAttachmentTranscriptStat(
-  left: SessionManagedOutgoingAttachmentTranscriptStat | null,
-  right: SessionManagedOutgoingAttachmentTranscriptStat | null,
-): boolean {
-  return (
-    left?.transcriptPath === right?.transcriptPath &&
-    left?.mtimeMs === right?.mtimeMs &&
-    left?.size === right?.size
-  );
-}
-
-async function getSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-  agentId?: string,
-) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
-  if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey) ?? null;
-  }
-  const { storePath, entry } = loadSessionEntry(
-    sessionKey,
-    sessionKey === "global" && agentId ? { agentId } : undefined,
-  );
-  const sessionId = entry?.sessionId;
-  if (!sessionId) {
-    cache?.set(cacheKey, null);
-    return null;
-  }
-
-  let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
-  const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
-    sessionId,
-    storePath,
-    entry.sessionFile,
-    { allowResetArchiveFallback: true },
-  );
-  if (resolvedTranscriptPath) {
-    try {
-      const stat = await fs.stat(resolvedTranscriptPath);
-      transcriptStat = {
-        transcriptPath: resolvedTranscriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
-        sessionKey,
-        agentId,
-        transcriptStat,
-      );
-      if (cachedIndex) {
-        cache?.set(cacheKey, cachedIndex);
-        return cachedIndex;
-      }
-    } catch {
-      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-    }
-  } else {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  }
-
-  const readResult = await readSessionMessagesWithSourceAsync(
-    {
-      agentId,
-      sessionEntry: entry,
-      sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "managed outgoing attachment index",
-      allowResetArchiveFallback: true,
-    },
-  );
-  const messages = readResult.messages;
-  const preReadTranscriptStat = transcriptStat;
-  if (readResult.transcriptPath) {
-    try {
-      const stat = await fs.stat(readResult.transcriptPath);
-      const postReadTranscriptStat = {
-        transcriptPath: readResult.transcriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      transcriptStat = sameManagedOutgoingAttachmentTranscriptStat(
-        preReadTranscriptStat,
-        postReadTranscriptStat,
-      )
-        ? postReadTranscriptStat
-        : null;
-    } catch {
-      transcriptStat = null;
-    }
-  } else {
-    transcriptStat = null;
-  }
-  const index: SessionManagedOutgoingAttachmentIndex = new Set();
-  for (const message of messages) {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
-    const messageId = meta?.id;
-    if (typeof messageId !== "string" || !messageId) {
-      continue;
-    }
-    for (const ref of collectManagedOutgoingAttachmentRefs(
-      Array.isArray((message as { content?: unknown[] } | null)?.content)
-        ? ((message as { content: unknown[] }).content as Record<string, unknown>[])
-        : [],
-      sessionKey,
-    )) {
-      index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
-    }
-  }
-
-  if (transcriptStat) {
-    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
-  }
-  cache?.set(cacheKey, index);
-  return index;
-}
-
-async function recordMatchesTranscriptMessage(
-  record: ManagedImageRecord,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-) {
-  if (!record.messageId) {
-    return false;
-  }
-  const index = await getSessionManagedOutgoingAttachmentIndex(
-    record.sessionKey,
-    cache,
-    record.agentId,
-  );
-  return (
-    index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
-  );
-}
-
-export async function attachManagedOutgoingImagesToMessage(params: {
-  messageId: string;
-  blocks?: readonly Record<string, unknown>[];
-  stateDir?: string;
-}) {
-  const messageId = params.messageId.trim();
-  if (!messageId) {
-    return;
-  }
-  const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
-  if (refs.length === 0) {
-    return;
-  }
-  await Promise.all(
-    refs.map(async ({ attachmentId, sessionKey }) => {
-      attachManagedImageRecordToMessage({
-        attachmentId,
-        sessionKey,
-        messageId,
-        updatedAt: new Date().toISOString(),
-        stateDir: params.stateDir,
-      });
-    }),
-  );
 }
 
 export async function createManagedOutgoingImageBlocks(params: {
@@ -1008,122 +660,3 @@ export async function createManagedOutgoingImageBlocks(params: {
   }
   return blocks;
 }
-
-function sendStatus(res: ServerResponse, statusCode: number, body: string) {
-  if (res.writableEnded) {
-    return;
-  }
-  res.statusCode = statusCode;
-  res.setHeader("content-type", "text/plain; charset=utf-8");
-  res.end(body);
-}
-
-function safeAttachmentFilename(value: string | null) {
-  const fallback = "generated-image";
-  const base = (value ?? fallback).replace(/[\r\n"\\]/g, "_").trim();
-  return base || fallback;
-}
-
-export async function handleManagedOutgoingImageHttpRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-    stateDir?: string;
-  },
-): Promise<boolean> {
-  const requestUrl = new URL(req.url ?? "/", "http://localhost");
-  const match = requestUrl.pathname.match(/^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/full$/);
-  if (!match) {
-    return false;
-  }
-
-  if (req.method !== "GET") {
-    sendMethodNotAllowed(res, "GET");
-    return true;
-  }
-
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
-    req,
-    res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
-  });
-  if (!requestAuth) {
-    return true;
-  }
-
-  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
-    return true;
-  }
-
-  const encodedSessionKey = match[1];
-  const attachmentId = match[2];
-  if (!encodedSessionKey || !attachmentId) {
-    return false;
-  }
-  if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-  let sessionKey: string;
-  try {
-    sessionKey = decodeURIComponent(encodedSessionKey);
-  } catch {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-  const record = readManagedImageRecord(attachmentId, opts.stateDir);
-  if (!record || record.sessionKey !== sessionKey) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-  // Requester-session headers are client-declared, so media bytes require
-  // authenticated owner/admin context rather than trusting a URL-scoped header.
-  if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "owner access required",
-      },
-    });
-    return true;
-  }
-  if (!(await recordMatchesTranscriptMessage(record))) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-
-  let body: Buffer;
-  try {
-    body = (
-      await readLocalFileSafely({
-        filePath: resolveManagedImageOriginalPath(record),
-      })
-    ).buffer;
-  } catch {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-
-  res.statusCode = 200;
-  res.setHeader("content-type", record.original.contentType || "application/octet-stream");
-  res.setHeader("content-length", String(body.byteLength));
-  res.setHeader("cache-control", "private, max-age=31536000, immutable");
-  res.setHeader(
-    "content-disposition",
-    `inline; filename="${safeAttachmentFilename(record.original.filename)}"`,
-  );
-  res.end(body);
-  return true;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

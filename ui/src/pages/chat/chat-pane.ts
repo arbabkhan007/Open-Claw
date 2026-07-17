@@ -2,20 +2,21 @@ import { consume } from "@lit/context";
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state as litState } from "lit/decorators.js";
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogContinueResult,
-  SessionsCatalogReadResult,
-  SessionsFilesRevealResult,
-  SystemInfoResult,
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
-  WorktreesBranchesResult,
-  WorktreesListResult,
+import {
+  GATEWAY_SERVER_CAPS,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
+  type SessionsCatalogContinueResult,
+  type SessionsCatalogReadResult,
+  type SessionsFilesRevealResult,
+  type SystemInfoResult,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
+  type WorktreesBranchesResult,
+  type WorktreesListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionBranch,
@@ -79,6 +80,19 @@ import {
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
+import type { ChatPaneConnectionScope } from "./chat-pane-connection.ts";
+import {
+  CHAT_COMPOSER_TEXTAREA_SELECTOR,
+  CHAT_MODAL_SELECTOR,
+  CHAT_OPEN_DETAILS_SELECTOR,
+  CHAT_SPACE_ACTIVATION_SELECTOR,
+  CHAT_TEXT_ENTRY_SELECTOR,
+  DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
+  keyboardEventPathMatches,
+  NEW_SESSION_MESSAGE,
+  WORKSPACE_RAIL_MAX_WIDTH,
+  WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+} from "./chat-pane-layout.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -154,6 +168,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
+import { ManagedOutgoingImageResolverController } from "./managed-image-preview.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -223,50 +238,9 @@ function nativeHistoryMessageIdentity(message: unknown): string | null {
   }
 }
 
-type ChatPaneConnectionScope = {
-  context: ChatPageContext;
-  state: ChatPageHost;
-  client: GatewayBrowserClient;
-  generation: number;
-  sessions: ChatPageContext["sessions"];
-};
-const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
-const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
-const CHAT_TEXT_ENTRY_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
-const CHAT_SPACE_ACTIVATION_SELECTOR =
-  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
-const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
 // One automatic page can fill a short initial tail without serially walking a
 // collapsed or sparse transcript to exhaustion.
 const CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT = 1;
-
-/* Pane-width thresholds (CSS px). Split panes and compact windows can be far
- * narrower than the viewport, so side-by-side layouts key off the pane's own
- * measured width, never viewport media queries. */
-// Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
-const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
-// Widest the rail's grid column gets; a side-docked rail takes this from the
-// width available to the chat + detail-panel split.
-const WORKSPACE_RAIL_MAX_WIDTH = 280;
-// .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
-// below this the detail panel stacks under the thread.
-const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
-
-const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new session after the active run or queued messages finish.";
-const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Session list is still refreshing. Try New Chat again in a moment.";
-const NEW_SESSION_CREATE_FAILED_MESSAGE =
-  "New Chat could not create a new session. Try again in a moment.";
-
-function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
-  return event
-    .composedPath()
-    .some((target) => target instanceof Element && target.matches(selector));
-}
-
 class ChatPane extends OpenClawLightDomElement {
   // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
   readonly minutePoll = new PollController(this, 60_000, () => {
@@ -363,6 +337,28 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly olderCursorsSeen = new Set<string>();
   private readonly olderOffsetsSeen = new Set<number>();
 
+  private readonly managedImageResolver = new ManagedOutgoingImageResolverController(
+    (scope: ChatPaneConnectionScope) => this.isConnectionScopeCurrent(scope),
+    (scope) => scope.client,
+  );
+
+  private get resolveManagedOutgoingImage() {
+    return this.managedImageResolver.current;
+  }
+
+  private refreshManagedOutgoingImageResolver(): void {
+    const connection = this.captureConnectionScope();
+    const supported = Boolean(
+      connection &&
+      connection.context.gateway.snapshot.hello?.features?.capabilities?.includes(
+        GATEWAY_SERVER_CAPS.MANAGED_IMAGE_ARTIFACT_COORDINATES,
+      ) === true &&
+      isGatewayMethodAdvertised(connection.context.gateway.snapshot, "artifacts.list") === true &&
+      isGatewayMethodAdvertised(connection.context.gateway.snapshot, "artifacts.download") === true,
+    );
+    this.managedImageResolver.refresh(connection, supported);
+  }
+
   private captureConnectionScope(): ChatPaneConnectionScope | null {
     const context = this.context;
     const state = this.state;
@@ -383,6 +379,7 @@ class ChatPane extends OpenClawLightDomElement {
       client,
       generation: this.connectionGeneration,
       sessions: context.sessions,
+      auth: context.gateway.snapshot.hello?.auth,
     };
   }
 
@@ -397,6 +394,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.connectedClient === scope.client &&
       scope.context.gateway.snapshot.connected &&
       scope.context.gateway.snapshot.client === scope.client &&
+      scope.context.gateway.snapshot.hello?.auth === scope.auth &&
       this.connectionGeneration === scope.generation
     );
   }
@@ -1314,13 +1312,13 @@ class ChatPane extends OpenClawLightDomElement {
       context.gateway.snapshot.connected &&
       this.connectionGeneration === connectionGeneration;
     if (!canCreateChatSession(state)) {
-      state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
+      state.lastError = NEW_SESSION_MESSAGE.activeRun;
       state.chatError = state.lastError;
       state.requestUpdate?.();
       return false;
     }
     if (state.sessionsLoading) {
-      state.lastError = NEW_SESSION_LIST_LOADING_MESSAGE;
+      state.lastError = NEW_SESSION_MESSAGE.listLoading;
       state.chatError = state.lastError;
       state.requestUpdate?.();
       return false;
@@ -1347,8 +1345,8 @@ class ChatPane extends OpenClawLightDomElement {
         state.lastError =
           state.sessionsError ??
           (state.sessionsLoading
-            ? NEW_SESSION_LIST_LOADING_MESSAGE
-            : NEW_SESSION_CREATE_FAILED_MESSAGE);
+            ? NEW_SESSION_MESSAGE.listLoading
+            : NEW_SESSION_MESSAGE.createFailed);
         state.chatError = state.lastError;
         state.requestUpdate?.();
       }
@@ -1667,6 +1665,7 @@ class ChatPane extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
+    this.managedImageResolver.clear();
     this.connectionGeneration += 1;
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
@@ -1835,6 +1834,7 @@ class ChatPane extends OpenClawLightDomElement {
         }
         markQueuedChatSendsWaitingForReconnect(state);
       }
+      this.managedImageResolver.clear();
       this.connectedClient = null;
       state.realtimeTalkSession?.stop();
       state.realtimeTalkSession = null;
@@ -1846,6 +1846,10 @@ class ChatPane extends OpenClawLightDomElement {
       state.requestUpdate?.();
       return;
     }
+    if (clientChanged) {
+      this.connectedClient = snapshot.client;
+    }
+    this.refreshManagedOutgoingImageResolver();
     if (clientChanged && snapshot.client) {
       const startupClient = snapshot.client;
       const startupGeneration = this.connectionGeneration;
@@ -2523,6 +2527,8 @@ class ChatPane extends OpenClawLightDomElement {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       chatMessageMaxWidth: state.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
+      resolveManagedOutgoingImage: catalogKey ? undefined : this.resolveManagedOutgoingImage,
+      onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
     return html`${this.renderPaneHeader(

@@ -2,15 +2,12 @@
 
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogListResult,
-  SessionsCatalogReadResult,
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
+import {
+  GATEWAY_SERVER_CAPS,
+  type SessionCatalogSession,
+  type SessionCatalogTranscriptItem,
+  type SessionsCatalogListResult,
+  type SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -28,6 +25,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
   active: boolean;
@@ -39,13 +44,16 @@ type TestChatPane = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
+  refreshManagedOutgoingImageResolver: () => void;
+  resolveManagedOutgoingImage?: (request: {
+    source: string;
+    sessionKey: string;
+    messageSeq: number;
+    contentIndex: number;
+  }) => Promise<Blob | null>;
   createSession: () => Promise<boolean>;
   disconnectedCallback: () => void;
-  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
-  handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
-  refreshTaskSuggestions: () => Promise<void>;
-  taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   paneTitle: string;
@@ -92,25 +100,6 @@ type TestChatPane = HTMLElement & {
     workspaceGit: boolean,
   ) => TemplateResult;
 };
-
-const suggestion: TaskSuggestion = {
-  id: "task_123",
-  title: "Remove stale adapter",
-  prompt: "Delete the stale adapter and update tests.",
-  tldr: "The adapter is unreachable and adds maintenance cost.",
-  cwd: "/repo",
-  sessionKey: "agent:main:current",
-  agentId: "main",
-  createdAt: 1,
-};
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
@@ -618,6 +607,78 @@ describe("chat pane keyboard shortcuts", () => {
 });
 
 describe("chat pane session creation lifecycle", () => {
+  it("does not enable managed previews for gateways without coordinate support", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const gateway = pane.context.gateway as {
+      snapshot: ApplicationContext["gateway"]["snapshot"];
+    };
+    gateway.snapshot = {
+      client,
+      connected: true,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["artifacts.list", "artifacts.download"], capabilities: [] },
+      },
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    state.hello = gateway.snapshot.hello;
+
+    pane.refreshManagedOutgoingImageResolver();
+
+    expect(pane.resolveManagedOutgoingImage).toBeUndefined();
+  });
+
+  it("replaces the managed image resolver when authorization changes", async () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const adminAuth = { role: "operator", scopes: ["operator.admin"] };
+    const readAuth = { role: "operator", scopes: ["operator.read"] };
+    const gateway = pane.context.gateway as {
+      snapshot: ApplicationContext["gateway"]["snapshot"];
+    };
+    gateway.snapshot = {
+      client,
+      connected: true,
+      hello: {
+        auth: adminAuth,
+        features: {
+          methods: ["artifacts.list", "artifacts.download"],
+          capabilities: [GATEWAY_SERVER_CAPS.MANAGED_IMAGE_ARTIFACT_COORDINATES],
+        },
+      },
+    } as ApplicationContext["gateway"]["snapshot"];
+    state.hello = pane.context.gateway.snapshot.hello;
+
+    pane.refreshManagedOutgoingImageResolver();
+    const adminResolver = pane.resolveManagedOutgoingImage;
+    expect(adminResolver).toBeTypeOf("function");
+
+    gateway.snapshot = {
+      ...pane.context.gateway.snapshot,
+      hello: {
+        auth: readAuth,
+        features: {
+          methods: ["artifacts.list", "artifacts.download"],
+          capabilities: [GATEWAY_SERVER_CAPS.MANAGED_IMAGE_ARTIFACT_COORDINATES],
+        },
+      },
+    } as ApplicationContext["gateway"]["snapshot"];
+    state.hello = pane.context.gateway.snapshot.hello;
+
+    await expect(
+      adminResolver?.({
+        source: "/api/chat/media/outgoing/session/image/full",
+        sessionKey: "agent:main:current",
+        messageSeq: 7,
+        contentIndex: 1,
+      }),
+    ).resolves.toBeNull();
+    pane.refreshManagedOutgoingImageResolver();
+    expect(pane.resolveManagedOutgoingImage).not.toBe(adminResolver);
+  });
+
   it("drops a created session after a same-client reconnect", async () => {
     const created = createDeferred<string | null>();
     const sessions = {
@@ -1029,67 +1090,5 @@ describe("chat pane catalog session lifecycle", () => {
 
     expect(pane.loadOlderMessages).toHaveBeenCalledOnce();
     expect(pane.historyAutoLoadBlocked).toBe(false);
-  });
-});
-
-describe("chat pane task suggestion lifecycle", () => {
-  it("keeps accept ownership when the resolved event arrives before the response", async () => {
-    const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn((method: string) =>
-        method === "taskSuggestions.accept"
-          ? accepted.promise
-          : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
-      ),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.acceptTaskSuggestion(suggestion);
-    pane.handleTaskSuggestionEvent({
-      action: "resolved",
-      taskId: suggestion.id,
-      resolution: "accepted",
-    });
-    accepted.resolve({ taskId: suggestion.id, key: "agent:main:task" });
-
-    await pending;
-    expect(navigate).toHaveBeenCalledWith("single", "agent:main:task");
-  });
-
-  it("drops an accept response after a same-client reconnect", async () => {
-    const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn(() => accepted.promise),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.acceptTaskSuggestion(suggestion);
-    pane.connectionGeneration += 1;
-    accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("drops a list response after a same-client reconnect", async () => {
-    const listed = createDeferred<TaskSuggestionsListResult>();
-    const client = {
-      request: vi.fn(() => listed.promise),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-
-    const pending = pane.refreshTaskSuggestions();
-    pane.connectionGeneration += 1;
-    listed.resolve({ suggestions: [suggestion] });
-
-    await pending;
-    expect(pane.taskSuggestions).toEqual([]);
   });
 });

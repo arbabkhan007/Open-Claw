@@ -1,6 +1,7 @@
+// Control UI tests cover chat flow behavior.
+import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-// Control UI tests cover chat flow behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -1287,6 +1288,102 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await copiedViaExec(page)).toContain("/workspace/AGENTS.md");
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("previews managed outgoing images through artifact RPC", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:main";
+    const managedImageUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    const managedImageData = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="320" height="180" rx="18" fill="#ef4444"/><circle cx="52" cy="55" r="20" fill="#fff"/><path d="M43 55l7 7 13-16" fill="none" stroke="#ef4444" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><text x="28" y="112" font-family="Arial,sans-serif" font-size="23" font-weight="700" fill="#fff">Authorized preview</text><text x="28" y="142" font-family="Arial,sans-serif" font-size="16" fill="#fee2e2">artifacts.download</text></svg>',
+    ).toString("base64");
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["artifacts.download", "artifacts.list", "chat.metadata", "chat.startup"],
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Generated image" },
+            {
+              type: "image",
+              url: managedImageUrl,
+              alt: "Generated image 1",
+              mimeType: "image/svg+xml",
+              width: 320,
+              height: 180,
+            },
+          ],
+          __openclaw: { seq: 7 },
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: {
+        "artifacts.list": {
+          artifacts: [
+            {
+              contentIndex: 1,
+              download: { mode: "url" },
+              id: "artifact-managed-image",
+              messageSeq: 7,
+              mimeType: "image/svg+xml",
+              sessionKey,
+              source: "session-transcript",
+              title: "Generated image 1",
+              type: "image",
+            },
+          ],
+        },
+        "artifacts.download": {
+          artifact: {
+            contentIndex: 1,
+            download: { mode: "bytes" },
+            id: "artifact-managed-image",
+            messageSeq: 7,
+            mimeType: "image/svg+xml",
+            sessionKey,
+            source: "session-transcript",
+            title: "Generated image 1",
+            type: "image",
+          },
+          encoding: "base64",
+          data: managedImageData,
+        },
+      },
+      sessionKey,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
+      const image = page.getByAltText("Generated image 1");
+      await image.waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+        .toBe(320);
+
+      const listRequest = await gateway.waitForRequest("artifacts.list");
+      expect(listRequest.params).toMatchObject({ sessionKey, agentId: "main" });
+      const downloadRequest = await gateway.waitForRequest("artifacts.download");
+      expect(downloadRequest.params).toMatchObject({
+        sessionKey,
+        agentId: "main",
+        artifactId: "artifact-managed-image",
+      });
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/managed-image-rpc-preview.png`,
+          fullPage: true,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }

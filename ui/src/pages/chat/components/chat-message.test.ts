@@ -2573,7 +2573,7 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches managed outgoing chat images with auth and requester scope", async () => {
+  it("resolves managed outgoing chat images through the artifact callback", async () => {
     const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const objectUrl = "blob:managed-image";
     const NativeUrl = URL;
@@ -2584,13 +2584,11 @@ describe("grouped chat rendering", () => {
         static override revokeObjectURL = vi.fn();
       },
     );
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      expect(headers.get("Authorization")).toBe("Bearer test-auth-token");
-      expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:main");
-      return { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
+    const fetchMock = vi.fn(async () => {
+      throw new Error("managed previews must use the authenticated artifact RPC");
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const resolveManagedOutgoingImage = vi.fn(async () => new Blob(["png"], { type: "image/png" }));
 
     const container = document.createElement("div");
     renderAssistantMessage(
@@ -2598,6 +2596,7 @@ describe("grouped chat rendering", () => {
       {
         role: "assistant",
         content: [
+          { type: "text", text: "Generated image" },
           {
             type: "image",
             url: managedChatImageUrl,
@@ -2606,11 +2605,14 @@ describe("grouped chat rendering", () => {
             height: 1,
           },
         ],
+        __openclaw: { seq: 7 },
         timestamp: Date.now(),
       },
       {
         showToolCalls: false,
-        assistantAttachmentAuthToken: "test-auth-token",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        resolveManagedOutgoingImage,
       },
     );
 
@@ -2619,8 +2621,68 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
-    expectSameOriginGet(fetchInit);
+    expect(resolveManagedOutgoingImage).toHaveBeenCalledWith({
+      source: managedChatImageUrl,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      messageSeq: 7,
+      contentIndex: 1,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes managed image blobs to the resolver", async () => {
+    const managedChatImageUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    const NativeUrl = URL;
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce("blob:admin-connection")
+      .mockReturnValueOnce("blob:replacement-connection");
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = createObjectURL;
+      },
+    );
+    const adminResolver = vi.fn(async () => new Blob(["admin"], { type: "image/png" }));
+    const replacementResolver = vi.fn(async () => new Blob(["replacement"], { type: "image/png" }));
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Generated image" },
+        { type: "image", url: managedChatImageUrl },
+      ],
+      __openclaw: { seq: 7 },
+      timestamp: Date.now(),
+    };
+    const adminContainer = document.createElement("div");
+    const replacementContainer = document.createElement("div");
+
+    renderAssistantMessage(adminContainer, message, {
+      showToolCalls: false,
+      sessionKey: "agent:main:main",
+      resolveManagedOutgoingImage: adminResolver,
+    });
+    await vi.waitFor(() => {
+      expect(adminContainer.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+        "blob:admin-connection",
+      );
+    });
+
+    renderAssistantMessage(replacementContainer, message, {
+      showToolCalls: false,
+      sessionKey: "agent:main:main",
+      resolveManagedOutgoingImage: replacementResolver,
+    });
+    await vi.waitFor(() => {
+      expect(replacementContainer.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+        "blob:replacement-connection",
+      );
+    });
+
+    expect(adminResolver).toHaveBeenCalledOnce();
+    expect(replacementResolver).toHaveBeenCalledOnce();
   });
 
   it("does not send auth to cross-origin managed-image-looking URLs", () => {

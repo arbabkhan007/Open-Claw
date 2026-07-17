@@ -7,6 +7,7 @@ import { artifactsHandlers } from "./artifacts.js";
 const hoisted = vi.hoisted(() => ({
   getTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
+  readManagedOutgoingImageDownloadUrl: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
 }));
@@ -43,6 +44,10 @@ vi.mock("../server-session-key.js", async () => {
   };
 });
 
+vi.mock("../managed-image-attachments-download.js", () => ({
+  readManagedOutgoingImageDownloadUrl: hoisted.readManagedOutgoingImageDownloadUrl,
+}));
+
 function createResponder() {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   return {
@@ -60,13 +65,13 @@ type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
 async function invokeArtifactHandler(
   method: ArtifactMethod,
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown } = {},
+  options: { id?: string; context?: unknown; client?: unknown } = {},
 ) {
   const responder = createResponder();
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
-    client: null,
+    client: (options.client ?? null) as never,
     isWebchatConnect: () => false,
     respond: responder.respond,
     context: (options.context ?? {}) as never,
@@ -90,7 +95,7 @@ async function getArtifact(
 
 async function downloadArtifact(
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown } = {},
+  options: { id?: string; context?: unknown; client?: unknown } = {},
 ) {
   return await invokeArtifactHandler("artifacts.download", params, options);
 }
@@ -206,6 +211,7 @@ function expectArtifactScopeNotFound(
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.readManagedOutgoingImageDownloadUrl.mockResolvedValue(null);
     hoisted.resolveSessionKeyForRun.mockReset();
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
@@ -344,7 +350,7 @@ describe("artifacts RPC handlers", () => {
 
     const download = await downloadArtifact(
       { sessionKey: "agent:main:main", artifactId },
-      { id: "3" },
+      { id: "3", client: { connect: { scopes: ["operator.read"] } } },
     );
     const downloadPayload = expectOkPayload(download.calls) as {
       artifact?: Record<string, unknown>;
@@ -427,6 +433,63 @@ describe("artifacts RPC handlers", () => {
 
     expectFields(downloadPayload.artifact, { title: "second.png" });
     expectFields(downloadPayload, { data: "c2Vjb25k" });
+  });
+
+  it("downloads managed outgoing image artifacts as bytes", async () => {
+    const managedUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: managedUrl,
+            openUrl: managedUrl,
+            alt: "managed.png",
+            mimeType: "image/png",
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    hoisted.readManagedOutgoingImageDownloadUrl.mockResolvedValue({
+      data: Buffer.from("png"),
+      contentType: "image/png",
+      sizeBytes: 3,
+      filename: "managed.png",
+    });
+
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const listedArtifact = expectArtifactList(listed.calls).artifacts?.[0];
+    const artifactId = requireNonEmptyString(listedArtifact?.id, "expected managed artifact id");
+    expectFields(listedArtifact, { messageSeq: 2, contentIndex: 0 });
+    const download = await downloadArtifact(
+      {
+        sessionKey: "agent:main:main",
+        artifactId,
+      },
+      { client: { connect: { scopes: ["operator.read"] } } },
+    );
+    const downloadPayload = expectOkPayload(download.calls) as {
+      artifact?: Record<string, unknown>;
+    };
+
+    expect(hoisted.readManagedOutgoingImageDownloadUrl).toHaveBeenCalledWith({
+      url: managedUrl,
+      expectedSessionKey: "agent:main:main",
+      stateDir: expect.any(String),
+    });
+    expectFields(downloadPayload, {
+      encoding: "base64",
+      data: "cG5n",
+    });
+    expectFields(downloadPayload.artifact, {
+      title: "managed.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    });
+    expectFields(downloadPayload.artifact?.download, { mode: "bytes" });
   });
 
   it("resolves runId queries through the gateway run-to-session lookup", async () => {

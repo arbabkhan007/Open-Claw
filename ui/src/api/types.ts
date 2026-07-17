@@ -1,5 +1,6 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { ArtifactSummary } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
@@ -398,17 +399,7 @@ type SessionWorkspaceBrowserResult = {
   truncated?: boolean;
 };
 
-type SessionWorkspaceArtifactEntry = {
-  id: string;
-  type: string;
-  title: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  source?: string;
-  download: {
-    mode: "bytes" | "url" | "unsupported";
-  };
-};
+type SessionWorkspaceArtifactEntry = ArtifactSummary;
 
 export type SessionWorkspaceListResult = {
   sessionKey: string;

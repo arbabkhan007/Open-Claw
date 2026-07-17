@@ -8,6 +8,7 @@ import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 export const GATEWAY_SERVER_CAPS = {
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
+  MANAGED_IMAGE_ARTIFACT_COORDINATES: "managed-image-artifact-coordinates",
 } as const;
 
 /**

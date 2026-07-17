@@ -64,6 +64,10 @@ import {
   type ChatState,
 } from "./chat-history.ts";
 import {
+  reloadFinalManagedImageCoordinates,
+  replayPendingSessionMessageReload,
+} from "./chat-message-reload.ts";
+import {
   clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
@@ -1117,25 +1121,6 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
 }
 
-function replayPendingSessionMessageReload(
-  state: ChatPageHost,
-  payload: ChatEventPayload | undefined,
-) {
-  const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
-  const payloadSessionKey = payload?.sessionKey?.trim();
-  if (
-    !pendingSessionKey ||
-    !payloadSessionKey ||
-    !areUiSessionKeysEquivalent(pendingSessionKey, payloadSessionKey) ||
-    !areUiSessionKeysEquivalent(payloadSessionKey, state.sessionKey) ||
-    state.chatRunId
-  ) {
-    return;
-  }
-  state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state).finally(() => state.requestUpdate?.());
-}
-
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
@@ -1457,7 +1442,10 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }
-    replayPendingSessionMessageReload(state, payload);
+    const replayedSessionMessageReload = replayPendingSessionMessageReload(state, payload);
+    if (!replayedSessionMessageReload) {
+      reloadFinalManagedImageCoordinates(state, payload);
+    }
     if (terminal) {
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);

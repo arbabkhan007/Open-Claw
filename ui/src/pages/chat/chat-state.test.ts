@@ -140,6 +140,137 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("reloads transcript coordinates after a managed image final", async () => {
+    const managedImageUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    const persistedMessage = {
+      role: "assistant",
+      content: [{ type: "image", url: managedImageUrl }],
+      __openclaw: { seq: 7 },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method !== "chat.history") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return { messages: [persistedMessage] };
+    });
+    const state = {
+      agentsList: null,
+      chatHistoryPagination: { hasMore: false },
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatQueue: [],
+      chatRunId: "run-1",
+      chatSending: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStream: null,
+      chatStreamStartedAt: 1,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: { request },
+      connected: true,
+      connectionEpoch: 1,
+      hello: null,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "run-1",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "image", url: managedImageUrl }],
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("chat.history", { sessionKey: "main", limit: 100 });
+      expect(state.chatMessages).toEqual([persistedMessage]);
+    });
+  });
+
+  it("defers managed image coordinate reloads until the active run finishes", async () => {
+    const managedImageUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    const persistedMessage = {
+      role: "assistant",
+      content: [{ type: "image", url: managedImageUrl }],
+      __openclaw: { seq: 7 },
+    };
+    const request = vi.fn(async () => ({ messages: [persistedMessage] }));
+    const state = {
+      agentsList: null,
+      chatHistoryPagination: { hasMore: false },
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatQueue: [],
+      chatRunId: "run-current",
+      chatSending: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStream: null,
+      chatStreamStartedAt: 1,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: { request },
+      connected: true,
+      connectionEpoch: 1,
+      hello: null,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "run-older",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "image", url: managedImageUrl }],
+        },
+      },
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.chatRunId).toBe("run-current");
+    expect(state.pendingSessionMessageReloadSessionKey).toBe("main");
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "run-current",
+        sessionKey: "main",
+        message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledOnce();
+      expect(state.chatMessages).toEqual([
+        persistedMessage,
+        { role: "assistant", content: [{ type: "text", text: "Done" }] },
+      ]);
+    });
+  });
+
   it("requests a render before selecting the commit promise", async () => {
     let resolveCommit: (value: boolean) => void = () => {};
     const nextCommit = new Promise<boolean>((resolve) => {
