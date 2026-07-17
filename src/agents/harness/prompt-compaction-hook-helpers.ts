@@ -14,7 +14,6 @@ import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import {
   buildEmbeddedHookApi,
-  createEmbeddedHookSessionResetQueue,
   type DeferEmbeddedHookSessionReset,
 } from "../embedded-agent-runner/compaction-hook-reset-api.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
@@ -198,18 +197,18 @@ export async function runAgentHarnessAfterCompactionHook(params: {
     return;
   }
   const resetSessionKey = params.ctx.resetSessionKey?.trim();
-  const resetEnabled = params.ctx.modelSelectionLocked !== true && Boolean(resetSessionKey);
-  const resetQueue =
-    resetEnabled && !params.ctx.deferEmbeddedHookSessionReset
-      ? createEmbeddedHookSessionResetQueue()
-      : null;
-  const deferResetSession = resetEnabled
-    ? (params.ctx.deferEmbeddedHookSessionReset ??
-      (resetQueue
-        ? (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
-            resetQueue.deferResetSession(request)
-        : undefined))
-    : undefined;
+  const deferResetSession = params.ctx.deferEmbeddedHookSessionReset;
+  const resetEnabled =
+    params.ctx.modelSelectionLocked !== true && Boolean(resetSessionKey && deferResetSession);
+  const resetApi =
+    resetEnabled && resetSessionKey && deferResetSession
+      ? buildEmbeddedHookApi({
+          agentId: params.ctx.agentId,
+          sessionKey: resetSessionKey,
+          deferResetSession: (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
+            deferResetSession(request),
+        })
+      : undefined;
   try {
     await hookRunner.runAfterCompaction(
       {
@@ -219,20 +218,10 @@ export async function runAgentHarnessAfterCompactionHook(params: {
       },
       {
         ...buildAgentHookContext(params.ctx),
-        ...(resetEnabled
-          ? {
-              api: buildEmbeddedHookApi({
-                agentId: params.ctx.agentId,
-                sessionKey: resetSessionKey,
-                ...(deferResetSession ? { deferResetSession } : {}),
-              }),
-            }
-          : {}),
+        ...(resetApi ? { api: resetApi } : {}),
       },
     );
   } catch (error) {
     log.warn(`after_compaction hook failed: ${String(error)}`);
-  } finally {
-    await resetQueue?.flush();
   }
 }

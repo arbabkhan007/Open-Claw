@@ -2014,7 +2014,7 @@ describe("runCopilotAttempt", () => {
   it("marks a timeout during active SDK compaction", async () => {
     const afterCompaction = vi.fn(async (_event, ctx) => {
       expect(ctx.sessionKey).toBe("agent:main:sandbox:policy");
-      expect(ctx.api?.resetSession).toEqual(expect.any(Function));
+      expect(ctx.api).toBeUndefined();
     });
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),

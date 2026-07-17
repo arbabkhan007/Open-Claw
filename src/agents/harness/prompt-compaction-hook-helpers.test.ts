@@ -233,4 +233,26 @@ describe("runAgentHarnessAfterCompactionHook", () => {
       commandSource: "embedded-agent:hook",
     });
   });
+
+  it("does not expose resetSession without a caller-owned lifecycle queue", async () => {
+    const afterCompaction = vi.fn((_event, ctx) => {
+      expect(ctx.sessionKey).toBe("agent:agent-1:sandbox:policy");
+      expect(ctx.api).toBeUndefined();
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+
+    await runAgentHarnessAfterCompactionHook({
+      sessionFile: "/tmp/session.jsonl",
+      compactedCount: 1,
+      ctx: {
+        agentId: "agent-1",
+        sessionKey: "agent:agent-1:sandbox:policy",
+        resetSessionKey: "agent:agent-1:discord:channel:123",
+      },
+    });
+
+    expect(afterCompaction).toHaveBeenCalledTimes(1);
+  });
 });

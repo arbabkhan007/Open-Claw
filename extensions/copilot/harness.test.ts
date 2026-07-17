@@ -1822,7 +1822,7 @@ describe("createCopilotAgentHarness", () => {
     it("calls the SDK history compaction RPC without requiring a workspace sidecar", async () => {
       const beforeCompaction = vi.fn();
       const afterCompaction = vi.fn(async (_event, ctx) => {
-        expect(ctx.api?.resetSession).toEqual(expect.any(Function));
+        expect(ctx.api).toBeUndefined();
       });
       initializeGlobalHookRunner(
         createMockPluginRegistry([
