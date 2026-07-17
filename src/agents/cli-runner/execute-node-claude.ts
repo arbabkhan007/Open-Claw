@@ -76,7 +76,16 @@ function parseNodeClaudeResultPayload(result: { payload?: unknown; payloadJSON?:
   truncated: boolean;
   timeoutKind?: "hard" | "idle";
 } {
-  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
+  let value: unknown;
+  if (result.payloadJSON) {
+    try {
+      value = JSON.parse(result.payloadJSON) as unknown;
+    } catch {
+      throw new Error("paired node returned malformed JSON in Claude CLI result");
+    }
+  } else {
+    value = result.payload;
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("paired node returned an invalid Claude CLI result");
   }
@@ -113,7 +122,16 @@ function parseNodeClaudeApprovalRequired(result: {
   if (!result.ok) {
     return null;
   }
-  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
+  let value: unknown;
+  if (result.payloadJSON) {
+    try {
+      value = JSON.parse(result.payloadJSON) as unknown;
+    } catch {
+      return null;
+    }
+  } else {
+    value = result.payload;
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -361,4 +379,15 @@ export async function executeNodeClaudeRun(params: {
     noOutputTimedOut: payload.timeoutKind === "idle",
   };
   return { result, nodeRunAbortSignal, nodeRunTruncated: payload.truncated };
+}
+
+const testing = {
+  parseNodeClaudeResultPayload,
+  parseNodeClaudeApprovalRequired,
+};
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.executeNodeClaudeTestApi")] = {
+    testing,
+  };
 }
