@@ -198,6 +198,88 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
+  it("suppresses mm: namespace reasoning tags before Matrix sends", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "<mm:think>analyzing request step by step</mm:think>" },
+        { text: "<mm:thought>internal reasoning here</mm:thought>" },
+        { text: "Visible answer after reasoning" },
+      ],
+      roomId: "room:mm-reasoning",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:mm-reasoning");
+    expect(sendCall(0)[1]).toBe("Visible answer after reasoning");
+  });
+
+  it("delivers mixed mm: reasoning and visible text as a single reply", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "<mm:think>hidden</mm:think> Here is the answer" }],
+      roomId: "room:mm-mixed",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:mm-mixed");
+    // Reasoning tags stripped from mixed content before sending
+    expect(sendCall(0)[1]).toBe("Here is the answer");
+  });
+
+  it("still suppresses antml: namespace reasoning (backward compatibility)", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "<antml:thinking>backward compat test</antml:thinking>" },
+        { text: "Real answer" },
+      ],
+      roomId: "room:antml-compat",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe("Real answer");
+  });
+
+  it("preserves literal mm: reasoning tags inside fenced code blocks", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text:
+            "Here is the syntax for reasoning tags:\n" +
+            "```xml\n<mm:think>hidden reasoning</mm:think>\n```\n" +
+            "That is how you use them.",
+        },
+      ],
+      roomId: "room:code-preserve",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    const sentText = sendCall(0)[1] as string;
+    // Tags inside fenced code block are preserved
+    expect(sentText).toContain("<mm:think>");
+    expect(sentText).toContain("```xml");
+    // But visible reasoning tags outside code blocks are stripped
+    expect(sentText).not.toContain("<mm:thought>");
+  });
+
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
     const explicitCfg = {
       channels: {
