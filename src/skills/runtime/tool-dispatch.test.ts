@@ -8,6 +8,8 @@ type CreateOpenClawToolsArg = {
   };
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
+  nativeChannelId?: string;
+  pluginToolAllowlist?: string[];
 };
 
 const hoisted = vi.hoisted(() => {
@@ -37,7 +39,11 @@ import { resolveSkillDispatchTools } from "./tool-dispatch.js";
 describe("resolveSkillDispatchTools", () => {
   it("passes final filtered tool surface to cron jobs", () => {
     const tools = resolveSkillDispatchTools({
-      message: { surface: "telegram", senderId: "user-1" },
+      message: {
+        surface: "telegram",
+        senderId: "user-1",
+        nativeChannelId: "native-room-1",
+      },
       cfg: {
         tools: { allow: ["read", "cron"] },
       } as OpenClawConfig,
@@ -51,6 +57,7 @@ describe("resolveSkillDispatchTools", () => {
     const args = hoisted.createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "cron" }]);
+    expect(args?.nativeChannelId).toBe("native-room-1");
   });
 
   it("carries command skill file identity into tool diagnostics", () => {
@@ -75,5 +82,42 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.beforeToolCallHookContext?.skillCommand?.skillFile).toBe(
       "/workspace/skills/daily-brief/SKILL.md",
     );
+  });
+
+  it("preserves deferred runtime selectors for spawned children", () => {
+    resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: {
+        tools: {
+          allow: [
+            "read",
+            "bundle-mcp",
+            "probe__search",
+            "lsp_hover_typescript",
+            "custom_plugin_tool",
+          ],
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(args?.pluginToolAllowlist).toEqual([
+      "read",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+      "custom_plugin_tool",
+    ]);
+    expect(args?.inheritedToolAllowlist).toEqual([
+      "read",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
   });
 });
