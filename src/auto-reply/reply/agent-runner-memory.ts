@@ -43,6 +43,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
+  loadSessionEntry,
   readTranscriptStatsSync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -995,10 +996,18 @@ export async function runPreflightCompactionIfNeeded(params: {
     const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
     let hookResetExpectedSessionId = entry.sessionId;
     let hookResetExpectedLifecycleRevision = entry.lifecycleRevision;
+    const loadCurrentHookResetEntry = () =>
+      params.storePath
+        ? loadSessionEntry({
+            sessionKey,
+            storePath: params.storePath,
+            readConsistency: "latest",
+          })
+        : (params.sessionStore?.[sessionKey] ?? entry);
     const assertCurrentHookResetSession = () =>
       assertCompactionHookResetTargetCurrent({
         sessionKey,
-        currentEntry: params.sessionStore?.[sessionKey] ?? entry,
+        currentEntry: loadCurrentHookResetEntry(),
         expectedSessionId: hookResetExpectedSessionId,
         expectedLifecycleRevision: hookResetExpectedLifecycleRevision,
       });
@@ -1085,7 +1094,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
     });
-    const postCompactionEntry = params.sessionStore?.[params.sessionKey] ?? entry;
+    const postCompactionEntry = loadCurrentHookResetEntry() ?? entry;
     hookResetExpectedSessionId = result.result?.sessionId ?? hookResetExpectedSessionId;
     if (postCompactionEntry.sessionId === hookResetExpectedSessionId) {
       hookResetExpectedLifecycleRevision = postCompactionEntry.lifecycleRevision;
@@ -1096,7 +1105,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     });
     await notifyTerminalCompaction("end");
     await hookSessionResetQueue.flush();
-    entry = params.sessionStore?.[params.sessionKey] ?? entry;
+    entry = loadCurrentHookResetEntry() ?? entry;
+    if (params.sessionStore?.[sessionKey] && entry) {
+      params.sessionStore[sessionKey] = entry;
+    }
     if (entry) {
       const previousSessionId = params.followupRun.run.sessionId;
       params.followupRun.run.sessionId = entry.sessionId;

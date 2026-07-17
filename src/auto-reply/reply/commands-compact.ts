@@ -235,10 +235,18 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = targetSessionEntry.sessionId;
   let hookResetExpectedSessionId = sessionId;
   let hookResetExpectedLifecycleRevision = targetSessionEntry.lifecycleRevision;
+  const loadCurrentHookResetEntry = () =>
+    params.storePath
+      ? runtime.loadSessionEntry({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          readConsistency: "latest",
+        })
+      : (params.sessionStore?.[params.sessionKey] ?? targetSessionEntry);
   const assertCurrentHookResetSession = () =>
     assertCompactionHookResetTargetCurrent({
       sessionKey: params.sessionKey,
-      currentEntry: params.sessionStore?.[params.sessionKey] ?? targetSessionEntry,
+      currentEntry: loadCurrentHookResetEntry(),
       expectedSessionId: hookResetExpectedSessionId,
       expectedLifecycleRevision: hookResetExpectedLifecycleRevision,
     });
@@ -360,7 +368,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
     });
-    const postCompactionEntry = params.sessionStore?.[params.sessionKey] ?? targetSessionEntry;
+    const postCompactionEntry = loadCurrentHookResetEntry() ?? targetSessionEntry;
     hookResetExpectedSessionId = result.result?.sessionId ?? hookResetExpectedSessionId;
     if (postCompactionEntry.sessionId === hookResetExpectedSessionId) {
       hookResetExpectedLifecycleRevision = postCompactionEntry.lifecycleRevision;
