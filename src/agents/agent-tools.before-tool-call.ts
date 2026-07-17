@@ -130,6 +130,9 @@ export type ToolOutcomeObservation = {
   toolCallOrdinal?: number;
   terminalPresentation?: string;
   presentationOnly?: boolean;
+  criticalToolLoopBlock?: {
+    reason: string;
+  };
 };
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
@@ -1391,6 +1394,9 @@ async function recordLoopOutcome(args: {
   error?: unknown;
   toolCallOrdinal?: number;
   terminalPresentation?: string;
+  criticalToolLoopBlock?: {
+    reason: string;
+  };
 }): Promise<void> {
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
     return;
@@ -1418,6 +1424,9 @@ async function recordLoopOutcome(args: {
         resultHash: record.resultHash,
         ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
         ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
+        ...(args.criticalToolLoopBlock
+          ? { criticalToolLoopBlock: args.criticalToolLoopBlock }
+          : {}),
       };
     }
   } catch (err) {
@@ -1900,6 +1909,9 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result: blockedResult,
           toolCallOrdinal,
+          ...(outcome.deniedReason === "tool-loop"
+            ? { criticalToolLoopBlock: { reason: outcome.reason } }
+            : {}),
         });
         return blockedResult;
       }

@@ -51,6 +51,15 @@ import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
+class CriticalToolLoopBlockedError extends Error {
+  readonly detector = "tool_loop_blocked";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CriticalToolLoopBlockedError";
+  }
+}
+
 export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
@@ -200,6 +209,7 @@ export async function runPreparedEmbeddedLoop(
   );
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+  let criticalToolLoopAbortError: CriticalToolLoopBlockedError | undefined;
   const attemptTerminalToolPresentation = {
     ordinal: -1,
     value: undefined as string | undefined,
@@ -216,6 +226,14 @@ export async function runPreparedEmbeddedLoop(
       attemptTerminalToolPresentation.value = observation.terminalPresentation;
     }
     if (observation.presentationOnly) {
+      return;
+    }
+    if (observation.criticalToolLoopBlock) {
+      criticalToolLoopAbortError ??= new CriticalToolLoopBlockedError(
+        observation.criticalToolLoopBlock.reason,
+      );
+      laneTaskAbortController.abort(criticalToolLoopAbortError);
+      postCompactionAbortController?.abort(criticalToolLoopAbortError);
       return;
     }
     const verdict = postCompactionGuard.observe(observation);
@@ -334,7 +352,7 @@ export async function runPreparedEmbeddedLoop(
         resolveRuntimeFallbackReason,
         observeToolOutcome,
         allocateToolOutcomeOrdinal,
-        getPostCompactionAbortError: () => postCompactionAbortError,
+        getToolOutcomeAbortError: () => postCompactionAbortError ?? criticalToolLoopAbortError,
         setPostCompactionAbortController: (controller) => {
           postCompactionAbortController = controller;
         },

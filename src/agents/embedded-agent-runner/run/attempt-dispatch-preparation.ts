@@ -39,7 +39,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   allocateToolOutcomeOrdinal: Parameters<
     typeof dispatchEmbeddedRunAttempt
   >[0]["control"]["allocateToolOutcomeOrdinal"];
-  getPostCompactionAbortError: () => Error | undefined;
+  getToolOutcomeAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
 }) {
@@ -229,7 +229,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         sessionPromptState.activePrompt.persisted = false;
       },
       deferEmbeddedHookSessionReset: runInput.deferEmbeddedHookSessionReset,
-      getPostCompactionAbortError: input.getPostCompactionAbortError,
+      getToolOutcomeAbortError: input.getToolOutcomeAbortError,
       setPostCompactionAbortController: input.setPostCompactionAbortController,
       clearPostCompactionAbortController: input.clearPostCompactionAbortController,
     },

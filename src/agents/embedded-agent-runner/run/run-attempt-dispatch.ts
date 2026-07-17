@@ -86,7 +86,7 @@ type AttemptControl = {
   deferEmbeddedHookSessionReset: NonNullable<
     EmbeddedRunAttemptParams["deferEmbeddedHookSessionReset"]
   >;
-  getPostCompactionAbortError: () => Error | undefined;
+  getToolOutcomeAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
 };
@@ -366,7 +366,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   })
     .catch((err: unknown): never => {
-      throw control.getPostCompactionAbortError() ?? err;
+      throw control.getToolOutcomeAbortError() ?? err;
     })
     .finally(() => {
       clearAttemptTimeoutRelease();
@@ -375,9 +375,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
       control.clearPostCompactionAbortController(attemptAbortController);
     });
 
-  const postCompactionAbortError = control.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
+  const toolOutcomeAbortError = control.getToolOutcomeAbortError();
+  if (toolOutcomeAbortError) {
+    throw toolOutcomeAbortError;
   }
   return { rawAttempt, cancellationRequested };
 }
