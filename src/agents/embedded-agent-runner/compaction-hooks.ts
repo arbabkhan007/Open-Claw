@@ -335,7 +335,12 @@ export async function runAfterCompactionHooks(params: {
     params.modelSelectionLocked === true || params.missingSessionKey || deferResetSession
       ? undefined
       : createEmbeddedHookSessionResetQueue();
-  const effectiveDeferResetSession = deferResetSession ?? localResetQueue?.deferResetSession;
+  const effectiveDeferResetSession =
+    deferResetSession ??
+    (localResetQueue
+      ? (request: Parameters<typeof localResetQueue.deferResetSession>[0]) =>
+          localResetQueue.deferResetSession(request)
+      : undefined);
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
       sessionId: params.sessionId,
