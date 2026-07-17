@@ -92,7 +92,7 @@ deepinfra/zai-org/GLM-5.1
 - Model refs are `deepinfra/<provider>/<model>` (for example `deepinfra/Qwen/Qwen3-Max`).
 - Default chat model: `deepinfra/deepseek-ai/DeepSeek-V4-Flash`
 - Base URL: `https://api.deepinfra.com/v1/openai`
-- Native video generation uses `https://api.deepinfra.com/v1/inference/<model>`.
+- Video generation uses the OpenAI-compatible async endpoint `https://api.deepinfra.com/v1/openai/videos` (submit, then poll). A configured `baseUrl` is honored. `openclaw doctor --fix` migrates legacy `nativeBaseUrl` or `/v1/inference` values on `api.deepinfra.com` to `baseUrl` automatically; custom native endpoints are retired with a doctor notice and need a manually configured OpenAI-compatible `baseUrl`.
 
 ## Related
 
