@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -308,7 +309,14 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
         : argsSlice.join(sep) + sep // trailing sentinel to match pattern format
       : argsSlice.join(sep);
   try {
-    const regex = new RegExp(argPattern);
+    const compiled = compileSafeRegexDetailed(argPattern);
+    if (!compiled.regex) {
+      if (compiled.reason === "unsafe-nested-repetition") {
+        console.warn("[exec-approvals] Rejected argPattern with unsafe nested repetition");
+      }
+      return false;
+    }
+    const regex = compiled.regex;
     if (regex.test(argsString)) {
       return true;
     }
