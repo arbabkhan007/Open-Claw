@@ -40,19 +40,9 @@ export function buildEmbeddedHookApi(params?: {
   deferResetSession?: DeferEmbeddedHookSessionReset;
 }): EmbeddedHookApi {
   const sessionKey = params?.sessionKey?.trim();
-  const resetSession: HookResetSessionFunction = async (
-    reasonOrSessionKey: unknown = "reset",
-    legacyReason?: "new" | "reset",
-  ) => {
-    const legacySessionKey =
-      typeof reasonOrSessionKey === "string" ? reasonOrSessionKey.trim() : "";
-    const isLegacyKeyCall = legacyReason !== undefined || legacySessionKey === sessionKey;
-    const reason = legacyReason ?? (isLegacyKeyCall ? "reset" : reasonOrSessionKey);
+  const resetSession: HookResetSessionFunction = async (reason: unknown = "reset") => {
     if (reason !== "new" && reason !== "reset") {
       throw new Error('resetSession only accepts reason "new" or "reset"');
-    }
-    if (isLegacyKeyCall && legacySessionKey !== sessionKey) {
-      throw new Error("resetSession cannot reset a different session key from a hook context");
     }
     if (!sessionKey) {
       throw new Error("resetSession is unavailable without a current session key");

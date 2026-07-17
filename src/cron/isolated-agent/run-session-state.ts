@@ -21,6 +21,10 @@ export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
 };
 /** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
+export type CronSessionResetCommit = {
+  key: string;
+  sessionId: string;
+};
 
 /**
  * Accessor-backed guarded write: `update` receives the freshest persisted row
@@ -50,6 +54,24 @@ export class CronSessionLifecycleClaimError extends Error {
   constructor(sessionKey: string) {
     super(`Session "${sessionKey}" changed while starting work. Retry.`);
     this.name = "CronSessionLifecycleClaimError";
+  }
+}
+
+/** Refreshes mutable cron state after a hook-triggered reset committed a fresh row. */
+export function refreshCronSessionAfterResetCommit(params: {
+  cronSession: MutableCronSession;
+  agentSessionKey: string;
+  runSessionKey: string;
+  commit: CronSessionResetCommit;
+  latestEntry: SessionEntry;
+}): void {
+  const refreshed = structuredClone(params.latestEntry);
+  params.cronSession.store[params.commit.key] = structuredClone(refreshed);
+  if (params.commit.key !== params.agentSessionKey) {
+    params.cronSession.store[params.agentSessionKey] = structuredClone(refreshed);
+  }
+  if (params.commit.key === params.agentSessionKey || params.commit.key === params.runSessionKey) {
+    params.cronSession.sessionEntry = refreshed;
   }
 }
 

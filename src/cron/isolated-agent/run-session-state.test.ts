@@ -12,6 +12,7 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
+  refreshCronSessionAfterResetCommit,
   resolveCronLifecycleRevisionIdentity,
   type MutableCronSession,
 } from "./run-session-state.js";
@@ -55,6 +56,44 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
 }
 
 describe("createPersistCronSessionEntry", () => {
+  it("refreshes detached cron state after a hook reset commits a fresh row", () => {
+    const agentSessionKey = "agent:main:cron:budget-reset";
+    const runSessionKey = `${agentSessionKey}:run:run-session-id`;
+    const resetEntry = makeSessionEntry({
+      sessionId: "reset-session-id",
+      sessionFile: "/tmp/reset-session.jsonl",
+      compactionCount: 0,
+    });
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        sessionId: "exhausted-session-id",
+        sessionFile: "/tmp/exhausted-session.jsonl",
+        compactionCount: 12,
+      }),
+    );
+
+    refreshCronSessionAfterResetCommit({
+      cronSession,
+      agentSessionKey,
+      runSessionKey,
+      commit: { key: runSessionKey, sessionId: "reset-session-id" },
+      latestEntry: resetEntry,
+    });
+
+    expect(cronSession.sessionEntry).toMatchObject({
+      sessionId: "reset-session-id",
+      sessionFile: "/tmp/reset-session.jsonl",
+      compactionCount: 0,
+    });
+    expect(cronSession.initialSessionEntry).toBeUndefined();
+    expect(cronSession.store[runSessionKey]).toMatchObject({
+      sessionId: "reset-session-id",
+    });
+    expect(cronSession.store[agentSessionKey]).toMatchObject({
+      sessionId: "reset-session-id",
+    });
+  });
+
   it("owns an exact hidden continuation row without colliding with another run", async () => {
     const runSessionKey = "agent:main:cron:job:run:run-session-id";
     const lifecycleRevision = crypto.randomUUID();

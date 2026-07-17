@@ -266,18 +266,7 @@ type PluginHookAgentContextApi = {
    * always the session represented by this hook context; callers cannot reset
    * arbitrary session keys.
    */
-  resetSession: {
-    (reason?: "new" | "reset"): Promise<{ ok: true; key: string; deferred: true }>;
-    /**
-     * Back-compatibility for early compaction-reset consumers that passed the
-     * hook session key explicitly. The runtime still only resets the session
-     * represented by this hook context.
-     */
-    (
-      sessionKey: string,
-      reason?: "new" | "reset",
-    ): Promise<{ ok: true; key: string; deferred: true }>;
-  };
+  resetSession: (reason?: "new" | "reset") => Promise<{ ok: true; key: string; deferred: true }>;
 };
 
 export type PluginHookAgentContext = {

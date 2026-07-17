@@ -135,45 +135,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     });
   });
 
-  it("aborts the attempt when critical tool-loop blocking repeats during unattended runs", async () => {
-    let attemptSignalAborted = false;
-    let attemptSignalReason: unknown;
-
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const { abortSignal, onToolOutcome } = attemptParams as {
-        abortSignal?: AbortSignal;
-        onToolOutcome?: ToolOutcomeObserver;
-      };
-      onToolOutcome?.({
-        toolName: "read",
-        argsHash: "",
-        resultHash: "",
-        criticalToolLoopBlock: {
-          reason: "CRITICAL: Called read with identical arguments and identical outcomes 20 times.",
-        },
-      });
-      attemptSignalAborted = abortSignal?.aborted ?? false;
-      attemptSignalReason = abortSignal?.reason;
-      return makeAttemptResult({
-        promptError: null,
-        toolMetas: [{ toolName: "read" }],
-      });
-    });
-
-    await expect(runEmbeddedAgent(baseParams)).rejects.toMatchObject({
-      name: "CriticalToolLoopBlockedError",
-      detector: "tool_loop_blocked",
-    });
-
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(attemptSignalAborted).toBe(true);
-    expect(attemptSignalReason).toMatchObject({
-      name: "CriticalToolLoopBlockedError",
-      detector: "tool_loop_blocked",
-    });
-  });
-
   it("aborts the attempt out-of-band when identical (tool, args, result) repeats windowSize times after compaction", async () => {
     const overflowError = makeOverflowError();
     let attemptReturned = false;

@@ -1163,11 +1163,13 @@ async function finalizeCronRun(params: {
     if (finalRunResult.meta?.systemPromptReport) {
       prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
     }
-    adoptCronRunSessionMetadata({
-      entry: prepared.cronSession.sessionEntry,
-      sessionKey: prepared.agentSessionKey,
-      runMeta: finalRunResult.meta?.agentMeta,
-    });
+    if (!execution.sessionResetCommitted) {
+      adoptCronRunSessionMetadata({
+        entry: prepared.cronSession.sessionEntry,
+        sessionKey: prepared.agentSessionKey,
+        runMeta: finalRunResult.meta?.agentMeta,
+      });
+    }
   }
   const usage = finalRunResult.meta?.agentMeta?.usage;
   const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;

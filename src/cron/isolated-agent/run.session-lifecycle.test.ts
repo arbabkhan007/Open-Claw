@@ -338,6 +338,90 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     });
   });
 
+  it("keeps hook-reset cron sessions after embedded runs return stale metadata", async () => {
+    const stableSessionKey = "agent:main:cron:budget-reset";
+    const runSessionKey = `${stableSessionKey}:run:session-before-reset`;
+    const initialSessionEntry = makeCronSessionEntry({
+      sessionId: "session-before-reset",
+      sessionFile: "/tmp/session-before-reset.jsonl",
+      compactionCount: 9,
+    });
+    const resetEntry = makeCronSessionEntry({
+      sessionId: "session-after-reset",
+      sessionFile: "/tmp/session-after-reset.jsonl",
+      compactionCount: 0,
+    });
+    const latestRows = new Map<string, SessionEntry>();
+    const cronSession = makeCronSession({
+      storePath: inMemoryStorePath,
+      store: {},
+      initialSessionEntry: undefined,
+      isNewSession: true,
+      sessionEntry: { ...initialSessionEntry },
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    loadSessionEntryMock.mockImplementation((_storePath: string, key: string) =>
+      latestRows.get(key),
+    );
+    let sessionEntryAfterResetCallback: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (runParams: {
+        sessionKey?: string;
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+        }) => void;
+      }) => {
+        expect(runParams.sessionKey).toBe(runSessionKey);
+        latestRows.set(runSessionKey, structuredClone(resetEntry) as SessionEntry);
+        runParams.onSessionResetCommitted?.({
+          key: runSessionKey,
+          sessionId: "session-after-reset",
+          reason: "new",
+        });
+        sessionEntryAfterResetCallback = cronSession.sessionEntry.sessionId;
+        return {
+          payloads: [{ text: "completed" }],
+          meta: {
+            agentMeta: {
+              sessionId: "session-stale-compacted",
+              sessionFile: "/tmp/session-stale-compacted.jsonl",
+              compactionCount: 10,
+              usage: { input: 1, output: 1 },
+              lastCallUsage: { input: 2, output: 2, total: 4 },
+            },
+          },
+        };
+      },
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        sessionKey: "cron:budget-reset",
+        job: makeIsolatedAgentJobFixture({
+          id: "budget-reset",
+          sessionTarget: "isolated",
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      sessionId: "session-after-reset",
+      sessionKey: runSessionKey,
+    });
+
+    expect(sessionEntryAfterResetCallback).toBe("session-after-reset");
+    expect(cronSession.sessionEntry).toMatchObject({
+      sessionId: "session-after-reset",
+      sessionFile: "/tmp/session-after-reset.jsonl",
+      compactionCount: 0,
+    });
+  });
+
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {
     const sessionKey = "agent:main:cron:cleanup";
     const sessionId = "custom-cron-session";

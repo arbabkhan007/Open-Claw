@@ -14,7 +14,7 @@ vi.mock("../../gateway/session-reset-service.js", () => ({
 }));
 
 describe("createEmbeddedHookSessionResetQueue", () => {
-  it("accepts legacy explicit-key reset calls for the current hook session", async () => {
+  it("accepts reason-only reset calls for the current hook session", async () => {
     const deferResetSession = vi.fn();
     const api = buildEmbeddedHookApi({
       sessionKey: "agent:main:session-1",
@@ -23,7 +23,7 @@ describe("createEmbeddedHookSessionResetQueue", () => {
       deferResetSession,
     });
 
-    await expect(api.resetSession("agent:main:session-1", "new")).resolves.toEqual({
+    await expect(api.resetSession("new")).resolves.toEqual({
       ok: true,
       key: "agent:main:session-1",
       deferred: true,
@@ -37,7 +37,7 @@ describe("createEmbeddedHookSessionResetQueue", () => {
     });
   });
 
-  it("accepts legacy key-only reset calls for the current hook session", async () => {
+  it("defaults reset calls to reset reason", async () => {
     const deferResetSession = vi.fn();
     const api = buildEmbeddedHookApi({
       sessionKey: "agent:main:session-1",
@@ -46,7 +46,7 @@ describe("createEmbeddedHookSessionResetQueue", () => {
       deferResetSession,
     });
 
-    await expect(api.resetSession("agent:main:session-1")).resolves.toEqual({
+    await expect(api.resetSession()).resolves.toEqual({
       ok: true,
       key: "agent:main:session-1",
       deferred: true,
@@ -60,14 +60,14 @@ describe("createEmbeddedHookSessionResetQueue", () => {
     });
   });
 
-  it("rejects legacy explicit-key reset calls for another session", async () => {
+  it("rejects reset calls that pass a session key instead of a reason", async () => {
     const api = buildEmbeddedHookApi({
       sessionKey: "agent:main:session-1",
       deferResetSession: vi.fn(),
     });
 
-    await expect(api.resetSession("agent:main:session-2", "new")).rejects.toThrow(
-      /different session key/,
+    await expect(api.resetSession("agent:main:session-1" as "reset")).rejects.toThrow(
+      /reason "new" or "reset"/,
     );
   });
 
