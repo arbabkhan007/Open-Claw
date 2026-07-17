@@ -29,13 +29,19 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
+import { agentsDeleteCommand } from "../commands/agents.commands.delete.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
 } from "../cron/store.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import {
+  defaultRuntime,
+  writeRuntimeJson,
+  type OutputRuntimeEnv,
+  type RuntimeEnv,
+} from "../runtime.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -43,6 +49,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { callGatewayFromCli } from "./gateway-rpc.js";
 
 type DiagnosticLike = { level: string; code: string; path: string; message: string };
 
@@ -290,6 +297,11 @@ export async function runClawsAddCommand(
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+      cronGateway: {
+        add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+        list: async (agentId) =>
+          await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+      },
     });
   } catch (error) {
     const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
@@ -381,6 +393,27 @@ export async function runClawsRemoveCommand(
   try {
     const result = await applyClawRemovePlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
+      deleteAgent: async (agentId) => {
+        const quietRuntime: OutputRuntimeEnv = {
+          ...runtime,
+          log: () => {},
+          error: (message) => {
+            throw new Error(String(message));
+          },
+          writeJson: () => {},
+          writeStdout: () => {},
+          exit: (code) => {
+            throw new Error(`Agent deletion failed with exit code ${code}.`);
+          },
+        };
+        await agentsDeleteCommand(
+          { id: agentId, force: true, json: true, deleteFiles: false },
+          quietRuntime,
+        );
+      },
+      cronGateway: {
+        remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
+      },
     });
     if (opts.json) {
       writeRuntimeJson(runtime, result);
