@@ -298,7 +298,6 @@ describe("runMessageAction context isolation", () => {
           },
           toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
         }),
-      expectedKind: "send",
     },
     {
       name: "thread-reply when channelId differs from current workspace channel",
@@ -313,11 +312,9 @@ describe("runMessageAction context isolation", () => {
           },
           toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
         }),
-      expectedKind: "action",
     },
-  ])("blocks cross-context UI handoff for $name", async ({ run, expectedKind }) => {
-    const result = await run();
-    expect(result.kind).toBe(expectedKind);
+  ])("blocks cross-context UI handoff for $name", async ({ run }) => {
+    await expect(run()).rejects.toThrow("Cross-context messaging denied");
   });
 
   it.each([
@@ -326,12 +323,14 @@ describe("runMessageAction context isolation", () => {
       channel: "directchat",
       target: "123@g.us",
       currentChannelId: "123@g.us",
+      shouldDeny: false,
     },
     {
       name: "local chat match",
       channel: "localchat",
       target: "localchat:+15551234567",
       currentChannelId: "localchat:+15551234567",
+      shouldDeny: false,
     },
     {
       name: "direct chat mismatch",
@@ -339,6 +338,7 @@ describe("runMessageAction context isolation", () => {
       target: "456@g.us",
       currentChannelId: "123@g.us",
       currentChannelProvider: "directchat",
+      shouldDeny: true,
     },
     {
       name: "local chat mismatch",
@@ -346,23 +346,31 @@ describe("runMessageAction context isolation", () => {
       target: "localchat:+15551230000",
       currentChannelId: "localchat:+15551234567",
       currentChannelProvider: "localchat",
+      shouldDeny: true,
     },
   ] as const)("$name", async (testCase) => {
-    const result = await runDrySend({
-      cfg: directChatConfig,
-      actionParams: {
-        channel: testCase.channel,
-        target: testCase.target,
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: testCase.currentChannelId,
-        ...(testCase.currentChannelProvider
-          ? { currentChannelProvider: testCase.currentChannelProvider }
-          : {}),
-      },
-    });
+    const run = () =>
+      runDrySend({
+        cfg: directChatConfig,
+        actionParams: {
+          channel: testCase.channel,
+          target: testCase.target,
+          message: "hi",
+        },
+        toolContext: {
+          currentChannelId: testCase.currentChannelId,
+          ...(testCase.currentChannelProvider
+            ? { currentChannelProvider: testCase.currentChannelProvider }
+            : {}),
+        },
+      });
 
+    if (testCase.shouldDeny) {
+      await expect(run()).rejects.toThrow("Cross-context messaging denied");
+      return;
+    }
+
+    const result = await run();
     expect(result.kind).toBe("send");
   });
 

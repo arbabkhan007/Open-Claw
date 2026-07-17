@@ -236,7 +236,7 @@ export function enforceCrossContextPolicy(params: {
   // Doctor moves the shipped allowCrossContextSend flag into this canonical policy.
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
+  const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider === true;
   const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;
 
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.
