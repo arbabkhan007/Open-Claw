@@ -24,11 +24,21 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { describe, it } from "vitest";
+import { describe, it, vi } from "vitest";
 import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+
+const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+  };
+});
 
 /** Options msteams passes into core createReplyDispatcherWithTyping (capture seam). */
 type CapturedDispatcherOptions = {
@@ -88,6 +98,7 @@ function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault)
       applyFault("stream.update", { text });
       recorder.recordWireCall({ method: "stream.update", payload: { text } });
     },
+    clearText(): void {},
     async close(): Promise<unknown> {
       applyFault("stream.close");
       recorder.recordWireCall({ method: "stream.close", result: { id: "stream-final" } });
@@ -215,8 +226,10 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
   },
   {
     // Mid-stream non-cancel write failure latches streamFailed: the streamed
-    // prefix stays visible AND the full reply re-delivers as blocks. The
-    // duplication is the contract (truncation is the worse outcome).
+    // prefix stays visible AND the full reply re-delivers as blocks. A later
+    // segment rewrites the stale stream buffer, then finalize attempts the
+    // closing metadata write after fallback delivery. The duplication is the
+    // contract (truncation is the worse outcome).
     golden: "stream-failure-redeliver-full",
     scenario: "streaming-happy",
     conversationType: "personal",
@@ -227,11 +240,18 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
 
 function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) {
   let captured: CapturedDispatcherOptions | undefined;
-  setMSTeamsRuntime(
-    createTraceRuntimeStub(recorder, (options) => {
-      captured = options;
-    }),
-  );
+  setMSTeamsRuntime(createTraceRuntimeStub(recorder, () => undefined));
+  createReplyDispatcherWithTypingMock.mockImplementation((options: CapturedDispatcherOptions) => {
+    captured = options;
+    return {
+      dispatcher: {},
+      replyOptions: {},
+      markDispatchIdle: () => {
+        options.typingCallbacks?.onIdle?.();
+      },
+      markRunComplete: () => {},
+    };
+  });
   const stream = createRecordingStream(recorder, traceCase.streamWriteFault);
   const context = createRecordingTurnContext({
     recorder,

@@ -49,6 +49,32 @@ describe("createPluginRuntimeMock", () => {
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });
 
+  it("tracks channel runtime contexts through the mock registry", () => {
+    const runtime = createPluginRuntimeMock();
+    const key = {
+      channelId: "whatsapp",
+      accountId: "default",
+      capability: "connection-controller",
+    };
+    const context = { getActiveListener: vi.fn() };
+    const onEvent = vi.fn();
+    const unsubscribe = runtime.channel.runtimeContexts.watch({ ...key, onEvent });
+
+    const lease = runtime.channel.runtimeContexts.register({ ...key, context });
+
+    expect(runtime.channel.runtimeContexts.get(key)).toBe(context);
+    expect(onEvent).toHaveBeenCalledWith({ type: "registered", key, context });
+    expect(vi.isMockFunction(runtime.channel.runtimeContexts.register)).toBe(true);
+    expect(vi.isMockFunction(runtime.channel.runtimeContexts.get)).toBe(true);
+    expect(vi.isMockFunction(runtime.channel.runtimeContexts.watch)).toBe(true);
+
+    lease.dispose();
+
+    expect(runtime.channel.runtimeContexts.get(key)).toBeUndefined();
+    expect(onEvent).toHaveBeenLastCalledWith({ type: "unregistered", key });
+    unsubscribe();
+  });
+
   it("exposes channel inbound helpers without the removed turn aliases", async () => {
     const runtime = createPluginRuntimeMock();
     const channel = "test";
@@ -113,6 +139,45 @@ describe("createPluginRuntimeMock", () => {
         dispatched: true,
       }),
     );
+  });
+
+  it("uses merged channel overrides when dispatching an inbound turn", async () => {
+    const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
+    const recordInboundSession = vi.fn(async () => undefined);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        session: { resolveStorePath, recordInboundSession },
+        reply: { dispatchReplyWithBufferedBlockDispatcher },
+      },
+    });
+
+    await runtime.channel.inbound.dispatch({
+      cfg: {},
+      channel: "test",
+      route: {
+        agentId: "main",
+        sessionKey: "agent:main:test:direct:u1",
+      },
+      ctxPayload: {
+        Body: "hello",
+        CommandAuthorized: false,
+        SessionKey: "agent:main:test:direct:u1",
+      },
+      delivery: { deliver: vi.fn(async () => undefined) },
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/override-sessions.json",
+        sessionKey: "agent:main:test:direct:u1",
+      }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("routes untrusted group prompt facts into untrusted structured context", () => {

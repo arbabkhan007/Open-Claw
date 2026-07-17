@@ -25,11 +25,14 @@ import org.junit.Test
 class ChatControllerReconnectRestoreTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  // The controller runs on backgroundScope: while a restored run stays in flight the
+  // pending-run watchdog keeps re-arming, so its timer must be cancelled by runTest
+  // instead of counting as an uncompleted test coroutine.
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
 
   private fun TestScope.newScopedController(gateway: ScriptedGateway): ChatController =
     ChatController(
-      scope = this,
+      scope = backgroundScope,
       json = json,
       requestGateway = gateway::request,
       requestGatewayForGateway = { _, method, paramsJson -> gateway.request(method, paramsJson) },
@@ -40,12 +43,12 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun connectedRefreshCreatesDeviceSessionBeforeLoadingHistory() =
+  fun connectedRefreshUpsertsDeviceSessionBeforeLoadingHistory() =
     runTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
-      gateway.respondWith("sessions.create", """{"ok":true,"key":"$sessionKey"}""")
+      gateway.respondWith("sessions.patch", """{"ok":true,"key":"$sessionKey"}""")
       gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
       val controller = newScopedController(gateway)
 
@@ -57,16 +60,15 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       val describeIndex = gateway.calls.indexOfFirst { it.method == "sessions.describe" }
-      val createIndex = gateway.calls.indexOfFirst { it.method == "sessions.create" }
+      val patchIndex = gateway.calls.indexOfFirst { it.method == "sessions.patch" }
       val historyIndex = gateway.calls.indexOfFirst { it.method == "chat.history" }
       assertTrue(describeIndex >= 0)
-      assertTrue(createIndex > describeIndex)
-      assertTrue(historyIndex > createIndex)
+      assertTrue(patchIndex > describeIndex)
+      assertTrue(historyIndex > patchIndex)
       assertEquals(sessionKey, controller.sessionKey.value)
-      val createParams = json.parseToJsonElement(gateway.calls[createIndex].paramsJson.orEmpty()).jsonObject
-      assertEquals(sessionKey, createParams["key"]?.jsonPrimitive?.content)
-      assertEquals("main", createParams["agentId"]?.jsonPrimitive?.content)
-      assertEquals("OpenClaw App · Pixel · device", createParams["label"]?.jsonPrimitive?.content)
+      val patchParams = json.parseToJsonElement(gateway.calls[patchIndex].paramsJson.orEmpty()).jsonObject
+      assertEquals(sessionKey, patchParams["key"]?.jsonPrimitive?.content)
+      assertEquals("OpenClaw App · Pixel · device", patchParams["label"]?.jsonPrimitive?.content)
     }
 
   @Test
@@ -76,7 +78,7 @@ class ChatControllerReconnectRestoreTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
-      gateway.respond("sessions.create") { error("create unavailable") }
+      gateway.respond("sessions.patch") { error("patch unavailable") }
       gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
       val controller = newScopedController(gateway)
 
@@ -84,7 +86,7 @@ class ChatControllerReconnectRestoreTest {
       controller.onGatewayConnected(MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device"))
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.create"))
+      assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(1, gateway.callCount("chat.history"))
       assertEquals(sessionKey, controller.sessionKey.value)
       assertNull(controller.errorText.value)
@@ -158,7 +160,7 @@ class ChatControllerReconnectRestoreTest {
         storedLabel?.let { """{"session":{"key":"$sessionKey","label":"$it"}}""" }
           ?: """{"session":null}"""
       }
-      gateway.respond("sessions.create") { paramsJson ->
+      gateway.respond("sessions.patch") { paramsJson ->
         storedLabel =
           json
             .parseToJsonElement(paramsJson.orEmpty())
@@ -178,7 +180,7 @@ class ChatControllerReconnectRestoreTest {
       controller.onGatewayConnected(binding)
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.create"))
+      assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(2, gateway.callCount("sessions.describe"))
       assertEquals(2, gateway.callCount("chat.history"))
 
@@ -186,7 +188,7 @@ class ChatControllerReconnectRestoreTest {
       controller.onGatewayConnected(binding.copy(label = "OpenClaw App · Renamed · device"))
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.create"))
+      assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(3, gateway.callCount("sessions.describe"))
       assertEquals(3, gateway.callCount("chat.history"))
       assertEquals("My Android session", storedLabel)
@@ -207,7 +209,7 @@ class ChatControllerReconnectRestoreTest {
             ?.content
         if (key == "agent:first:node-device") firstDescribe.await() else """{"session":null}"""
       }
-      gateway.respond("sessions.create") { paramsJson ->
+      gateway.respond("sessions.patch") { paramsJson ->
         val key =
           json
             .parseToJsonElement(paramsJson.orEmpty())
@@ -227,29 +229,32 @@ class ChatControllerReconnectRestoreTest {
       controller.refresh()
       runCurrent()
 
-      val createIndexBeforeFirstDescribeCompletes =
-        gateway.calls.indexOfLast { it.method == "sessions.create" }
-      val historyCallsBeforeFirstDescribeCompletes =
-        gateway.calls.withIndex().filter { it.value.method == "chat.history" }
-      assertTrue(createIndexBeforeFirstDescribeCompletes >= 0)
-      assertTrue(historyCallsBeforeFirstDescribeCompletes.isNotEmpty())
-      assertTrue(historyCallsBeforeFirstDescribeCompletes.all { it.index > createIndexBeforeFirstDescribeCompletes })
-      assertTrue(
-        historyCallsBeforeFirstDescribeCompletes.all {
-          gateway.sessionKeyOf(it.value.paramsJson) == "agent:second:node-device"
-        },
-      )
-      firstDescribe.complete("""{"session":null}""")
-      runCurrent()
-
-      val createIndex = gateway.calls.indexOfLast { it.method == "sessions.create" }
+      val patchCalls = gateway.calls.withIndex().filter { it.value.method == "sessions.patch" }
+      val patchIndex = patchCalls.single().index
       val historyCalls = gateway.calls.withIndex().filter { it.value.method == "chat.history" }
-      assertEquals(1, gateway.callCount("sessions.create"))
-      assertTrue(createIndex >= 0)
+      val patchParams =
+        patchCalls
+          .single()
+          .value
+          .paramsJson
+          .orEmpty()
+      val patchedKey =
+        json
+          .parseToJsonElement(patchParams)
+          .jsonObject["key"]
+          ?.jsonPrimitive
+          ?.content
+      assertEquals("agent:second:node-device", patchedKey)
       assertTrue(historyCalls.isNotEmpty())
-      assertTrue(historyCalls.all { it.index > createIndex })
+      assertTrue(historyCalls.all { it.index > patchIndex })
       assertTrue(historyCalls.all { gateway.sessionKeyOf(it.value.paramsJson) == "agent:second:node-device" })
       assertEquals("agent:second:node-device", controller.sessionKey.value)
+
+      // The cancelled response must remain inert even if its server-side work completes later.
+      firstDescribe.complete("""{"session":null}""")
+      runCurrent()
+      assertEquals(1, gateway.callCount("sessions.patch"))
+      assertTrue(gateway.calls.none { it.method == "chat.history" && gateway.sessionKeyOf(it.paramsJson) == "agent:first:node-device" })
     }
 
   @Test
@@ -325,7 +330,7 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun reconnectRecreatesSessionDeletedWhileDisconnected() =
+  fun reconnectUpsertsSessionDeletedWhileDisconnected() =
     runTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
@@ -337,7 +342,7 @@ class ChatControllerReconnectRestoreTest {
           """{"session":null}"""
         }
       }
-      gateway.respond("sessions.create") {
+      gateway.respond("sessions.patch") {
         sessionExists = true
         """{"ok":true,"key":"$sessionKey"}"""
       }
@@ -354,7 +359,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(2, gateway.callCount("sessions.describe"))
-      assertEquals(2, gateway.callCount("sessions.create"))
+      assertEquals(2, gateway.callCount("sessions.patch"))
     }
 
   @Test
@@ -545,6 +550,88 @@ class ChatControllerReconnectRestoreTest {
       assertNull(controller.errorText.value)
       assertNull(controller.streamingAssistantText.value)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun recoveredPendingRunStopsWatchdogWhenRefreshFails() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+      )
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+      assertEquals(1, controller.pendingRunCount.value)
+
+      gateway.respond("chat.history") { error("history unavailable") }
+      advanceTimeBy(120_000)
+      runCurrent()
+
+      assertEquals(2, gateway.callCount("chat.history"))
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.streamingAssistantText.value)
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      assertEquals(2, gateway.callCount("chat.history"))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun newerRecoverySnapshotCanSupersedePendingRunWatchdogRefresh() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+      )
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+
+      val watchdogRefreshStarted = CompletableDeferred<Unit>()
+      val releaseWatchdogRefresh = CompletableDeferred<String>()
+      val newerRefreshStarted = CompletableDeferred<Unit>()
+      val releaseNewerRefresh = CompletableDeferred<String>()
+      var refreshCalls = 0
+      gateway.respond("chat.history") {
+        refreshCalls += 1
+        if (refreshCalls == 1) {
+          watchdogRefreshStarted.complete(Unit)
+          releaseWatchdogRefresh.await()
+        } else {
+          newerRefreshStarted.complete(Unit)
+          releaseNewerRefresh.await()
+        }
+      }
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      watchdogRefreshStarted.await()
+      controller.refresh()
+      runCurrent()
+      newerRefreshStarted.await()
+      releaseWatchdogRefresh.complete(
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "stale working"),
+      )
+      runCurrent()
+
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
+
+      releaseNewerRefresh.complete(
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "still working"),
+      )
+      runCurrent()
+
+      assertEquals(3, gateway.callCount("chat.history"))
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("still working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
     }
 
   @Test
