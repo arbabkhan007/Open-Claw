@@ -269,7 +269,7 @@ describe("Anthropic provider", () => {
         ],
       },
       {
-        apiKey: "sk-ant-provider",
+        apiKey: "test-api-key",
         onPayload: (payload) => {
           capturedPayload = payload;
           throw new Error("stop before network");
@@ -329,7 +329,7 @@ describe("Anthropic provider", () => {
         ],
       },
       {
-        apiKey: "sk-ant-provider",
+        apiKey: "test-api-key",
         onPayload: (payload) => {
           capturedPayload = payload;
           throw new Error("stop before network");
@@ -376,7 +376,7 @@ describe("Anthropic provider", () => {
         ],
       },
       {
-        apiKey: "sk-ant-provider",
+        apiKey: "test-api-key",
         onPayload: (payload) => {
           capturedPayload = payload;
           throw new Error("stop before network");

@@ -3440,7 +3440,7 @@ describe("anthropic transport stream", () => {
         ],
       } as AnthropicStreamContext,
       {
-        apiKey: "sk-ant-api",
+        apiKey: "test-api-key",
       } as AnthropicStreamOptions,
     );
 
@@ -3474,7 +3474,7 @@ describe("anthropic transport stream", () => {
         ],
       } as AnthropicStreamContext,
       {
-        apiKey: "sk-ant-api",
+        apiKey: "test-api-key",
       } as AnthropicStreamOptions,
     );
 
