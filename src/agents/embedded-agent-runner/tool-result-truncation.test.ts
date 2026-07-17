@@ -1238,6 +1238,24 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ).toBe(true);
   });
 
+  it("preserves non-empty text when aggregate budget is exhausted to zero without spill markers", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "exhausted_1"),
+      makeToolResult("b".repeat(100), "exhausted_2"),
+      makeToolResult("c".repeat(100), "exhausted_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 1);
+    const texts = result.messages.map((message) => getFirstToolResultText(message));
+
+    // All tool results must retain non-empty text even with an exhausted aggregate budget
+    // and no spill-file pointers. The fix ensures at least 1 character is kept so the
+    // model never sees an empty result ("").
+    expect(texts.every((text) => text.length > 0)).toBe(true);
+    expect(result.truncatedCount).toBeGreaterThan(0);
+    expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
+  });
+
   it("keeps realistic spill pointers intact in near-zero aggregate elision budgets", async () => {
     const dir = await createTmpDir();
     const spillPath = realisticSpillPath(dir, "realistic");
