@@ -241,6 +241,7 @@ export function forceFreePort(port: number): PortProcess[] {
     try {
       process.kill(proc.pid, "SIGTERM");
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") continue;
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
         { cause: err },
@@ -255,6 +256,7 @@ function killPids(listeners: PortProcess[], signal: NodeJS.Signals) {
     try {
       process.kill(proc.pid, signal);
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") continue;
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
         { cause: err },
