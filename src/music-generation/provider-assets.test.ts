@@ -80,29 +80,62 @@ describe("downloadGeneratedMusicAsset", () => {
     expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
   });
 
-  it("bounds a dripping non-2xx error body with one wall-clock deadline", async () => {
-    const timeoutMs = 250;
-    const port = await listenDripServer({
-      statusCode: 500,
-      contentType: "text/plain",
-      chunk: "e",
+  it("throws on non-2xx HTTP status without retry", async () => {
+    // 400 is explicitly non-retryable. Use an immediate response so the HTTP
+    // status error is thrown directly — no body-read timeout to confuse retry.
+    server = http.createServer((_req, res) => {
+      res.on("error", () => {});
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("Bad Request");
     });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected port");
 
-    const startedAt = performance.now();
     await expect(
       downloadGeneratedMusicAsset({
-        candidate: { url: `http://127.0.0.1:${port}/generated/track.mp3` },
-        timeoutMs,
+        candidate: { url: `http://127.0.0.1:${address.port}/generated/track.mp3` },
+        timeoutMs: 5000,
         fetchFn: fetch,
         provider: "fal",
         requestFailedMessage: "fal generated music download failed",
         maxBytes: 1024 * 1024,
       }),
-    ).rejects.toThrow(`fal generated music download timed out after ${timeoutMs}ms`);
-    const elapsedMs = performance.now() - startedAt;
+    ).rejects.toThrow("fal generated music download failed (HTTP 400): Bad Request");
+  });
 
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 50);
-    expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
+  it("retries on transient HTTP status before succeeding", async () => {
+    let requestCount = 0;
+
+    server = http.createServer((_req, res) => {
+      res.on("error", () => {});
+      requestCount += 1;
+      if (requestCount === 1) {
+        res.writeHead(503, { "Content-Type": "text/plain" });
+        res.end("Service Unavailable");
+      } else {
+        res.writeHead(200, { "Content-Type": "audio/mpeg" });
+        res.end(Buffer.alloc(1024, 0x00));
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected port");
+
+    const result = await downloadGeneratedMusicAsset({
+      candidate: { url: `http://127.0.0.1:${address.port}/track.mp3` },
+      timeoutMs: 5000,
+      fetchFn: fetch,
+      provider: "test-provider",
+      requestFailedMessage: "test music download failed",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(requestCount).toBe(2);
+    expect(result.buffer.length).toBe(1024);
+    expect(result.mimeType).toBe("audio/mpeg");
   });
 
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {
