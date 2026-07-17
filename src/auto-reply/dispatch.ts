@@ -199,7 +199,7 @@ async function shouldCancelForegroundReplyDelivery(
       return false;
     }
     if (state.visibleDeliveryGeneration > snapshot.generation) {
-      return true;
+      return !state.activeGenerations.has(snapshot.generation);
     }
     if (!hasNewerActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
       return false;
