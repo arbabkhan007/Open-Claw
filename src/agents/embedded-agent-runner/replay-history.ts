@@ -279,8 +279,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (
     hasSilentText &&
     sanitizedContent.every((block) => {
+      // Unknown or primitive blocks are NOT thinking — preserve the message
+      // rather than dropping content we cannot classify (#99772).
       if (!block || typeof block !== "object") {
-        return true;
+        return false;
       }
       const type = (block as { type?: unknown }).type;
       return type === "thinking" || type === "redacted_thinking";

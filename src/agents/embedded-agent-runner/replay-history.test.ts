@@ -611,4 +611,30 @@ describe("normalizeAssistantReplayContent", () => {
     // The yield-turn assistant with orphaned thinking should be dropped
     expect(out).toStrictEqual([messages[0]]);
   });
+
+  it("preserves assistant message with unknown content blocks after NO_REPLY strip (#99772 P2)", () => {
+    // Regression: unknown/primitive content blocks must prevent the
+    // orphaned-thinking guard from dropping the message. The every()
+    // predicate should return false for unclassifiable blocks.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "stale reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: "NO_REPLY" },
+          // Unknown block — not thinking, not text. Must preserve message.
+          { customType: "legacy_data", data: "some metadata" },
+        ],
+        "stop",
+      ),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    // Unknown block prevents drop — message stays, but NO_REPLY text stripped
+    expect(out).toHaveLength(2); // user + assistant preserved
+    const content = out[1].content as unknown[];
+    expect(content).toHaveLength(2);
+    expect((content[0] as Record<string, string>).type).toBe("thinking");
+    expect((content[1] as Record<string, string>).customType).toBe("legacy_data");
+    expect(content.some((b) => (b as Record<string, string>).text === "NO_REPLY")).toBe(false);
+  });
 });
