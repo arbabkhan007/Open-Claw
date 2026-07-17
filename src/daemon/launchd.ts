@@ -169,6 +169,8 @@ function resolveSystemLaunchDaemonPlistPathForLabel(label: string): string {
 }
 
 async function findSystemLaunchDaemonPlistPathForLabel(label: string): Promise<string | null> {
+  // Service inspection intentionally skips unreadable files; activation cannot
+  // reuse that best-effort policy because it could hide a same-label daemon.
   const canonicalPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
   try {
     await fs.access(canonicalPath);
@@ -446,7 +448,16 @@ async function resolveSystemLaunchDaemonConflict(
       `Could not verify whether system LaunchDaemon ${serviceTarget} is loaded: ${detail}`,
     );
   }
-  const plistPath = await findSystemLaunchDaemonPlistPathForLabel(label);
+  let plistPath: string | null;
+  try {
+    plistPath = await findSystemLaunchDaemonPlistPathForLabel(label);
+  } catch (err) {
+    const detail = truncateUtf16Safe(sanitizeForLog(String(err)), 500);
+    throw new Error(
+      `Could not verify whether system LaunchDaemon ${serviceTarget} has an installed plist: ${detail}`,
+      { cause: err },
+    );
+  }
   if (!plistPath) {
     return null;
   }

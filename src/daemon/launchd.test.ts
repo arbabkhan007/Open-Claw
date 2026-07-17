@@ -31,6 +31,8 @@ const state = vi.hoisted(() => ({
   systemPrintCode: 113,
   systemServiceLoaded: false,
   systemPlistAccessErrorCode: "",
+  systemPlistReadErrorPath: "",
+  systemPlistReadErrorCode: "",
   printNotLoadedRemaining: 0,
   printError: "",
   printCode: 1,
@@ -413,6 +415,13 @@ vi.mock("node:fs/promises", async () => {
     }),
     readFile: vi.fn(async (p: string) => {
       const key = p;
+      if (key === state.systemPlistReadErrorPath && state.systemPlistReadErrorCode) {
+        const error = new Error(
+          `${state.systemPlistReadErrorCode}: read failed, open '${key}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = state.systemPlistReadErrorCode;
+        throw error;
+      }
       const data = state.files.get(key);
       if (data !== undefined) {
         return data;
@@ -449,6 +458,8 @@ beforeEach(() => {
   state.systemPrintCode = 113;
   state.systemServiceLoaded = false;
   state.systemPlistAccessErrorCode = "";
+  state.systemPlistReadErrorPath = "";
+  state.systemPlistReadErrorCode = "";
   state.printNotLoadedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
@@ -1381,7 +1392,32 @@ describe("launchd install", () => {
           stdout: new PassThrough(),
           programArguments: defaultProgramArguments,
         }),
-      ).rejects.toMatchObject({ code: "EACCES" });
+      ).rejects.toThrow(
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway has an installed plist: Error: EACCES",
+      );
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
+
+  it("frames unreadable unrelated system plists as an unverifiable conflict check", async () => {
+    await withProcessPlatform("darwin", async () => {
+      const env = createDefaultLaunchdEnv();
+      const unrelatedPath = "/Library/LaunchDaemons/com.vendor.restricted.plist";
+      state.files.set(unrelatedPath, "<plist/>");
+      state.systemPlistReadErrorPath = unrelatedPath;
+      state.systemPlistReadErrorCode = "EACCES";
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow(
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway has an installed plist: Error: EACCES",
+      );
 
       expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expectNoLaunchAgentActivationCalls();
