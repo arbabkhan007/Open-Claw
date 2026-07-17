@@ -1254,6 +1254,17 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(texts.every((text) => text.length > 0)).toBe(true);
     expect(result.truncatedCount).toBeGreaterThan(0);
     expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
+
+    // Global aggregate cap assertion: the fix's 1-char floor is applied per
+    // message in clearToolResultText, so total output across all messages is
+    // bounded by messageCount (each gets at most 1 char). This prevents the
+    // aggregate budget from ballooning under tiny caps.
+    const totalOutputChars = result.messages.reduce(
+      (sum, message) => sum + getToolResultTextLength(message),
+      0,
+    );
+    expect(totalOutputChars).toBeLessThanOrEqual(messages.length);
+    expect(totalOutputChars).toBeLessThan(messages.length * 100); // far smaller than original
   });
 
   it("keeps realistic spill pointers intact in near-zero aggregate elision budgets", async () => {
