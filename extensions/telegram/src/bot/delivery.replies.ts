@@ -54,6 +54,7 @@ import {
 } from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -77,6 +78,8 @@ const GrammyErrorCtor: typeof GrammyError | undefined =
 type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
   promptContext?: TelegramPromptContextProjectionSequence;
+  /** Records each successfully delivered Telegram message id into the ledger. */
+  recordMessageId?: (messageId: number) => void;
 };
 
 type TelegramReplyChannelData = {
@@ -168,9 +171,15 @@ function buildChunkTextResolver(params: {
   };
 }
 
-function markDelivered(progress: DeliveryProgress): void {
+function markDelivered(progress: DeliveryProgress, messageId?: number): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
+  // Record each delivered message id (not just the first) so the sent-message
+  // ledger matches the canonical send path: reactions and reply routing for
+  // every chunk/media/fallback message must recognize the bot-owned send.
+  if (messageId != null) {
+    progress.recordMessageId?.(messageId);
+  }
 }
 
 function filterEmptyTelegramTextChunks<
@@ -288,6 +297,7 @@ async function deliverTextReply(params: {
         firstDeliveredMessageId = messageId;
       }
       await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
+      return messageId;
     },
   });
   return firstDeliveredMessageId;
@@ -424,13 +434,16 @@ async function deliverMediaReply(params: {
     });
     firstDeliveredMessageId ??= message.message_id;
     await recordPromptContextMessage(message, options.text);
-    markDelivered(params.progress);
+    markDelivered(params.progress, message.message_id);
   };
   const createVoiceFallbackProgress = (): DeliveryProgress => ({
     hasReplied: false,
     hasDelivered: false,
     deliveredCount: 0,
     ...(params.progress.promptContext ? { promptContext: params.progress.promptContext } : {}),
+    ...(params.progress.recordMessageId
+      ? { recordMessageId: params.progress.recordMessageId }
+      : {}),
   });
   for (const mediaUrl of params.mediaList) {
     const isFirstMedia = first;
@@ -809,6 +822,7 @@ export async function deliverReplies(params: {
     hasReplied: false,
     hasDelivered: false,
     deliveredCount: 0,
+    recordMessageId: (messageId) => recordSentMessage(params.chatId, messageId, params.cfg),
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
