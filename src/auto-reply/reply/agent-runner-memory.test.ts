@@ -1531,7 +1531,7 @@ describe("runMemoryFlushIfNeeded", () => {
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
-      opts: { onSessionMetadataChanges: metadataChanges },
+      onSessionMetadataChanges: metadataChanges,
     });
 
     expect(metadataChanges).toHaveBeenCalledWith([

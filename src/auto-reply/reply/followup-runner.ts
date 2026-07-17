@@ -907,6 +907,7 @@ export function createFollowupRunner(params: {
           isHeartbeat: opts?.isHeartbeat === true,
           replyOperation,
           onCompactionNotice: notifyPreflightCompaction,
+          onSessionMetadataChanges: opts?.onSessionMetadataChanges,
         });
         preflightCompactionApplied =
           (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;

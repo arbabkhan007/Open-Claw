@@ -1876,6 +1876,7 @@ export async function runReplyAgent(params: {
           isHeartbeat,
           replyOperation,
           onCompactionNotice: sendDirectCompactionNotice,
+          onSessionMetadataChanges: opts?.onSessionMetadataChanges,
         }),
       );
       preflightCompactionApplied =

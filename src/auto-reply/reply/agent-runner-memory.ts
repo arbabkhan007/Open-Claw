@@ -67,6 +67,7 @@ import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
@@ -784,6 +785,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
   onCompactionNotice?: (phase: CompactionNoticePhase) => Promise<void> | void;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 }): Promise<SessionEntry | undefined> {
   const deps = {
     compactEmbeddedAgentSession: memoryDeps.compactEmbeddedAgentSession,
@@ -1060,7 +1062,7 @@ export async function runPreflightCompactionIfNeeded(params: {
               ...request,
               onCommitted: (commit) => {
                 request.onCommitted?.(commit);
-                params.opts?.onSessionMetadataChanges?.([
+                params.onSessionMetadataChanges?.([
                   {
                     sessionKey: commit.key,
                     ...(request.agentId ? { agentId: request.agentId } : {}),
