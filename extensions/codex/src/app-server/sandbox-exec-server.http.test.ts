@@ -99,6 +99,71 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("sanitizes the error when the sandbox helper returns non-JSON stdout", async () => {
+    // Helper exits 0 but prints non-JSON (daemon banner, debug log, truncated
+    // output). Without the guard the JSON-RPC error exposes the raw stdout
+    // through the SyntaxError message.
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.from("not-json <html>daemon warning</html>"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    const requestError = await rpc(socket, "http/request", {
+      requestId: "http-1",
+      method: "POST",
+      url: "https://example.test/mcp",
+      headers: [],
+      bodyBase64: "",
+    }).catch((error: unknown) => error);
+    if (!(requestError instanceof Error)) {
+      throw new Error("expected sandbox http/request to reject");
+    }
+    expect(requestError.message).toBe("sandbox http/request returned non-JSON stdout");
+    expect(requestError.message).not.toContain("daemon warning");
+    socket.close();
+  });
+
+  it("sanitizes malformed streaming helper output", async () => {
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [process.execPath, "-e", 'console.log("not-json <html>daemon warning</html>")'],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    const requestError = await rpc(socket, "http/request", {
+      requestId: "http-stream-malformed",
+      method: "GET",
+      url: "https://example.test/sse",
+      streamResponse: true,
+    }).catch((error: unknown) => error);
+    if (!(requestError instanceof Error)) {
+      throw new Error("expected sandbox http/request to reject");
+    }
+    expect(requestError.message).toBe("sandbox http/request returned non-JSON stdout");
+    expect(requestError.message).not.toContain("daemon warning");
+    socket.close();
+  });
+
   it("blocks private HTTP targets before starting the sandbox backend", async () => {
     const runShellCommand = vi.fn(async () => ({
       stdout: Buffer.alloc(0),

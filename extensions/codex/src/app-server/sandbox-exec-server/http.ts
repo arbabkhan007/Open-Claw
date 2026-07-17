@@ -1,7 +1,3 @@
-/**
- * Implements sandboxed HTTP requests for Codex native tools by routing network
- * access through the active OpenClaw sandbox backend.
- */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -13,10 +9,7 @@ import { readHttpHeaders, requireNumber, requireObject, requireString } from "./
 import { requireBackend } from "./runtime.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
-/** Maximum JSON-line size accepted from the streaming HTTP helper process. */
 const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
-
-/** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
   execServer: OpenClawExecServer,
   socket: WebSocket,
@@ -40,11 +33,10 @@ export async function httpRequest(
   if (request.streamResponse) {
     return await runStreamingSandboxHttpRequest(execServer, socket, requestId, request);
   }
-  const result = await runSandboxHttpRequest(execServer, {
+  return await runSandboxHttpRequest(execServer, {
     ...request,
     streamResponse: false,
   });
-  return result;
 }
 
 type SandboxHttpRequest = {
@@ -89,11 +81,10 @@ async function runSandboxHttpRequest(
     const stderr = result.stderr.toString("utf8").trim();
     throw new Error(stderr || `sandbox http/request failed with code ${result.code}`);
   }
-  const parsed = JSON.parse(result.stdout.toString("utf8")) as {
-    status?: unknown;
-    headers?: unknown;
-    bodyBase64?: unknown;
-  };
+  const parsed = requireObject(
+    parseSandboxHttpStdout(result.stdout.toString("utf8")),
+    "sandbox http/request response",
+  );
   if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
     throw new Error("sandbox http/request returned an invalid response envelope");
   }
@@ -102,6 +93,15 @@ async function runSandboxHttpRequest(
     headers: readHttpHeaders(parsed.headers),
     bodyBase64: typeof parsed.bodyBase64 === "string" ? parsed.bodyBase64 : "",
   };
+}
+
+// Keep malformed helper output generic before JSON-RPC or transcript handling can disclose it.
+function parseSandboxHttpStdout(stdout: string): JsonValue {
+  try {
+    return JSON.parse(stdout) as JsonValue;
+  } catch {
+    throw new Error("sandbox http/request returned non-JSON stdout");
+  }
 }
 
 async function runStreamingSandboxHttpRequest(
@@ -214,7 +214,7 @@ function readStreamingSandboxHttpResponse(params: {
         stdoutBuffer = stdoutBuffer.slice(newline + 1);
         if (line) {
           try {
-            const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
+            const message = requireObject(parseSandboxHttpStdout(line), "http stream message");
             const type = requireString(message.type, "http stream message type");
             if (type === "headers") {
               headerResolved = true;
