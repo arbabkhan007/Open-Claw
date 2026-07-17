@@ -90,6 +90,26 @@ function findCasePreservingPeerDescriptor(
   return CASE_PRESERVING_PEERS.find((d) => d.channel === c && d.peerKinds.has(k));
 }
 
+/** Resolve the descriptor for a key body, allowing the account-scoped DM shape
+ *  `<channel>:<account>:<direct|dm>:<peer>` that parseSessionDeliveryRoute also
+ *  disambiguates. Without it an account-scoped DM key claims no proof is needed
+ *  and a folded sibling peer's session is adopted and deleted. */
+function findKeyBodyCasePreservingPeerDescriptor(
+  channel: string | undefined,
+  peerKindOrAccount: string | undefined,
+  accountScopedPeerKind: string | undefined,
+): CasePreservingPeerDescriptor | undefined {
+  const direct = findCasePreservingPeerDescriptor(channel, peerKindOrAccount);
+  if (direct) {
+    return direct;
+  }
+  const scopedKind = normalizeOptionalLowercaseString(accountScopedPeerKind);
+  if (scopedKind !== "direct" && scopedKind !== "dm") {
+    return undefined;
+  }
+  return findCasePreservingPeerDescriptor(channel, scopedKind);
+}
+
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
@@ -110,9 +130,10 @@ export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefine
       bodyStartIndex += 1;
     }
   }
-  const descriptor = findCasePreservingPeerDescriptor(
+  const descriptor = findKeyBodyCasePreservingPeerDescriptor(
     parts[bodyStartIndex],
     parts[bodyStartIndex + 1],
+    parts[bodyStartIndex + 2],
   );
   return descriptor?.span === "tail";
 }

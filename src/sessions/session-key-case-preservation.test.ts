@@ -596,18 +596,42 @@ describe("Matrix DM (direct) peer isolation under per-peer dmScope (#102313)", (
     expect(lower.existing?.origin?.from).toBe(`matrix:${MXID_LOWER}`);
   });
 
-  it("adopts a peer's own lowercased legacy DM session on upgrade", () => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:matrix:direct:@alice:hs.example": dmEntry(MXID_UPPER, 50),
-    };
-    const r = resolveSessionStoreEntry({
-      store,
-      sessionKey: dmKey(MXID_UPPER, "per-channel-peer"),
-    });
-    expect(r.normalizedKey).toBe(dmKey(MXID_UPPER, "per-channel-peer"));
-    expect(r.legacyKeys).toContain("agent:main:matrix:direct:@alice:hs.example");
-    expect(r.existing?.origin?.from).toBe(`matrix:${MXID_UPPER}`);
-  });
+  const LEGACY_LOWERCASE_KEY = {
+    "per-channel-peer": "agent:main:matrix:direct:@alice:hs.example",
+    "per-account-channel-peer": "agent:main:matrix:acct1:direct:@alice:hs.example",
+  } as const;
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "requires folded-alias proof for %s DM keys",
+    (dmScope) => {
+      expect(requiresFoldedSessionKeyAliasProof(dmKey(MXID_UPPER, dmScope))).toBe(true);
+    },
+  );
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "adopts the same peer's own lowercased legacy %s row on upgrade",
+    (dmScope) => {
+      const store: Record<string, SessionEntry> = {
+        [LEGACY_LOWERCASE_KEY[dmScope]]: dmEntry(MXID_UPPER, 50),
+      };
+      const r = resolveSessionStoreEntry({ store, sessionKey: dmKey(MXID_UPPER, dmScope) });
+      expect(r.normalizedKey).toBe(dmKey(MXID_UPPER, dmScope));
+      expect(r.legacyKeys).toContain(LEGACY_LOWERCASE_KEY[dmScope]);
+      expect(r.existing?.origin?.from).toBe(`matrix:${MXID_UPPER}`);
+    },
+  );
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "rejects a case-distinct sibling's lowercased %s row instead of adopting or deleting it",
+    (dmScope) => {
+      const store: Record<string, SessionEntry> = {
+        [LEGACY_LOWERCASE_KEY[dmScope]]: dmEntry(MXID_LOWER, 50),
+      };
+      const r = resolveSessionStoreEntry({ store, sessionKey: dmKey(MXID_UPPER, dmScope) });
+      expect(r.existing).toBeUndefined();
+      expect(r.legacyKeys).toEqual([]);
+    },
+  );
 
   it("keeps non-enrolled channel DMs folded to one session", () => {
     const telegramKey = (peerId: string): string =>
