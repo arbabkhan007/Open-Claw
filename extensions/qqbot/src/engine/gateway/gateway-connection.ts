@@ -393,7 +393,11 @@ export class GatewayConnection {
     }
     this.heartbeatInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.lastSeq }));
+        // Heartbeats report the latest received frame seq (receive cursor);
+        // only RESUME and persistence use the settlement watermark. Sending
+        // the watermark here would look like the client fell behind while a
+        // handler is still running and provoke reconnect/replay churn.
+        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.seqWatermark.latest() }));
       }
     }, interval);
   }

@@ -376,6 +376,18 @@ describe("GatewayConnection resume watermark", () => {
       expect(lastSavedSeq()).toBe(1);
     });
 
+    // Heartbeats keep reporting the latest received frame seq (the receive
+    // cursor) even though the resumable watermark is held below the
+    // in-flight message.
+    staleWs.readyState = 1; // OPEN — heartbeat only sends on a live socket
+    staleWs.emit("message", JSON.stringify({ op: 10, d: { heartbeat_interval: 1_000 } }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const heartbeatFrame = staleWs.send.mock.calls
+      .map((call) => JSON.parse(String(call[0])) as { op: number; d?: number | null })
+      .find((frame) => frame.op === 1);
+    expect(heartbeatFrame?.d).toBe(2);
+    staleWs.readyState = 3;
+
     // Server-driven reconnect while the message handler is still running.
     staleWs.emit("message", JSON.stringify({ op: 7 }));
     await vi.advanceTimersByTimeAsync(1_100);

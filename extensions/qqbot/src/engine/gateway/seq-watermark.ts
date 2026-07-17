@@ -38,6 +38,15 @@ export class SeqWatermark {
   }
 
   /**
+   * Latest received frame seq, regardless of settlement. Heartbeats report
+   * this receive cursor; using the resumable watermark there would make the
+   * client look behind while a handler is still running.
+   */
+  latest(): number | null {
+    return this.highestObserved;
+  }
+
+  /**
    * Resumable seq: the highest observed seq once nothing older is pending,
    * otherwise just below the oldest unsettled message so RESUME replays it.
    */

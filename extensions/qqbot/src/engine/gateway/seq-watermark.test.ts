@@ -64,6 +64,21 @@ describe("SeqWatermark", () => {
     expect(w.value()).toBe(5);
   });
 
+  it("keeps the heartbeat receive cursor at the latest seq while messages are pending", () => {
+    const w = new SeqWatermark();
+    w.observe(1);
+    w.register(2);
+    w.observe(3);
+    // Heartbeats report the receive cursor; RESUME uses the watermark.
+    expect(w.latest()).toBe(3);
+    expect(w.value()).toBe(1);
+    w.settle(2);
+    expect(w.latest()).toBe(3);
+    expect(w.value()).toBe(3);
+    w.reset(null);
+    expect(w.latest()).toBeNull();
+  });
+
   it("clears pending seqs on reset so a new session starts clean", () => {
     const w = new SeqWatermark();
     w.register(7);
