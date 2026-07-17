@@ -899,7 +899,7 @@ describe("skill_workshop tool", () => {
       proposedVersion: "v1",
     });
     expect((updateReview.content[0] as { text: string }).text).toContain(
-      "+Check weather, alerts, and timing.",
+      "+Check alerts and timing.",
     );
 
     await tool.execute("call-update-revise", {
