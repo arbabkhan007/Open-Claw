@@ -281,7 +281,7 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const userMessage = (capturedPayload as { messages: Array<Record<string, unknown>> })
-      .messages[0];
+      .messages[0]!;
     const imageBlock = (userMessage.content as Array<Record<string, unknown>>)[1];
     expect(imageBlock).toMatchObject({
       type: "image",
@@ -341,8 +341,8 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const userMessage = (capturedPayload as { messages: Array<Record<string, unknown>> })
-      .messages[1];
-    const toolResult = (userMessage.content as Array<Record<string, unknown>>)[0];
+      .messages[1]!;
+    const toolResult = (userMessage.content as Array<Record<string, unknown>>)[0]!;
     const imageBlock = (toolResult.content as Array<Record<string, unknown>>)[1];
     expect(imageBlock).toMatchObject({
       type: "image",
@@ -388,7 +388,7 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const userMessage = (capturedPayload as { messages: Array<Record<string, unknown>> })
-      .messages[0];
+      .messages[0]!;
     expect(userMessage.content).toMatchObject([
       { type: "text", text: "look" },
       { type: "text", text: "(image omitted: model does not support images)" },
