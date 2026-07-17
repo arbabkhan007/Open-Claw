@@ -746,6 +746,16 @@ async function saveSessionStoreUnlocked(
 
   let maintenanceChangedStore = false;
   if (!opts?.skipMaintenance) {
+    const commitReducedStore = async (): Promise<void> => {
+      const projected = projectSessionStoreForPersistence({ storePath, store });
+      await writeSessionStoreAtomic({
+        storePath,
+        store,
+        serialized: JSON.stringify(projected.store, null, 2),
+        serializedPromptRefs: collectStorePromptRefs(projected.store),
+        promptBlobs: [...projected.promptBlobs.values()],
+      });
+    };
     const maintenance = await applyFileBackedSessionStoreMaintenance({
       storePath,
       store,
@@ -755,6 +765,7 @@ async function saveSessionStoreUnlocked(
       maintenanceOverride: opts?.maintenanceOverride,
       maintenanceConfig: opts?.maintenanceConfig,
       log,
+      commitReducedStore,
       artifacts: {
         archiveRemovedSessionTranscripts,
         removeRemovedSessionTrajectoryArtifacts: async (params) => {
