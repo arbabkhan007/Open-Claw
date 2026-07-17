@@ -40,6 +40,20 @@ const UNSUPPORTED_MODEL_ERROR_CODES = new Set(["1211", "1311"]);
 /** Cap for the Z.AI probe error body; bounds untrusted error responses to avoid unbounded buffering/OOM. */
 const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Resolves the version string embedded in the probe User-Agent. Mirrors the
+ * `openclaw/${version || "dev"}` pattern used by other bare-fetch probes such
+ * as the ChatGPT usage cooldown probe. Falls back to "dev" when the runtime
+ * version cannot be resolved.
+ */
+function resolveOpenClawUserAgentVersion(): string {
+  const fromEnv = process.env.OPENCLAW_VERSION?.trim();
+  if (fromEnv && fromEnv.toLowerCase() !== "undefined") {
+    return fromEnv;
+  }
+  return "dev";
+}
+
 function isUnsupportedModelResult(result: ProbeResult): boolean {
   if (result.ok) {
     return false;
@@ -92,6 +106,11 @@ async function probeZaiChatCompletions(params: {
         headers: {
           authorization: `Bearer ${params.apiKey}`,
           "content-type": "application/json",
+          // z.ai's edge can reject detection probes without an explicit
+          // OpenClaw User-Agent with HTTP 429 (code 1305), which prevents
+          // Coding Plan onboarding from auto-selecting the coding endpoint.
+          // See https://github.com/openclaw/openclaw/issues/98100
+          "user-agent": `openclaw/${resolveOpenClawUserAgentVersion()}`,
         },
         body: JSON.stringify({
           model: params.modelId,
