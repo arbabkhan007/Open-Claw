@@ -747,6 +747,28 @@ describe("overflow compaction in run loop", () => {
     );
   });
 
+  it("does not reset temporary overflow runs without an owned session key", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: estimated context size exceeds safe threshold during tool loop.",
+    );
+
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction timed out",
+    });
+
+    const result = await runEmbeddedAgent({ ...baseParams, sessionKey: undefined });
+
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(mockedPerformGatewaySessionReset).not.toHaveBeenCalled();
+    expectLogExcludes(
+      mockedLog.warn,
+      "queued session reset after unrecoverable tool-loop overflow",
+    );
+  });
+
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
     queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));

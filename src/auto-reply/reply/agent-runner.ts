@@ -2063,6 +2063,7 @@ export async function runReplyAgent(params: {
 
     if (
       shouldInjectGroupIntro &&
+      !replyResetCommitted &&
       activeSessionEntry &&
       activeSessionStore &&
       sessionKey &&
@@ -2179,7 +2180,12 @@ export async function runReplyAgent(params: {
       state: fallbackStateEntry,
       cfg,
     });
-    if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
+    if (
+      fallbackTransition.stateChanged &&
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      !replyResetCommitted
+    ) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;

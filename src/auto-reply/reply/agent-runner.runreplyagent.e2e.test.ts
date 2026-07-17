@@ -843,6 +843,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
       sessionFile: join(root, "session.jsonl"),
       updatedAt: Date.now(),
       compactionCount: 4,
+      groupActivationNeedsSystemIntro: true,
     };
     const sessionStore = { main: sessionEntry };
     await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
@@ -857,6 +858,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
         sessionFile: join(root, "session-reset.jsonl"),
         updatedAt: Date.now(),
         compactionCount: 0,
+        groupActivationNeedsSystemIntro: true,
       };
       sessionStore.main = resetEntry;
       await replaceSessionEntry({ storePath, sessionKey: "main" }, resetEntry);
@@ -899,6 +901,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(stored.sessionId).toBe("session-reset");
     expect(stored.sessionFile).toBe(join(root, "session-reset.jsonl"));
     expect(stored.compactionCount).toBe(0);
+    expect(stored.inputTokens).toBeUndefined();
+    expect(stored.totalTokens).toBeUndefined();
+    expect(stored.groupActivationNeedsSystemIntro).toBe(true);
     expect(sessionStore.main.sessionId).toBe("session-reset");
     expect(followupRun.run.sessionId).toBe("session-reset");
     expect(followupRun.run.sessionFile).toBe(join(root, "session-reset.jsonl"));

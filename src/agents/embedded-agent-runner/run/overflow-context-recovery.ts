@@ -58,7 +58,7 @@ function maybeDeferTerminalToolLoopOverflowReset(input: {
   ) {
     return;
   }
-  const key = input.resolvedSessionKey.trim();
+  const key = input.runParams.sessionKey?.trim();
   if (!key) {
     return;
   }
