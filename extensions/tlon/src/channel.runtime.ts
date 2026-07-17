@@ -5,7 +5,8 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-re
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -35,6 +36,70 @@ type ConfiguredTlonAccount = ResolvedTlonAccount & {
   code: string;
 };
 
+// Wall-clock budget for the outbound poke PUT; also bounds the error-body read below
+// so a stalled response (before or after headers) cannot hang the send indefinitely.
+const TLON_POKE_TIMEOUT_MS = 30_000;
+const TLON_POKE_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
+
+type TlonPokeDeps = {
+  url: string;
+  cookie: string;
+  channelPath: string;
+  shipName: string;
+  ssrfPolicy?: SsrFPolicy;
+  /** Test-only override for TLON_POKE_TIMEOUT_MS so hang tests don't wait the real budget. */
+  timeoutMs?: number;
+};
+
+/** Exported for co-located timeout tests only; not part of the plugin's public surface. */
+export async function pokeTlonChannel(
+  deps: TlonPokeDeps,
+  pokeParams: { app: string; mark: string; json: unknown },
+): Promise<number> {
+  const timeoutMs = deps.timeoutMs ?? TLON_POKE_TIMEOUT_MS;
+  const pokeId = Date.now();
+  const pokeData = {
+    id: pokeId,
+    action: "poke",
+    ship: deps.shipName,
+    app: pokeParams.app,
+    mark: pokeParams.mark,
+    json: pokeParams.json,
+  };
+
+  const { response, release } = await urbitFetch({
+    baseUrl: deps.url,
+    path: deps.channelPath,
+    init: {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: expectDefined(deps.cookie.split(";").at(0), "cookie first segment"),
+      },
+      body: JSON.stringify([pokeData]),
+    },
+    ssrfPolicy: deps.ssrfPolicy,
+    timeoutMs,
+    auditContext: "tlon-poke",
+  });
+
+  try {
+    if (!response.ok && response.status !== 204) {
+      // Idle-bound the error body read too, so a stalled payload can't outlive the poke budget.
+      const errorText = await readResponseTextPrefix(response, TLON_POKE_ERROR_BODY_LIMIT_BYTES, {
+        chunkTimeoutMs: timeoutMs,
+      })
+        .then((prefix) => prefix.text)
+        .catch(() => "");
+      throw new Error(`Poke failed: ${response.status} - ${errorText}`);
+    }
+
+    return pokeId;
+  } finally {
+    await release();
+  }
+}
+
 async function createHttpPokeApi(params: {
   url: string;
   code: string;
@@ -50,43 +115,11 @@ async function createHttpPokeApi(params: {
   const shipName = params.ship.replace(/^~/, "");
 
   return {
-    poke: async (pokeParams: { app: string; mark: string; json: unknown }) => {
-      const pokeId = Date.now();
-      const pokeData = {
-        id: pokeId,
-        action: "poke",
-        ship: shipName,
-        app: pokeParams.app,
-        mark: pokeParams.mark,
-        json: pokeParams.json,
-      };
-
-      const { response, release } = await urbitFetch({
-        baseUrl: params.url,
-        path: channelPath,
-        init: {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Cookie: expectDefined(cookie.split(";").at(0), "cookie first segment"),
-          },
-          body: JSON.stringify([pokeData]),
-        },
-        ssrfPolicy,
-        auditContext: "tlon-poke",
-      });
-
-      try {
-        if (!response.ok && response.status !== 204) {
-          const errorText = await readResponseTextLimited(response, 16 * 1024);
-          throw new Error(`Poke failed: ${response.status} - ${errorText}`);
-        }
-
-        return pokeId;
-      } finally {
-        await release();
-      }
-    },
+    poke: async (pokeParams: { app: string; mark: string; json: unknown }) =>
+      await pokeTlonChannel(
+        { url: params.url, cookie, channelPath, shipName, ssrfPolicy },
+        pokeParams,
+      ),
     delete: async () => {
       // No-op for HTTP-only client
     },
