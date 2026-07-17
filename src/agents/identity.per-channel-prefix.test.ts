@@ -1,7 +1,11 @@
 // Documents response-prefix cascade across global, channel, and account scopes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveResponsePrefix, resolveEffectiveMessagesConfig } from "./identity.js";
+import {
+  resolveMessagePrefix,
+  resolveResponsePrefix,
+  resolveEffectiveMessagesConfig,
+} from "./identity.js";
 
 const makeConfig = <T extends OpenClawConfig>(cfg: T) => cfg;
 
@@ -301,5 +305,75 @@ describe("resolveResponsePrefix with per-channel override", () => {
       const result = resolveEffectiveMessagesConfig(cfg, "main");
       expect(result.responsePrefix).toBe("[Global] ");
     });
+  });
+});
+
+describe("resolveMessagePrefix with per-channel override", () => {
+  it("returns global prefix when set", () => {
+    const cfg: OpenClawConfig = { messages: { messagePrefix: "[Global] " } };
+    expect(resolveMessagePrefix(cfg, "main")).toBe("[Global] ");
+  });
+
+  it("returns channel prefix when set, ignoring global", () => {
+    const cfg = makeConfig({
+      messages: { messagePrefix: "[Global] " },
+      channels: {
+        whatsapp: { messagePrefix: "[WA] " },
+      },
+    } satisfies OpenClawConfig);
+    expect(resolveMessagePrefix(cfg, "main", { channel: "whatsapp" })).toBe("[WA] ");
+  });
+
+  it("channel empty string stops cascade", () => {
+    const cfg = makeConfig({
+      messages: { messagePrefix: "[Global] " },
+      channels: {
+        // WhatsApp schema includes messagePrefix; TelegramConfig does not.
+        whatsapp: { messagePrefix: "" },
+      },
+    } satisfies OpenClawConfig);
+    expect(resolveMessagePrefix(cfg, "main", { channel: "whatsapp" })).toBe("");
+  });
+
+  it("account-level prefix wins over channel and global", () => {
+    const cfg = makeConfig({
+      messages: { messagePrefix: "[Global] " },
+      channels: {
+        whatsapp: {
+          messagePrefix: "[WA] ",
+          accounts: {
+            business: { messagePrefix: "[Biz] " },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+    expect(resolveMessagePrefix(cfg, "main", { channel: "whatsapp", accountId: "business" })).toBe(
+      "[Biz] ",
+    );
+  });
+
+  it("opts.configured still wins over channel cascade", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: { messagePrefix: "[WA] " },
+      },
+    } satisfies OpenClawConfig);
+    expect(
+      resolveMessagePrefix(cfg, "main", {
+        channel: "whatsapp",
+        configured: "[Caller] ",
+      }),
+    ).toBe("[Caller] ");
+  });
+
+  it("resolveEffectiveMessagesConfig passes channel context to messagePrefix", () => {
+    const cfg = makeConfig({
+      messages: { messagePrefix: "[Global] " },
+      channels: {
+        whatsapp: { messagePrefix: "[WA] " },
+      },
+    } satisfies OpenClawConfig);
+    const result = resolveEffectiveMessagesConfig(cfg, "main", { channel: "whatsapp" });
+    expect(result.messagePrefix).toBe("[WA] ");
   });
 });

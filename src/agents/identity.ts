@@ -69,9 +69,40 @@ export function resolveIdentityNamePrefix(
 function resolveMessagePrefix(
   cfg: OpenClawConfig,
   agentId: string,
-  opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
+  opts?: {
+    configured?: string;
+    hasAllowFrom?: boolean;
+    fallback?: string;
+    channel?: string;
+    accountId?: string;
+  },
 ): string {
-  const configured = opts?.configured ?? cfg.messages?.messagePrefix;
+  // Explicit caller override (e.g. WhatsApp channel field pre-resolved).
+  if (opts?.configured !== undefined) {
+    return opts.configured;
+  }
+
+  // L1: Channel account level
+  if (opts?.channel && opts?.accountId) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
+    const accountPrefix = accounts?.[opts.accountId]?.messagePrefix as string | undefined;
+    if (accountPrefix !== undefined) {
+      return accountPrefix;
+    }
+  }
+
+  // L2: Channel level
+  if (opts?.channel) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const channelPrefix = channelCfg?.messagePrefix as string | undefined;
+    if (channelPrefix !== undefined) {
+      return channelPrefix;
+    }
+  }
+
+  // L3: Global messages level
+  const configured = cfg.messages?.messagePrefix;
   if (configured !== undefined) {
     return configured;
   }
@@ -153,6 +184,8 @@ export function resolveEffectiveMessagesConfig(
     messagePrefix: resolveMessagePrefix(cfg, agentId, {
       hasAllowFrom: opts?.hasAllowFrom,
       fallback: opts?.fallbackMessagePrefix,
+      channel: opts?.channel,
+      accountId: opts?.accountId,
     }),
     responsePrefix: resolveResponsePrefix(cfg, agentId, {
       channel: opts?.channel,
