@@ -1368,6 +1368,48 @@ export async function runMemoryFlushIfNeeded(params: {
   params.replyOperation.setPhase("memory_flushing");
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
+  const loadCurrentMemoryFlushEntry = () => {
+    if (!params.sessionKey) {
+      return activeSessionEntry;
+    }
+    if (params.storePath) {
+      return loadSessionEntry({
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        readConsistency: "latest",
+      });
+    }
+    return activeSessionStore?.[params.sessionKey] ?? activeSessionEntry;
+  };
+  const refreshMemoryFlushSessionState = (previousSessionId?: string) => {
+    const updatedEntry = loadCurrentMemoryFlushEntry();
+    if (!updatedEntry) {
+      return;
+    }
+    activeSessionEntry = updatedEntry;
+    if (params.sessionKey && activeSessionStore) {
+      activeSessionStore[params.sessionKey] = updatedEntry;
+    }
+    params.followupRun.run.sessionId = updatedEntry.sessionId;
+    params.replyOperation.updateSessionId(updatedEntry.sessionId);
+    const updatedSessionFile =
+      updatedEntry.sessionFile ??
+      resolveSessionLogPath(updatedEntry.sessionId, updatedEntry, params.sessionKey, {
+        storePath: params.storePath,
+      });
+    if (updatedSessionFile) {
+      params.followupRun.run.sessionFile = updatedSessionFile;
+    }
+    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
+    if (queueKey && previousSessionId && previousSessionId !== updatedEntry.sessionId) {
+      memoryDeps.refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: updatedEntry.sessionId,
+        nextSessionFile: updatedSessionFile,
+      });
+    }
+  };
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     activeSessionEntry?.systemPromptReport ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
@@ -1381,6 +1423,8 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  let memoryFlushResetCommitted = false;
+  let memoryFlushResetPreviousSessionId: string | undefined;
   let outcome: MemoryFlushOutcome = "completed";
   let visibleErrorPayloads: ReplyPayload[] = [];
   const memoryFlushNowMs = memoryDeps.now();
@@ -1484,6 +1528,8 @@ export async function runMemoryFlushIfNeeded(params: {
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
           onSessionResetCommitted: (commit) => {
+            memoryFlushResetCommitted = true;
+            memoryFlushResetPreviousSessionId = params.followupRun.run.sessionId;
             params.opts?.onSessionMetadataChanges?.([
               {
                 sessionKey: commit.key,
@@ -1514,40 +1560,27 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
+    if (memoryCompactionCompleted) {
+      const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
+      if (memoryFlushResetCommitted) {
+        refreshMemoryFlushSessionState(memoryFlushResetPreviousSessionId ?? previousSessionId);
+      } else {
+        await memoryDeps.incrementCompactionCount({
+          cfg: params.cfg,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          newSessionId: postCompactionSessionId,
+          newSessionFile: postCompactionSessionFile,
+        });
+        refreshMemoryFlushSessionState(previousSessionId);
+      }
+    }
     const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
-    if (memoryCompactionCompleted) {
-      const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      await memoryDeps.incrementCompactionCount({
-        cfg: params.cfg,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        newSessionId: postCompactionSessionId,
-        newSessionFile: postCompactionSessionFile,
-      });
-      const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
-      if (updatedEntry) {
-        activeSessionEntry = updatedEntry;
-        params.followupRun.run.sessionId = updatedEntry.sessionId;
-        params.replyOperation.updateSessionId(updatedEntry.sessionId);
-        if (updatedEntry.sessionFile) {
-          params.followupRun.run.sessionFile = updatedEntry.sessionFile;
-        }
-        const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
-        if (queueKey) {
-          memoryDeps.refreshQueuedFollowupSession({
-            key: queueKey,
-            previousSessionId,
-            nextSessionId: updatedEntry.sessionId,
-            nextSessionFile: updatedEntry.sessionFile,
-          });
-        }
-      }
-    }
     if (visibleErrorPayloads.length > 0) {
       // Preserve any completed transcript rotation, then count the maintenance error.
       // Do not stamp memory-flush success for a resolved run that returned an error.

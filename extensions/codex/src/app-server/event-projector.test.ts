@@ -6598,12 +6598,15 @@ describe("CodexAppServerEventProjector", () => {
         { hookName: "after_compaction", handler: afterCompaction },
       ]),
     );
-    const projector = await createProjector({
+    const projectorParams = {
       ...params,
       agentId: "agent-1",
       sessionKey: "agent:main:session-1",
       deferEmbeddedHookSessionReset: deferredResetSession,
-    });
+    } as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset: typeof deferredResetSession;
+    };
+    const projector = await createProjector(projectorParams);
     const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
@@ -6665,13 +6668,16 @@ describe("CodexAppServerEventProjector", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
     );
-    const projector = await createProjector({
+    const projectorParams = {
       ...params,
       agentId: "agent-1",
       sessionKey: "agent:main:session-1",
       modelSelectionLocked: true,
       deferEmbeddedHookSessionReset: deferredResetSession,
-    });
+    } as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset: typeof deferredResetSession;
+    };
+    const projector = await createProjector(projectorParams);
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {

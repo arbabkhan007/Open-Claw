@@ -44,11 +44,14 @@ export function buildEmbeddedHookApi(params?: {
     reasonOrSessionKey: unknown = "reset",
     legacyReason?: "new" | "reset",
   ) => {
-    const reason = legacyReason ?? reasonOrSessionKey;
+    const legacySessionKey =
+      typeof reasonOrSessionKey === "string" ? reasonOrSessionKey.trim() : "";
+    const isLegacyKeyCall = legacyReason !== undefined || legacySessionKey === sessionKey;
+    const reason = legacyReason ?? (isLegacyKeyCall ? "reset" : reasonOrSessionKey);
     if (reason !== "new" && reason !== "reset") {
       throw new Error('resetSession only accepts reason "new" or "reset"');
     }
-    if (legacyReason !== undefined && String(reasonOrSessionKey).trim() !== sessionKey) {
+    if (isLegacyKeyCall && legacySessionKey !== sessionKey) {
       throw new Error("resetSession cannot reset a different session key from a hook context");
     }
     if (!sessionKey) {

@@ -37,6 +37,29 @@ describe("createEmbeddedHookSessionResetQueue", () => {
     });
   });
 
+  it("accepts legacy key-only reset calls for the current hook session", async () => {
+    const deferResetSession = vi.fn();
+    const api = buildEmbeddedHookApi({
+      sessionKey: "agent:main:session-1",
+      agentId: "main",
+      commandSource: "test",
+      deferResetSession,
+    });
+
+    await expect(api.resetSession("agent:main:session-1")).resolves.toEqual({
+      ok: true,
+      key: "agent:main:session-1",
+      deferred: true,
+    });
+
+    expect(deferResetSession).toHaveBeenCalledWith({
+      key: "agent:main:session-1",
+      agentId: "main",
+      reason: "reset",
+      commandSource: "test",
+    });
+  });
+
   it("rejects legacy explicit-key reset calls for another session", async () => {
     const api = buildEmbeddedHookApi({
       sessionKey: "agent:main:session-1",

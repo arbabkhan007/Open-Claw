@@ -6,7 +6,10 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionInternalParams,
+  CompactEmbeddedAgentSessionParams,
+} from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
@@ -91,8 +94,8 @@ function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams
 }
 
 function stripHarnessOwnedAuthInputs(
-  params: CompactEmbeddedAgentSessionParams,
-): CompactEmbeddedAgentSessionParams {
+  params: CompactEmbeddedAgentSessionInternalParams,
+): CompactEmbeddedAgentSessionInternalParams {
   const result = { ...params };
   delete result.resolvedApiKey;
   delete result.runtimeModel;
@@ -101,8 +104,8 @@ function stripHarnessOwnedAuthInputs(
 
 function stripInternalHarnessCompactionLifecycleOwner(
   harness: AgentHarness,
-  params: CompactEmbeddedAgentSessionParams,
-): CompactEmbeddedAgentSessionParams {
+  params: CompactEmbeddedAgentSessionInternalParams,
+): AgentHarnessCompactParams {
   if (harness.id === "copilot") {
     return params;
   }
@@ -137,7 +140,7 @@ function buildHarnessCompactionModelProvider(params: {
 
 async function resolveHarnessCompactApiKey(params: {
   agentDir: string;
-  compactParams: CompactEmbeddedAgentSessionParams;
+  compactParams: CompactEmbeddedAgentSessionInternalParams;
   initialHarness: AgentHarness;
   agentId: string;
   sessionKey?: string;
@@ -374,7 +377,7 @@ async function resolveHarnessCompactApiKey(params: {
 
 /** Runs harness-provided compaction when the selected runtime supports it. */
 export async function maybeCompactAgentHarnessSession(
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionInternalParams,
   options: InternalAgentHarnessCompactionOptions = {},
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);

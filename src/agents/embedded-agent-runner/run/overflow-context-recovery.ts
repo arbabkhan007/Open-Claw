@@ -34,6 +34,8 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+const TOOL_LOOP_CONTEXT_OVERFLOW_FRAGMENT =
+  "estimated context size exceeds safe threshold during tool loop";
 
 type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
@@ -42,6 +44,34 @@ type ActiveSession = {
   file: string;
   target?: ContextEngineSessionTarget;
 };
+
+function maybeDeferTerminalToolLoopOverflowReset(input: {
+  runParams: RunEmbeddedAgentParams;
+  errorText: string;
+  resolvedSessionKey: string;
+  sessionAgentId: string;
+  deferEmbeddedHookSessionReset: DeferEmbeddedHookSessionReset;
+}): void {
+  if (
+    input.runParams.modelSelectionLocked === true ||
+    !input.errorText.toLowerCase().includes(TOOL_LOOP_CONTEXT_OVERFLOW_FRAGMENT)
+  ) {
+    return;
+  }
+  const key = input.resolvedSessionKey.trim();
+  if (!key) {
+    return;
+  }
+  input.deferEmbeddedHookSessionReset({
+    key,
+    agentId: input.sessionAgentId,
+    reason: "new",
+    commandSource: "embedded-agent:tool-loop-overflow-recovery",
+  });
+  log.warn(
+    `[context-overflow-recovery] queued session reset after unrecoverable tool-loop overflow for ${key}`,
+  );
+}
 
 type EmbeddedRunOverflowRecoveryOutcome =
   | { action: "none" }
@@ -234,7 +264,6 @@ export async function recoverEmbeddedRunOverflow(input: {
           purpose: "context-engine.overflow-compaction",
         }),
         onCompactionHookMessages: input.onCompactionHookMessages,
-        deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset,
         ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
         runId: runParams.runId,
         trigger: "overflow",
@@ -428,6 +457,13 @@ export async function recoverEmbeddedRunOverflow(input: {
   const userText =
     "Context overflow: prompt too large for the model. " +
     "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+  maybeDeferTerminalToolLoopOverflowReset({
+    runParams,
+    errorText,
+    resolvedSessionKey: input.resolvedSessionKey,
+    sessionAgentId: input.sessionAgentId,
+    deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset,
+  });
   log.warn(
     `[context-overflow-recovery] exhausted provider overflow recovery for ${input.provider}/${input.modelId}; ` +
       `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

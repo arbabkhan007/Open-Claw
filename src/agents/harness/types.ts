@@ -116,10 +116,8 @@ export type AgentHarnessSideQuestionParams = {
 export type AgentHarnessSideQuestionResult = {
   text: string;
 };
-export type AgentHarnessCompactParams = Omit<
-  import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams,
-  "deferEmbeddedHookSessionReset"
->;
+export type AgentHarnessCompactParams =
+  import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessResetParams = {

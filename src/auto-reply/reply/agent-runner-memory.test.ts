@@ -23,6 +23,7 @@ import type { ReplyPayload } from "../types.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
+import { shouldRunMemoryFlush } from "./memory-flush.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 const compactEmbeddedAgentSessionMock = vi.fn();
@@ -283,7 +284,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
-  it("runs a memory flush turn, rotates after compaction, and persists metadata", async () => {
+  it("runs a memory flush turn, rotates after compaction, and marks the completed cycle flushed", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
@@ -358,8 +359,119 @@ describe("runMemoryFlushIfNeeded", () => {
     const persisted = loadMainSessionEntry(storePath);
     expect(persisted.sessionId).toBe("session-rotated");
     expect(persisted.compactionCount).toBe(2);
-    expect(persisted.memoryFlushCompactionCount).toBe(1);
+    expect(persisted.memoryFlushCompactionCount).toBe(2);
     expect(persisted.memoryFlushAt).toBe(1_700_000_000_000);
+    expect(
+      shouldRunMemoryFlush({
+        entry: persisted,
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the fresh session after a memory-flush hook reset commits", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 5,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+          agentId?: string;
+        }) => void;
+      }) => {
+        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          sessionFile: path.join(rootDir, "session-reset.jsonl"),
+          updatedAt: Date.now(),
+          totalTokens: 0,
+          compactionCount: 0,
+        };
+        await writeTestSessionStore(storePath, sessionKey, resetEntry);
+        params.onSessionResetCommitted?.({
+          key: sessionKey,
+          sessionId: "session-reset",
+          reason: "new",
+          agentId: "main",
+        });
+        return {
+          payloads: [],
+          meta: {
+            agentMeta: {
+              sessionId: "session-stale-compacted",
+              sessionFile: path.join(rootDir, "session-stale-compacted.jsonl"),
+            },
+          },
+        };
+      },
+    );
+
+    const followupRun = createTestFollowupRun();
+    const replyOperation = createReplyOperation();
+    const metadataChanges = vi.fn();
+    const result = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+      opts: { onSessionMetadataChanges: metadataChanges },
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.sessionEntry?.sessionId).toBe("session-reset");
+    expect(followupRun.run.sessionId).toBe("session-reset");
+    expect(followupRun.run.sessionFile).toContain("session-reset.jsonl");
+    expect(replyOperation.updateSessionId).toHaveBeenLastCalledWith("session-reset");
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: sessionKey,
+      previousSessionId: "session",
+      nextSessionId: "session-reset",
+      nextSessionFile: path.join(rootDir, "session-reset.jsonl"),
+    });
+    expect(metadataChanges).toHaveBeenCalledWith([
+      {
+        sessionKey,
+        agentId: "main",
+        reason: "new",
+      },
+    ]);
+
+    const persisted = loadMainSessionEntry(storePath);
+    expect(persisted.sessionId).toBe("session-reset");
+    expect(persisted.compactionCount).toBe(0);
+    expect(persisted.memoryFlushCompactionCount).toBe(0);
+    expect(persisted.memoryFlushFailureCount).toBe(0);
   });
 
   it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {

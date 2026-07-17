@@ -114,16 +114,19 @@ export type CompactEmbeddedAgentSessionParams = {
     sessionId: string;
     sessionKey: string;
   }) => void | Promise<void>;
-  /** Queue hook-requested current-session resets for a caller-owned post-run lifecycle flush. */
-  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
 };
 
+export type CompactEmbeddedAgentSessionInternalParams = CompactEmbeddedAgentSessionParams & {
+  /** Queue hook-requested current-session resets for a caller-owned post-run lifecycle flush. */
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
+};
+
 export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
-  CompactEmbeddedAgentSessionParams,
+  CompactEmbeddedAgentSessionInternalParams,
   "sessionFile"
 > & {
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */

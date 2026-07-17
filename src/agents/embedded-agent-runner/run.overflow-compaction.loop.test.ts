@@ -17,6 +17,7 @@ import {
   mockedIsLikelyContextOverflowError,
   mockedLog,
   mockedMarkAuthProfileSuccess,
+  mockedPerformGatewaySessionReset,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
@@ -101,7 +102,8 @@ describe("overflow compaction in run loop", () => {
         lower.includes("request_too_large") ||
         lower.includes("request size exceeds") ||
         lower.includes("context window exceeded") ||
-        lower.includes("prompt too large")
+        lower.includes("prompt too large") ||
+        lower.includes("estimated context size exceeds safe threshold during tool loop")
       );
     });
   });
@@ -116,9 +118,9 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactArg = requireMockCallArg(mockedCompactDirect, 0);
-    expect(requireRecord(compactArg.runtimeContext, "runtime context").authProfileId).toBe(
-      "test-profile",
-    );
+    const runtimeContext = requireRecord(compactArg.runtimeContext, "runtime context");
+    expect(runtimeContext.authProfileId).toBe("test-profile");
+    expect(runtimeContext).not.toHaveProperty("deferEmbeddedHookSessionReset");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(
       mockedLog.warn,
@@ -714,6 +716,35 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expectLogIncludes(mockedLog.warn, "auto-compaction failed");
+  });
+
+  it("resets the session after unrecoverable tool-loop overflow recovery", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: estimated context size exceeds safe threshold during tool loop.",
+    );
+
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction timed out",
+    });
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(mockedPerformGatewaySessionReset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "test-key",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:tool-loop-overflow-recovery",
+      }),
+    );
+    expectLogIncludes(
+      mockedLog.warn,
+      "queued session reset after unrecoverable tool-loop overflow",
+    );
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {

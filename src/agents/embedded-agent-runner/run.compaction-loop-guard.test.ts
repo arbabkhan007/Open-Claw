@@ -144,17 +144,14 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         abortSignal?: AbortSignal;
         onToolOutcome?: ToolOutcomeObserver;
       };
-      for (let i = 0; i < 30; i += 1) {
-        if (abortSignal?.aborted === true) {
-          break;
-        }
-        await executeWrappedToolOutcome(
-          "read",
-          { path: "/workspace/missing" },
-          "same missing path",
-          onToolOutcome,
-        );
-      }
+      onToolOutcome?.({
+        toolName: "read",
+        argsHash: "",
+        resultHash: "",
+        criticalToolLoopBlock: {
+          reason: "CRITICAL: Called read with identical arguments and identical outcomes 20 times.",
+        },
+      });
       attemptSignalAborted = abortSignal?.aborted ?? false;
       attemptSignalReason = abortSignal?.reason;
       return makeAttemptResult({
@@ -163,18 +160,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       });
     });
 
-    await expect(
-      runEmbeddedAgent({
-        ...baseParams,
-        config: {
-          tools: {
-            loopDetection: {
-              enabled: true,
-            },
-          },
-        } as never,
-      }),
-    ).rejects.toMatchObject({
+    await expect(runEmbeddedAgent(baseParams)).rejects.toMatchObject({
       name: "CriticalToolLoopBlockedError",
       detector: "tool_loop_blocked",
     });

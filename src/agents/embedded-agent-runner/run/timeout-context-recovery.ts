@@ -159,7 +159,6 @@ export async function recoverEmbeddedRunTimeout(input: {
         purpose: "context-engine.timeout-compaction",
       }),
       onCompactionHookMessages: input.onCompactionHookMessages,
-      deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset,
       ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
       runId: runParams.runId,
       trigger: "timeout_recovery",

@@ -1994,6 +1994,72 @@ describe("createCopilotAgentHarness", () => {
       expect(afterCompaction).toHaveBeenCalledTimes(1);
     });
 
+    it("exposes the scoped reset API for unlocked SDK history compaction sessions", async () => {
+      const deferEmbeddedHookSessionReset = vi.fn();
+      const afterCompaction = vi.fn(async (_event, ctx) => {
+        await expect(ctx.api?.resetSession("new")).resolves.toEqual({
+          ok: true,
+          key: "agent:main:main",
+          deferred: true,
+        });
+      });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+      );
+      const compact = vi.fn(async () => ({
+        success: true,
+        tokensRemoved: 123,
+        messagesRemoved: 4,
+      }));
+      const disconnect = vi.fn(async () => undefined);
+      const resumeSession = vi.fn(async () => ({
+        disconnect,
+        rpc: { history: { compact } },
+      }));
+      const pool = makePoolMock();
+      pool.acquire = vi.fn(async () => ({
+        key: TEST_POOL_KEY,
+        client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
+      }));
+      pool.release = vi.fn(async () => undefined);
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-reset-compact",
+          pooledClient: {
+            key: TEST_POOL_KEY,
+            client: createMockCopilotClient({ deleteSession: vi.fn(), resumeSession }),
+          },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await harness.runAttempt(
+        makeCompactParams({
+          agentId: "main",
+          sessionId: "oc-sess-reset-compact",
+          sessionKey: "agent:main:main",
+        }),
+      );
+      await harness.compact?.({
+        ...makeCompactParams({ sessionId: "oc-sess-reset-compact" }),
+        agentId: "main",
+        model: "gpt-4.1",
+        sessionKey: "agent:main:main",
+        sessionId: "oc-sess-reset-compact",
+        deferEmbeddedHookSessionReset,
+      });
+
+      expect(afterCompaction).toHaveBeenCalledTimes(1);
+      expect(deferEmbeddedHookSessionReset).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+    });
+
     it("disconnects the resumed SDK session when compact aborts after resume", async () => {
       const abortController = new AbortController();
       const compact = vi.fn(async () => ({

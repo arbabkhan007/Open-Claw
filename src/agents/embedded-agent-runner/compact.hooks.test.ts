@@ -2868,6 +2868,23 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("keeps lifecycle-owned reset queues out of context-engine runtime context", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        deferEmbeddedHookSessionReset,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expect(compactArg.runtimeContext).not.toHaveProperty("deferEmbeddedHookSessionReset");
+    expect(compactArg.runtimeContext?.sessionKey).toBe(TEST_SESSION_KEY);
+  });
+
   it("runs selected Codex harness queued compaction on canonical OpenAI context", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({

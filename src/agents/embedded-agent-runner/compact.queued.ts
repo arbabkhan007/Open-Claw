@@ -59,7 +59,10 @@ import {
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
-import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionInternalParams,
+  CompactEmbeddedAgentSessionParams,
+} from "./compact.types.js";
 import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
 import {
   buildEmbeddedHookApi,
@@ -275,7 +278,7 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
  * `compactEmbeddedAgentSessionDirect` to avoid deadlocks.
  */
 export async function compactEmbeddedAgentSession(
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionInternalParams,
 ): Promise<EmbeddedAgentCompactResult> {
   if (params.trigger !== "manual") {
     return await compactEmbeddedAgentSessionImpl(params);
@@ -315,7 +318,7 @@ export async function compactEmbeddedAgentSession(
 }
 
 async function compactEmbeddedAgentSessionImpl(
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionInternalParams,
 ): Promise<EmbeddedAgentCompactResult> {
   if (params.abortSignal?.aborted) {
     return createCompactionAbortedResult();
@@ -358,7 +361,7 @@ async function compactEmbeddedAgentSessionImpl(
 }
 
 async function compactResolvedContextEngine(
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionInternalParams,
   contextEngine: ContextEngine,
   agentDir: string,
   resolvedWorkspaceDir: string,
@@ -1038,7 +1041,7 @@ function shouldAttemptNativeHarnessCompaction(params: {
 }
 
 function buildCompactionContextEngineRuntimeContext(params: {
-  params: CompactEmbeddedAgentSessionParams;
+  params: CompactEmbeddedAgentSessionInternalParams;
   agentDir: string;
   harnessRuntime?: string;
   contextEnginePluginId?: string;
@@ -1049,7 +1052,11 @@ function buildCompactionContextEngineRuntimeContext(params: {
     config: params.params.config,
     agentId: params.params.agentId,
   });
-  const { sessionFile: _sessionFile, ...runtimeParams } = params.params;
+  const {
+    sessionFile: _sessionFile,
+    deferEmbeddedHookSessionReset: _deferEmbeddedHookSessionReset,
+    ...runtimeParams
+  } = params.params;
   return {
     ...runtimeParams,
     sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
