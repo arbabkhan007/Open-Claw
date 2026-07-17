@@ -34,15 +34,14 @@ async function normalizeAnthropicInlineImage(block: AnthropicInlineImageBlock): 
   mimeType: AnthropicSupportedImageMime;
 }> {
   const canonicalData = canonicalizeBase64(block.data) ?? block.data.trim();
-  const declaredMime = normalizeMimeType(block.mimeType);
-  if (isAnthropicSupportedImageMime(declaredMime)) {
-    return { data: canonicalData, mimeType: declaredMime };
-  }
-
   const buffer = Buffer.from(canonicalData, "base64");
-  const detectedMime = normalizeMimeType(await detectMime({ buffer, headerMime: block.mimeType }));
+  const declaredMime = normalizeMimeType(block.mimeType);
+  const detectedMime = normalizeMimeType(await detectMime({ buffer }));
   if (isAnthropicSupportedImageMime(detectedMime)) {
     return { data: canonicalData, mimeType: detectedMime };
+  }
+  if (!detectedMime && isAnthropicSupportedImageMime(declaredMime)) {
+    return { data: canonicalData, mimeType: declaredMime };
   }
 
   const normalizedBuffer = await convertImageToJpeg(buffer);
