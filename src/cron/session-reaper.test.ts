@@ -314,6 +314,35 @@ describe("sweepCronRunSessions", () => {
     }
   });
 
+  it("falls back to the default retention when the configured duration is zero", async () => {
+    // Zero-duration config values resolve to the default 24h retention so
+    // they cannot match all sessions for immediate deletion before the
+    // schema gate or doctor migration runs.
+    const now = Date.now();
+    for (const zeroVal of ["0h", "0d", "0ms", "0m", "0s", "0"]) {
+      const entryKey = `agent:main:cron:job1:run:run-${zeroVal.replace(/[^a-z0-9]/g, "-")}`;
+      await seedSessionEntries(storePath, {
+        [entryKey]: {
+          sessionId: `run-${zeroVal}`,
+          updatedAt: now - 25 * 3_600_000, // 25h ago — beyond default 24h
+        },
+      });
+
+      const result = await sweepCronRunSessions({
+        cronConfig: { sessionRetention: zeroVal },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      // With the guard in resolveRetentionMs, zero durations fall back to
+      // the 24h default, so 25h-old sessions should be pruned.
+      expect(result).toEqual({ swept: true, pruned: 1 });
+      // Reset for the next variant — seedSessionEntries overwrites per key.
+    }
+  });
+
   it("respects custom retention", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

@@ -19,7 +19,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
 const lastSweepAtMsByStore = new Map<string, number>();
 
-/** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
+/** Resolves cron run-session retention; `false` disables pruning, zero/negative fall back safely. */
 function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
@@ -27,7 +27,12 @@ function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   const raw = cronConfig?.sessionRetention;
   if (typeof raw === "string" && raw.trim()) {
     try {
-      return parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      const ms = parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      // Guard against zero/negative durations that would match all sessions for immediate deletion.
+      if (ms <= 0) {
+        return DEFAULT_RETENTION_MS;
+      }
+      return ms;
     } catch {
       return DEFAULT_RETENTION_MS;
     }
