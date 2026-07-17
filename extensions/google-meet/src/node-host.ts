@@ -220,20 +220,20 @@ async function pullAudio(params: Record<string, unknown>) {
   if (!session) {
     throw new Error(`unknown bridgeId: ${bridgeId}`);
   }
-  const timeoutMs = Math.min(readNumber(params.timeoutMs, 250), 2_000);
   if (session.chunks.length === 0 && !session.closed) {
-    await Promise.race([
-      sleep(timeoutMs),
-      new Promise<void>((resolve) => {
-        session.waiters.push(resolve);
-      }),
-    ]);
+    let resolveWaiter = () => {};
+    const promise = new Promise<void>((resolve) => {
+      resolveWaiter = resolve;
+      session.waiters.push(resolve);
+    });
+    await Promise.race([sleep(Math.min(readNumber(params.timeoutMs, 250), 2_000)), promise]);
+    const waiterIndex = session.waiters.indexOf(resolveWaiter);
+    session.waiters.splice(waiterIndex, waiterIndex >= 0 ? 1 : 0);
   }
-  const chunk = session.chunks.shift();
   return {
     bridgeId,
     closed: session.closed,
-    base64: chunk ? chunk.toString("base64") : undefined,
+    base64: session.chunks.shift()?.toString("base64"),
   };
 }
 
