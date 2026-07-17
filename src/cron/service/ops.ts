@@ -12,6 +12,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   clearCronJobActive,
   isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -494,7 +495,12 @@ function finalizeUpdatedJob(params: {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {
       nextJob.state.nextRunAtMs = undefined;
-      nextJob.state.runningAtMs = undefined;
+      // Keep runningAtMs only while an in-process run is active (#102238).
+      // Queued force reservations must clear so disable→re-force can replace
+      // the same-millisecond marker (ops.run-admission).
+      if (!isCronJobActive(nextJob.id)) {
+        nextJob.state.runningAtMs = undefined;
+      }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);

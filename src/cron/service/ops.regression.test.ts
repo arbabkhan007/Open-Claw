@@ -22,8 +22,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import { clearCronJobActive, isCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { enqueueRun, remove, run, start } from "./ops.js";
+import { enqueueRun, remove, run, start, update } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
@@ -805,6 +806,66 @@ describe("cron service ops regressions", () => {
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(false);
 
     clearCommandLane(CommandLane.Cron);
+  });
+
+  it("#102238: disable→re-enable mid-run does not double-dispatch", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-07-09T12:00:00.000Z");
+    const dueAt = now - 60_000;
+    const job = createDueIsolatedJob({
+      id: "issue-102238",
+      nowMs: now,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    let dispatchCount = 0;
+    let peakInFlight = 0;
+    let inFlight = 0;
+    const gate = createDeferred<void>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        inFlight += 1;
+        dispatchCount += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        await gate.promise;
+        inFlight -= 1;
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    const runPromise = run(state, job.id, "force");
+    await vi.waitFor(() => {
+      expect(dispatchCount).toBe(1);
+      expect(isCronJobActive(job.id)).toBe(true);
+    });
+
+    await update(state, job.id, { enabled: false });
+    await update(state, job.id, { enabled: true });
+
+    const mid = (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id);
+    expect(typeof mid?.state.runningAtMs).toBe("number");
+    expect(mid?.enabled).toBe(true);
+    expect(typeof mid?.state.nextRunAtMs).toBe("number");
+
+    await onTimer(state);
+    expect(dispatchCount).toBe(1);
+    expect(peakInFlight).toBe(1);
+
+    gate.resolve();
+    await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
+
+    const done = (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id);
+    expect(done?.state.runningAtMs).toBeUndefined();
+    expect(typeof done?.state.lastRunAtMs).toBe("number");
+    expect(isCronJobActive(job.id)).toBe(false);
+    clearCronJobActive(job.id);
   });
 
   it.each([
