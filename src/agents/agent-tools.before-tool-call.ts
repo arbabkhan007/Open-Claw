@@ -1428,6 +1428,14 @@ async function recordLoopOutcome(args: {
           ? { criticalToolLoopBlock: args.criticalToolLoopBlock }
           : {}),
       };
+    } else if (args.criticalToolLoopBlock && args.ctx.onToolOutcome) {
+      recordedOutcome = {
+        toolName: args.toolName,
+        argsHash: "",
+        resultHash: "",
+        ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
+        criticalToolLoopBlock: args.criticalToolLoopBlock,
+      };
     }
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
