@@ -192,7 +192,7 @@ export function handleCompactionEnd(
         ctx.params.deferEmbeddedHookSessionReset;
       return (async () => {
         try {
-          const resetSessionKey = ctx.params.sessionKey?.trim();
+          const resetSessionKey = (ctx.params.resetSessionKey ?? ctx.params.sessionKey)?.trim();
           const hookContext = {
             ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
             ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),

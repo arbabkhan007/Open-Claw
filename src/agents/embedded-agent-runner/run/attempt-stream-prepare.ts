@@ -269,6 +269,7 @@ export function prepareEmbeddedAttemptStream(input: {
       suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
       config: attempt.config,
       sessionKey: input.sandboxSessionKey,
+      resetSessionKey: attempt.sessionKey,
       currentChannelId: attempt.currentChannelId,
       currentMessagingTarget: attempt.currentMessagingTarget,
       currentThreadId: attempt.currentThreadTs,

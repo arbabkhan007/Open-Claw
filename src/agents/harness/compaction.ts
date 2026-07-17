@@ -36,6 +36,7 @@ import {
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
+import { harnessOwnsPrivateLifecycleResetAuthority } from "./private-authority.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -106,7 +107,7 @@ function stripInternalHarnessCompactionLifecycleOwner(
   harness: AgentHarness,
   params: CompactEmbeddedAgentSessionInternalParams,
 ): AgentHarnessCompactParams {
-  if (harness.id === "openclaw" || harness.id === "copilot") {
+  if (harnessOwnsPrivateLifecycleResetAuthority(harness)) {
     return params;
   }
   if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {

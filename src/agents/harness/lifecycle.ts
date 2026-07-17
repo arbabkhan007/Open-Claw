@@ -25,6 +25,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { harnessOwnsPrivateLifecycleResetAuthority } from "./private-authority.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type {
   AgentHarness,
@@ -68,7 +69,7 @@ function stripInternalAttemptLifecycleOwner(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
 ): AgentHarnessAttemptParams {
-  if (harness.id === "openclaw" || harness.id === "copilot") {
+  if (harnessOwnsPrivateLifecycleResetAuthority(harness)) {
     return params;
   }
   if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {

@@ -29,6 +29,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 function createCompactionContext(params: {
   storePath: string;
   sessionKey: string;
+  resetSessionKey?: string;
   agentId?: string;
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
@@ -45,6 +46,7 @@ function createCompactionContext(params: {
       session: { messages: params.messages ?? [] } as never,
       config: { session: { store: params.storePath } } as never,
       sessionKey: params.sessionKey,
+      resetSessionKey: params.resetSessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
       modelSelectionLocked: params.modelSelectionLocked,
@@ -435,6 +437,53 @@ describe("handleCompactionEnd", () => {
     expect(runAfterCompaction).toHaveBeenCalledTimes(1);
     expect(deferredReset).toHaveBeenCalledWith({
       key: "main",
+      agentId: "test-agent",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+  });
+
+  it("binds after_compaction resetSession to the canonical reset key", async () => {
+    const deferredReset = vi.fn();
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          sessionKey?: string;
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        expect(hookContext.sessionKey).toBe("agent:strict:runtime-policy");
+        await expect(hookContext.api?.resetSession?.("new")).resolves.toMatchObject({
+          ok: true,
+          deferred: true,
+          key: "agent:main:discord:channel:123",
+        });
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "agent:strict:runtime-policy",
+      resetSessionKey: "agent:main:discord:channel:123",
+      initialCount: 0,
+      deferEmbeddedHookSessionReset: deferredReset,
+    });
+
+    await handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredReset).toHaveBeenCalledWith({
+      key: "agent:main:discord:channel:123",
       agentId: "test-agent",
       reason: "new",
       commandSource: "embedded-agent:hook",

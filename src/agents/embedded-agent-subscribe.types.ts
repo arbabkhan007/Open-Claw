@@ -116,6 +116,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Canonical durable session key that hook-triggered resets should retire. */
+  resetSessionKey?: string;
   /** Current transport channel resolved for this run. */
   currentChannelId?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */

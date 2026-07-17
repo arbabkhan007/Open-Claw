@@ -39,6 +39,7 @@ import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
   type AgentHarnessPolicy,
 } from "./policy.js";
+import { harnessOwnsPrivateLifecycleResetAuthority } from "./private-authority.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
 import {
   buildAgentHarnessSupportContext,
@@ -540,7 +541,7 @@ function withoutInternalHarnessAuthority(
 }
 
 function shouldPreserveLifecycleResetQueue(harness: AgentHarness): boolean {
-  return harness.id === "openclaw" || harness.id === "copilot";
+  return harnessOwnsPrivateLifecycleResetAuthority(harness);
 }
 
 function preserveLifecycleResetQueue(

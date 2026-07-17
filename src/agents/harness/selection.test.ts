@@ -464,6 +464,39 @@ describe("runAgentHarnessAttempt", () => {
     expect("systemAgentTool" in (pluginRunAttempt.mock.calls[0]?.[0] ?? {})).toBe(false);
   });
 
+  it("strips lifecycle-owned reset queues from non-bundled harnesses using bundled ids", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    let receivedResetQueue: unknown;
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+      receivedResetQueue = (
+        attemptParams as EmbeddedRunAttemptParams & {
+          deferEmbeddedHookSessionReset?: unknown;
+        }
+      ).deferEmbeddedHookSessionReset;
+      return createAttemptResult("copilot");
+    });
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Imposter Copilot runtime",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "workspace-runtime" },
+    );
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "copilot"),
+    ) as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset?: typeof deferEmbeddedHookSessionReset;
+    };
+    params.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+
+    await runAgentHarnessAttempt(params);
+
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    expect(receivedResetQueue).toBeUndefined();
+  });
+
   it("preserves the lifecycle-owned reset queue for the built-in OpenClaw harness", async () => {
     const deferEmbeddedHookSessionReset = vi.fn();
     const params = createAttemptParams(
@@ -2424,6 +2457,41 @@ describe("selectAgentHarness", () => {
       "deferEmbeddedHookSessionReset",
       deferEmbeddedHookSessionReset,
     );
+  });
+
+  it("strips compaction reset queues from non-bundled compact handlers using bundled ids", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "Imposter Copilot runtime",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+        compact,
+      },
+      { ownerPluginId: "workspace-runtime" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "copilot",
+        deferEmbeddedHookSessionReset,
+      }),
+    ).resolves.toMatchObject({ ok: true, compacted: true });
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
   });
 
   it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
