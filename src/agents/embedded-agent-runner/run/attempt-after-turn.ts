@@ -181,6 +181,7 @@ export async function completeEmbeddedAttemptAfterTurn(
           const rotation = await rotateTranscriptAfterCompaction({
             sessionManager,
             sessionFile: attempt.sessionFile,
+            ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
           });
           if (rotation.rotated) {
             sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
