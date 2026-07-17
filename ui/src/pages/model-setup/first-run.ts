@@ -33,9 +33,11 @@ export function startModelSetupFirstRunRedirect(params: {
   isStillDefaultLanding: () => boolean;
 }): () => void {
   let attemptedClient: GatewayBrowserClient | null = null;
+  let detectionComplete = false;
   let redirected = false;
   return params.context.gateway.subscribe((snapshot) => {
     if (
+      detectionComplete ||
       redirected ||
       !snapshot.connected ||
       !snapshot.client ||
@@ -50,12 +52,12 @@ export function startModelSetupFirstRunRedirect(params: {
     void detectModelSetup(client)
       .then((result) => {
         cacheModelSetupDetection(client, result);
-        if (
-          !result.setupComplete &&
-          !redirected &&
-          params.context.gateway.snapshot.client === client &&
-          params.isStillDefaultLanding()
-        ) {
+        if (params.context.gateway.snapshot.client !== client) {
+          return;
+        }
+        // A current-client result is terminal; only transport failures retry after reconnect.
+        detectionComplete = true;
+        if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
           redirected = true;
           params.context.replace("model-setup");
         }

@@ -173,6 +173,53 @@ describe("model setup first-run redirect", () => {
     expect(consumeCachedModelSetupDetection(secondClient)).toEqual(result);
   });
 
+  it("does not repeat completed detection with a replacement client", async () => {
+    const result = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/workspace",
+      setupComplete: true,
+    };
+    const firstRequest = vi.fn().mockResolvedValue(result);
+    const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
+    const secondRequest = vi.fn();
+    const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      connected: true,
+      client: firstClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    let currentSnapshot = snapshot;
+    const context = {
+      gateway: {
+        get snapshot() {
+          return currentSnapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      replace: vi.fn(),
+    } as unknown as ApplicationContext<RouteId>;
+
+    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(consumeCachedModelSetupDetection(firstClient)).toEqual(result));
+
+    const reconnected = { ...snapshot, client: secondClient };
+    currentSnapshot = reconnected;
+    listener!(reconnected as Parameters<GatewayListener>[0]);
+
+    expect(firstRequest).toHaveBeenCalledOnce();
+    expect(secondRequest).not.toHaveBeenCalled();
+  });
+
   it("does not detect without admin scope or an advertised setup method", () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
