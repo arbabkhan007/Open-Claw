@@ -36,7 +36,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
   isRecoverableTerminalSessionStatus,
   recoverTerminalSessionEntryForVisibleTurn,
@@ -72,11 +71,6 @@ import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import {
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  interruptSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
@@ -87,6 +81,8 @@ import { resolveConversationBindingContextFromMessage } from "./conversation-bin
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { resolveReplyInitConflictAction } from "./reply-session-init-conflict.js";
+import type { ReplyInitConflictRecoveryState } from "./reply-session-init-conflict.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
@@ -99,6 +95,11 @@ import {
   type ReplySessionEntryHandle,
 } from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import { runReplySessionInitAttempt } from "./session-init-attempt-orchestrator.js";
+import type {
+  ReplySessionInitAttemptOutcome,
+  ReplySessionInitLifecycleMutationIdentity,
+} from "./session-init-attempt-orchestrator.js";
 import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
@@ -197,9 +198,7 @@ type InitSessionStateAttemptContext = {
   storePath: string;
 };
 
-type InitSessionStateAttemptOutcome =
-  | { kind: "complete"; result: SessionInitResult }
-  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string };
+type InitSessionStateAttemptOutcome = ReplySessionInitAttemptOutcome<SessionInitResult>;
 
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
@@ -341,89 +340,44 @@ export function resolveReplySessionPreprocessingState(
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await runWithSessionInitConflictRetry(
-    async () => await initSessionStateAttempt(params, false),
-    { signal: params.signal },
-  );
+  try {
+    return await runWithSessionInitConflictRetry(
+      async () => await initSessionStateAttempt(params, false),
+      { signal: params.signal },
+    );
+  } catch (error) {
+    if (!(error instanceof ReplySessionInitConflictError) || params.signal?.aborted === true) {
+      throw error;
+    }
+    return await initSessionStateAttempt(params, false, true);
+  }
 }
 
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
   staleSnapshotRetried: boolean,
+  selfHealRequested = false,
 ): Promise<SessionInitResult> {
-  const attemptContext = resolveInitSessionStateAttemptContext(params);
-  // Guarded revision checks only serialize correctly when the snapshot and
-  // commit share the same writer lane.
-  const attempt = await runExclusiveSessionStoreWrite(
-    attemptContext.storePath,
-    async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
-  );
-  if (attempt.kind === "complete") {
-    return attempt.result;
-  }
-
-  let rollover = attempt;
-  while (true) {
-    const candidate = rollover;
-    const identities = [candidate.sessionKey, candidate.sessionId];
-    let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
-    // Drain foreign owners before the rollover takes the writer lane. Holding
-    // that lane while waiting would deadlock owners that release after a write.
-    const outcome = await runExclusiveSessionLifecycleMutation({
-      scope: attemptContext.storePath,
-      identities,
-      signal: params.signal,
-      prepare: async () => {
-        // A queued rollover may change identity or become obsolete. Recheck
-        // before interrupting, then reacquire any refreshed identity first.
-        const revalidated = await runExclusiveSessionStoreWrite(
-          attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
-        );
-        if (
-          revalidated.kind === "complete" ||
-          revalidated.sessionKey !== candidate.sessionKey ||
-          revalidated.sessionId !== candidate.sessionId
-        ) {
-          preparedOutcome = revalidated;
-          return;
-        }
-        const drained = await interruptSessionWorkAdmissions({
-          scope: attemptContext.storePath,
-          identities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!drained) {
-          throw new Error(
-            `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
-          );
-        }
-      },
-      run: async () => {
-        if (preparedOutcome) {
-          return preparedOutcome;
-        }
-        // Interrupted owners can rebind while draining. The locked attempt
-        // must match this exact fenced identity before any rollover side effect.
-        return await runExclusiveSessionStoreWrite(
-          attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
-        );
-      },
-    });
-    if (outcome.kind === "complete") {
-      return outcome.result;
-    }
-    rollover = outcome;
-  }
+  return await runReplySessionInitAttempt({
+    params,
+    resolveAttemptContext: resolveInitSessionStateAttemptContext,
+    runLocked: initSessionStateAttemptLocked,
+    signal: params.signal,
+    selfHealRequested,
+    staleSnapshotRetried,
+    warn: (message, meta) => log.warn(message, meta),
+  });
 }
 
 async function initSessionStateAttemptLocked(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
   staleSnapshotRetried: boolean,
-  lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
+  lifecycleMutationIdentity: ReplySessionInitLifecycleMutationIdentity | undefined,
+  conflictRecovery: ReplyInitConflictRecoveryState = {
+    selfHealRequested: false,
+    recoveryAttempted: false,
+  },
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
@@ -1060,12 +1014,48 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+    const conflictAction = resolveReplyInitConflictAction({
+      staleSnapshotRetried,
+      selfHealRequested: conflictRecovery.selfHealRequested,
+      conflictRecoveryAttempted: conflictRecovery.recoveryAttempted,
+    });
+    if (conflictAction.kind === "stale-snapshot-retry") {
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        true,
+        undefined,
+        conflictRecovery,
+      );
     }
-    // Propagate a typed conflict so initSessionState can retry with backoff
-    // outside the store writer lane instead of surfacing this to the caller.
-    throw new ReplySessionInitConflictError(sessionKey);
+    if (conflictAction.kind === "conflict-backoff") {
+      throw new ReplySessionInitConflictError(sessionKey);
+    }
+    if (conflictAction.kind === "self-heal-retry") {
+      const wedgedSessionId = entry?.sessionId;
+      if (!wedgedSessionId) {
+        log.warn(
+          `reply session initialization conflicted for ${sessionKey}; retrying init once (no bound runtime to self-heal)`,
+        );
+        return await initSessionStateAttemptLocked(params, attemptContext, false, undefined, {
+          selfHealRequested: true,
+          recoveryAttempted: true,
+        });
+      }
+      log.warn(
+        `reply session initialization conflicted for ${sessionKey}; requesting fenced harness self-heal before final retry`,
+        { wedgedSessionId },
+      );
+      return {
+        kind: "conflict-self-heal",
+        sessionId: wedgedSessionId,
+        sessionKey,
+        sessionFile: entry?.sessionFile,
+      };
+    }
+    throw new Error(
+      `reply session initialization conflicted for ${sessionKey} after harness self-heal retry`,
+    );
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;

@@ -35,6 +35,7 @@ import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
+  type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   createChannelTestPluginBase,
@@ -58,6 +59,69 @@ const channelSummaryMocks = vi.hoisted(() => ({
 const browserMaintenanceMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
+// Controllable, pass-through override of the reply-session init commit so a
+// single test can deterministically force optimistic-concurrency conflicts. The
+// map is empty by default, so every other test keeps the real commit behavior.
+const commitConflictControl = vi.hoisted(() => ({
+  forcedConflicts: new Map<string, number>(),
+  commitCalls: new Map<string, number>(),
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
+    "../../config/sessions/session-accessor.js",
+  );
+  return {
+    ...actual,
+    commitReplySessionInitialization: async (
+      params: Parameters<typeof actual.commitReplySessionInitialization>[0],
+    ) => {
+      const key = params.activeSessionKey ?? params.sessionKey;
+      commitConflictControl.commitCalls.set(
+        key,
+        (commitConflictControl.commitCalls.get(key) ?? 0) + 1,
+      );
+      const remaining = commitConflictControl.forcedConflicts.get(key) ?? 0;
+      if (remaining > 0) {
+        commitConflictControl.forcedConflicts.set(key, remaining - 1);
+        return {
+          ok: false as const,
+          reason: "stale-snapshot" as const,
+          revision: "forced-test-conflict",
+        };
+      }
+      return await actual.commitReplySessionInitialization(params);
+    },
+  };
+});
+
+// Pass-through wrapper around the #105754 conflict-retry loop that only swaps
+// the jittered backoff sleep for an instant, recorded one. Retry semantics
+// (attempt budget, typed-error classification, abort handling) stay real; the
+// tests just avoid ~4s of wall-clock backoff per exhausted loop and can assert
+// how many backoff waits actually happened.
+const initConflictBackoffControl = vi.hoisted(() => ({
+  sleepCalls: [] as number[],
+}));
+
+vi.mock("./session-init-conflict-retry.js", async () => {
+  const actual = await vi.importActual<typeof import("./session-init-conflict-retry.js")>(
+    "./session-init-conflict-retry.js",
+  );
+  return {
+    ...actual,
+    runWithSessionInitConflictRetry: (async (
+      attempt: () => Promise<unknown>,
+      options?: Parameters<typeof actual.runWithSessionInitConflictRetry>[1],
+    ) =>
+      await actual.runWithSessionInitConflictRetry(attempt, {
+        ...options,
+        sleep: async (ms: number) => {
+          initConflictBackoffControl.sleepCalls.push(ms);
+        },
+      })) as typeof actual.runWithSessionInitConflictRetry,
+  };
+});
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
@@ -6743,4 +6807,250 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+describe("initSessionState reply-session-init conflict self-heal (fenced)", () => {
+  beforeEach(() => {
+    commitConflictControl.forcedConflicts.clear();
+    commitConflictControl.commitCalls.clear();
+    initConflictBackoffControl.sleepCalls.length = 0;
+  });
+  afterEach(() => {
+    commitConflictControl.forcedConflicts.clear();
+    commitConflictControl.commitCalls.clear();
+    initConflictBackoffControl.sleepCalls.length = 0;
+  });
+
+  it("disposes the wedged MCP runtime and retries exactly once when the init commit keeps conflicting", async () => {
+    const storePath = await createStorePath("openclaw-init-conflict-selfheal-");
+    const sessionKey = "agent:main:telegram:dm:init-conflict-user";
+    const wedgedSessionId = "wedged-conflict-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: wedgedSessionId, updatedAt: Date.now() },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: wedgedSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
+
+    // Force a genuinely persistent wedge that survives the whole #105754
+    // backoff budget first: 5 backed-off attempts x (initial + stale-snapshot
+    // retry) = 10 conflicted commits exhaust the typed-error retry loop. The
+    // self-heal pass's own attempt consumes two more (11-12); the fenced
+    // revalidation consumes two more (13-14) and STILL conflicts, confirming
+    // the candidate is current; only the final post-teardown commit is allowed
+    // through so init can complete.
+    commitConflictControl.forcedConflicts.set(sessionKey, 14);
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "init-conflict-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Init completed (session unwedged) instead of throwing.
+    expect(result.sessionId).toBe(wedgedSessionId);
+    // The wedged runtime was disposed by the self-heal teardown.
+    expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(wedgedSessionId);
+    // Commit accounting: exhausted backoff loop (5 attempts x 2 commits = 10)
+    // + self-heal pass attempt (2) + fenced revalidation (2) + one successful
+    // post-teardown commit (1) == 15. A second self-heal loop would have
+    // thrown via the recovery bound instead.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(15);
+    expect(commitConflictControl.forcedConflicts.get(sessionKey)).toBe(0);
+    // The backoff loop genuinely exhausted before self-heal: 5 attempts wait
+    // 4 times between them.
+    expect(initConflictBackoffControl.sleepCalls).toHaveLength(4);
+  });
+
+  it("resolves transient conflicts inside the backoff loop without any teardown", async () => {
+    const storePath = await createStorePath("openclaw-init-conflict-transient-");
+    const sessionKey = "agent:main:telegram:dm:init-conflict-transient-user";
+    const boundSessionId = "transient-conflict-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: boundSessionId, updatedAt: Date.now() },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: boundSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+
+    // A transient race: the first attempt loses both its commits (initial +
+    // stale-snapshot retry), then the competing writer settles. Upstream's
+    // backoff retry (#105754) must absorb this on its second attempt WITHOUT
+    // reaching the self-heal teardown.
+    commitConflictControl.forcedConflicts.set(sessionKey, 2);
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "init-conflict-transient-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionId).toBe(boundSessionId);
+    // No teardown: the bound runtime survives a transient conflict.
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(boundSessionId);
+    // Attempt 1 (2 conflicted commits) + attempt 2 first commit succeeds.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(3);
+    // Exactly one backoff wait between the two attempts.
+    expect(initConflictBackoffControl.sleepCalls).toHaveLength(1);
+  });
+
+  it("interrupts a genuinely active concurrent turn before tearing the runtime down", async () => {
+    const storePath = await createStorePath("openclaw-init-conflict-fence-");
+    const sessionKey = "agent:main:telegram:dm:init-conflict-fence-user";
+    const wedgedSessionId = "wedged-fence-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: wedgedSessionId, updatedAt: Date.now() },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: wedgedSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+
+    // Simulate a foreign, in-flight turn holding a work admission on this
+    // identity. Without the drain fence the self-heal would dispose the runtime
+    // out from under it; with the fence it must be interrupted and drained first.
+    let interrupted = false;
+    let released = false;
+    const lease: SessionWorkAdmissionLease = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        interrupted = true;
+        released = true;
+        lease?.release();
+      },
+    });
+
+    // Persistent wedge (14): the whole backoff budget (10) plus the self-heal
+    // pass attempt (2) and the fenced revalidation (2) still conflict on the
+    // same identity, so the drain fence must interrupt the live turn before
+    // teardown.
+    commitConflictControl.forcedConflicts.set(sessionKey, 14);
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "init-conflict-fence-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The active foreign admission was interrupted (fence drained it) and
+    // released, rather than the runtime being disposed underneath a live turn.
+    expect(interrupted).toBe(true);
+    expect(released).toBe(true);
+    expect(result.sessionId).toBe(wedgedSessionId);
+    expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(wedgedSessionId);
+  });
+
+  it("skips the drain and teardown when the conflict candidate goes obsolete before self-heal", async () => {
+    const storePath = await createStorePath("openclaw-init-conflict-obsolete-");
+    const sessionKey = "agent:main:telegram:dm:init-conflict-obsolete-user";
+    const wedgedSessionId = "obsolete-conflict-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: wedgedSessionId, updatedAt: Date.now() },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: wedgedSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
+
+    // A foreign turn is present, but the candidate self-resolves during the
+    // fenced revalidation, so it must NOT be interrupted or drained.
+    let interrupted = false;
+    const lease: SessionWorkAdmissionLease = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        interrupted = true;
+        lease?.release();
+      },
+    });
+
+    // Twelve conflicts: the backoff budget (10) plus the self-heal pass's own
+    // stale-snapshot retry + self-heal request (2) consume all of them, so the
+    // fenced revalidation commit succeeds and the candidate is obsolete. The
+    // self-heal must return that completed outcome without draining the
+    // foreign turn or disposing the still-valid runtime.
+    commitConflictControl.forcedConflicts.set(sessionKey, 12);
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "init-conflict-obsolete-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Init completed via the fenced revalidation.
+    expect(result.sessionId).toBe(wedgedSessionId);
+    // Teardown was skipped: the still-valid runtime is retained.
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
+    // The live foreign admission was never interrupted.
+    expect(interrupted).toBe(false);
+    // exhausted backoff (10) + self-heal pass stale-retry + self-heal request
+    // (2) + fenced revalidation success (1) == 13 commits; no post-teardown
+    // retry happened.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(13);
+
+    lease.release();
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
