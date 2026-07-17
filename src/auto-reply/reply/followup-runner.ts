@@ -1483,6 +1483,15 @@ export function createFollowupRunner(params: {
                     lifecycleGeneration = info.lifecycleGeneration;
                   }
                 },
+                onSessionResetCommitted: (commit) => {
+                  opts?.onSessionMetadataChanges?.([
+                    {
+                      sessionKey: commit.key,
+                      ...(commit.agentId ? { agentId: commit.agentId } : {}),
+                      reason: commit.reason,
+                    },
+                  ]);
+                },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

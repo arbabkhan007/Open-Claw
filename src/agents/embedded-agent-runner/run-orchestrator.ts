@@ -313,6 +313,20 @@ async function runEmbeddedAgentInternal(
               assertCurrent:
                 request.assertCurrent ??
                 (() => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)),
+              onCommitted: (commit) => {
+                request.onCommitted?.(commit);
+                params.onSessionIdChanged?.(commit.sessionId);
+                params.onSessionResetCommitted?.({
+                  key: commit.key,
+                  sessionId: commit.sessionId,
+                  reason: request.reason,
+                  ...(request.agentId
+                    ? { agentId: request.agentId }
+                    : commit.key === "global"
+                      ? { agentId: workspaceResolution.agentId }
+                      : {}),
+                });
+              },
             }),
         });
       } finally {

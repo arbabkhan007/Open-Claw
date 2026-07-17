@@ -973,6 +973,7 @@ export function runAgentAttempt(params: {
       }
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
+    onSessionResetCommitted: params.opts.onSessionResetCommitted,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   };

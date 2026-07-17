@@ -2366,6 +2366,44 @@ describe("selectAgentHarness", () => {
     expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
   });
 
+  it("preserves compaction reset queues for bundled Copilot compact handlers", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "GitHub Copilot agent runtime",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("copilot")),
+        compact,
+      },
+      { ownerPluginId: "copilot" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "copilot",
+        deferEmbeddedHookSessionReset,
+      }),
+    ).resolves.toMatchObject({ ok: true, compacted: true });
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]).toHaveProperty(
+      "deferEmbeddedHookSessionReset",
+      deferEmbeddedHookSessionReset,
+    );
+  });
+
   it("skips internal post-context-engine compaction when the harness lacks the private capability", async () => {
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
       ok: true,

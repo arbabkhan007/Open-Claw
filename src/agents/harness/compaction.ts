@@ -100,8 +100,12 @@ function stripHarnessOwnedAuthInputs(
 }
 
 function stripInternalHarnessCompactionLifecycleOwner(
+  harness: AgentHarness,
   params: CompactEmbeddedAgentSessionParams,
 ): CompactEmbeddedAgentSessionParams {
+  if (harness.id === "copilot") {
+    return params;
+  }
   if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {
     return params;
   }
@@ -547,6 +551,7 @@ export async function maybeCompactAgentHarnessSession(
         }
       : handoffCompactParams;
   const resolvedCompactParams = stripInternalHarnessCompactionLifecycleOwner(
+    harness,
     resolvedCompactParamsWithInternalFields,
   );
   if (shouldCompactAfterContextEngine) {

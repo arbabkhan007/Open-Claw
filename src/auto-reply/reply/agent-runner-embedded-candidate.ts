@@ -228,6 +228,15 @@ export async function runEmbeddedFallbackCandidate(params: {
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
+        onSessionResetCommitted: (commit) => {
+          turn.opts?.onSessionMetadataChanges?.([
+            {
+              sessionKey: commit.key,
+              ...(commit.agentId ? { agentId: commit.agentId } : {}),
+              reason: commit.reason,
+            },
+          ]);
+        },
         suppressToolErrorWarnings:
           turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,

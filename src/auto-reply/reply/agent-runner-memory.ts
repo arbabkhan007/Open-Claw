@@ -61,12 +61,13 @@ import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
@@ -1135,7 +1136,7 @@ export async function runMemoryFlushIfNeeded(params: {
   followupRun: FollowupRun;
   promptForEstimate?: string;
   sessionCtx: TemplateContext;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   defaultModel: string;
   agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
@@ -1470,6 +1471,15 @@ export async function runMemoryFlushIfNeeded(params: {
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
+          onSessionResetCommitted: (commit) => {
+            params.opts?.onSessionMetadataChanges?.([
+              {
+                sessionKey: commit.key,
+                ...(commit.agentId ? { agentId: commit.agentId } : {}),
+                reason: commit.reason,
+              },
+            ]);
+          },
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
