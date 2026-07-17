@@ -163,7 +163,18 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       });
     });
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toMatchObject({
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: {
+          tools: {
+            loopDetection: {
+              enabled: true,
+            },
+          },
+        } as never,
+      }),
+    ).rejects.toMatchObject({
       name: "CriticalToolLoopBlockedError",
       detector: "tool_loop_blocked",
     });
