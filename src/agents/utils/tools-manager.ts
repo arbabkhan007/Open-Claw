@@ -23,6 +23,7 @@ import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -160,7 +161,10 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const data = await readProviderJsonResponse<{ tag_name: string }>(
+      response,
+      "GitHub release check",
+    );
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
