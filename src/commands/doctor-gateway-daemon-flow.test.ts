@@ -575,6 +575,27 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["stopped", "running"] as const)(
+    "reports a %s service restart failure without aborting doctor",
+    async (status) => {
+      setPlatform("darwin");
+      service.readRuntime.mockResolvedValue({ status });
+      service.restart.mockRejectedValue(
+        new Error("Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl."),
+      );
+
+      await expect(runAutoRepair()).resolves.toBeDefined();
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Gateway service restart failed: Error: Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+        ),
+        "Gateway",
+      );
+      expect(healthCommand).not.toHaveBeenCalled();
+    },
+  );
+
   it("skips gateway service install when service repair policy is external", async () => {
     setPlatform("linux");
     service.isLoaded.mockResolvedValue(false);

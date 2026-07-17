@@ -844,11 +844,6 @@ export async function repairLaunchAgentBootstrap(args: {
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceTarget = `${domain}/${label}`;
-  // Rewrite first so legacy inline environment secrets move into the private
-  // env file before the plist becomes world-readable for launchd.
-  const warn =
-    args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
-  await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   const conflict = await resolveSystemLaunchDaemonConflict(label);
   if (conflict) {
     return {
@@ -857,6 +852,11 @@ export async function repairLaunchAgentBootstrap(args: {
       detail: formatSystemLaunchDaemonConflict(conflict),
     };
   }
+  // Once system ownership is ruled out, rewrite before activation so legacy
+  // inline secrets move into the private env file before launchd reads it.
+  const warn =
+    args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
+  await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   let repairStatus: "repaired" | "already-loaded" = "repaired";

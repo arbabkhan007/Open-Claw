@@ -1247,6 +1247,7 @@ describe("launchd bootstrap repair", () => {
       );
       expect(repair.detail).not.toContain("/Library/LaunchDaemons/ai.openclaw.gateway.plist");
       expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expect(state.fileWrites).toEqual([]);
       expectNoLaunchAgentActivationCalls();
     });
   });
