@@ -94,7 +94,7 @@ describe("gateway tool", () => {
   });
 
   it("forwards the execution abort signal to config.get", async () => {
-    const tool = requireGatewayTool();
+    const tool = createGatewayTool();
     const controller = new AbortController();
 
     await tool.execute("call-config-get", { action: "config.get" }, controller.signal);
