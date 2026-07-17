@@ -1258,6 +1258,24 @@ describe("launchd bootstrap repair", () => {
       expectNoLaunchAgentActivationCalls();
     });
   });
+
+  it("returns a typed bootstrap refusal when system ownership cannot be verified", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemPrintError = "launchctl print failed: permission denied";
+      state.systemPrintCode = 1;
+
+      const repair = await repairLaunchAgentBootstrap({ env: createDefaultLaunchdEnv() });
+
+      expect(repair).toEqual({
+        ok: false,
+        status: "system-launchdaemon-unverifiable",
+        detail:
+          "Error: Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: launchctl print failed: permission denied",
+      });
+      expect(state.fileWrites).toEqual([]);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
 });
 
 describe("launchd install", () => {

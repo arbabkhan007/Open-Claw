@@ -461,7 +461,7 @@ function formatSystemLaunchDaemonConflict(conflict: SystemLaunchDaemonConflict):
   const recovery =
     conflict.detectedBy === "launchctl"
       ? `Keep the system LaunchDaemon, or unload it with \`sudo launchctl bootout ${conflict.serviceTarget}\` and remove its actual plist before retrying.`
-      : `Keep the system LaunchDaemon, or remove it first with \`sudo launchctl bootout ${conflict.serviceTarget}\` and \`sudo rm ${conflict.plistPath}\`, then retry.`;
+      : `Keep the system LaunchDaemon, or remove its unloaded plist with \`sudo rm ${conflict.plistPath}\`, then retry.`;
   return [
     detection,
     "Refusing to create or activate a gui-domain LaunchAgent for the same gateway label because duplicate launchd managers can restart-loop the gateway.",
@@ -856,7 +856,11 @@ type LaunchAgentBootstrapRepairResult =
       status: "bootstrap-failed" | "kickstart-failed";
       detail?: string;
     }
-  | { ok: false; status: "system-launchdaemon-conflict"; detail: string }
+  | {
+      ok: false;
+      status: "system-launchdaemon-conflict" | "system-launchdaemon-unverifiable";
+      detail: string;
+    }
   | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
 
 function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
@@ -873,7 +877,16 @@ export async function repairLaunchAgentBootstrap(args: {
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceTarget = `${domain}/${label}`;
-  const conflict = await resolveSystemLaunchDaemonConflict(label);
+  let conflict: SystemLaunchDaemonConflict | null;
+  try {
+    conflict = await resolveSystemLaunchDaemonConflict(label);
+  } catch (err) {
+    return {
+      ok: false,
+      status: "system-launchdaemon-unverifiable",
+      detail: String(err),
+    };
+  }
   if (conflict) {
     return {
       ok: false,

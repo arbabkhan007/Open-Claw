@@ -775,6 +775,31 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("reports unverifiable system LaunchDaemon state without crashing or installing", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({
+      status: "unknown",
+      missingSupervision: true,
+    });
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
+      ok: false,
+      status: "system-launchdaemon-unverifiable",
+      detail:
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: permission denied",
+    });
+
+    const runtime = await runAutoRepair();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway LaunchAgent bootstrap failed: Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: permission denied",
+    );
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("skips restart prompt when gateway is healthy after recent restart handoff in normal doctor flow", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);
