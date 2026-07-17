@@ -1586,9 +1586,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
           provider: "telegram",
           to: "chat-rich",
           text: "  ",
-          presentation: JSON.stringify({
-            blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
-          }),
+          channelData: JSON.stringify({ telegram: { buttons: [{ text: "OK" }] } }),
         },
       } as never,
     );

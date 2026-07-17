@@ -79,13 +79,16 @@ import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
-  parseJsonMessageParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
+import {
+  hasChannelDataPayloadContent,
+  parseStructuredMessageContentParams,
+  readChannelDataObjectParam,
+} from "./message-action-structured-content.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -1127,11 +1130,13 @@ async function buildSendPayloadParts(params: {
     Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
+  const hasChannelData = hasChannelDataPayloadContent(actionParams);
   const location = normalizeOutboundLocation(actionParams.location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
+      required:
+        !hasMediaHint && !hasPresentation && !hasInteractive && !hasChannelData && !location,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -1207,6 +1212,7 @@ async function buildSendPayloadParts(params: {
   }
 
   const mediaUrl = readStringParam(actionParams, "media", { trim: false });
+  const channelData = readChannelDataObjectParam(actionParams);
   if (
     !hasReplyPayloadContent({
       text: message,
@@ -1214,6 +1220,7 @@ async function buildSendPayloadParts(params: {
       mediaUrls: mergedMediaUrls,
       presentation: actionParams.presentation,
       interactive: actionParams.interactive,
+      channelData,
       location,
     })
   ) {
@@ -1242,11 +1249,6 @@ async function buildSendPayloadParts(params: {
   const delivery =
     rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
       ? (rawDelivery as ReplyPayloadDelivery)
-      : undefined;
-  const rawChannelData = actionParams.channelData;
-  const channelData =
-    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
-      ? (rawChannelData as Record<string, unknown>)
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
@@ -1757,9 +1759,7 @@ export async function runMessageAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
-  parseJsonMessageParam(params, "presentation");
-  parseJsonMessageParam(params, "delivery");
-  parseInteractiveParam(params);
+  parseStructuredMessageContentParams(params, { delivery: true });
 
   const action = input.action;
   enforceMessageActionAllowlist({

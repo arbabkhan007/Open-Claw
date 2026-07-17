@@ -50,10 +50,6 @@ import { resolveMessageActionTurnCapability } from "../../gateway/message-action
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../../infra/outbound/message-action-params.js";
-import {
   getToolResult,
   runMessageAction,
   type MessageActionRunResult,
@@ -61,10 +57,13 @@ import {
 } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
+  parseStructuredMessageContentParams,
+  sanitizeOpaqueChannelDataParam,
+} from "../../infra/outbound/message-action-structured-content.js";
+import {
   resolveAllowedMessageActions,
   shouldApplyCrossContextMarker,
 } from "../../infra/outbound/outbound-policy.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
@@ -81,7 +80,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import { jsonResult, readStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import {
   readGatewayCallOptions,
@@ -89,6 +88,7 @@ import {
   resolveMessageActionAgentRuntimeIdentityToken,
   type GatewayCallOptions,
 } from "./gateway.js";
+import { hasSanitizedSendPayloadContent } from "./message-tool-content.js";
 import {
   appendMessageToolReadHint,
   appendMessageToolVisibleReplyHint,
@@ -244,6 +244,7 @@ function resolvePollVoteEchoRoute(params: {
 function sanitizeUserVisibleToolTextResult(
   text: string,
   bootPrompt: string | undefined,
+  options?: { strictInternalRuntimeContext?: boolean },
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
@@ -255,10 +256,15 @@ function sanitizeUserVisibleToolTextResult(
   const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
     ? stripInboundMetadata(strippedBoot)
     : strippedBoot;
+  const internalRuntimeContextRemoved = strippedInternal !== strippedReasoning;
   const suppressionReason =
-    strippedBoot.trim().length === 0 &&
-    strippedReasoning.trim().length > 0 &&
-    (strippedInternal !== strippedReasoning || strippedBoot !== strippedInternal)
+    (options?.strictInternalRuntimeContext === true && internalRuntimeContextRemoved) ||
+    (strippedInternal.trim().length === 0 &&
+      strippedReasoning.trim().length > 0 &&
+      internalRuntimeContextRemoved) ||
+    (strippedBoot.trim().length === 0 &&
+      strippedReasoning.trim().length > 0 &&
+      strippedBoot !== strippedInternal)
       ? "internal_runtime_context_echo"
       : strippedInbound.trim().length === 0 &&
           strippedBoot.trim().length > 0 &&
@@ -496,57 +502,6 @@ function sanitizePresentationTextFieldsResult(
     });
   }
   return { value: presentation, ...(suppressionReason ? { suppressionReason } : {}) };
-}
-
-function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
-  for (const key of keys) {
-    const value = readStringParam(params, key);
-    if (value) {
-      return value;
-    }
-  }
-  return "";
-}
-
-function readStructuredAttachmentMediaParams(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const values: string[] = [];
-  for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      continue;
-    }
-    const record = attachment as Record<string, unknown>;
-    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      const candidate = readStringParam(record, key);
-      if (candidate) {
-        values.push(candidate);
-      }
-    }
-  }
-  return values;
-}
-
-function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolean {
-  const text = ["message", "text", "content", "caption", "SendMessage"]
-    .map((field) => (typeof params[field] === "string" ? params[field] : ""))
-    .filter((value) => value.trim())
-    .join("\n");
-  const mediaUrls = [
-    ...(readStringArrayParam(params, "mediaUrls") ?? []),
-    ...readStructuredAttachmentMediaParams(params.attachments),
-  ];
-  return hasReplyPayloadContent(
-    {
-      text,
-      mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
-      mediaUrls,
-      presentation: params.presentation,
-      interactive: params.interactive,
-    },
-    { trimText: true },
-  );
 }
 
 function buildRoutingSchema() {
@@ -1451,8 +1406,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       //    substantial chunk of the boot prompt content. Refs #53732.
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
-      parseJsonMessageParam(params, "presentation");
-      parseInteractiveParam(params);
+      parseStructuredMessageContentParams(params);
       for (const field of [
         "text",
         "content",
@@ -1485,6 +1439,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       );
       params.interactive = sanitizedInteractive.value;
       suppressedVisiblePayloadReason ??= sanitizedInteractive.suppressionReason;
+      const channelDataSuppressionReason = sanitizeOpaqueChannelDataParam(
+        params,
+        bootPromptForSession,
+        sanitizeUserVisibleToolTextResult,
+      );
+      suppressedVisiblePayloadReason ??= channelDataSuppressionReason;
 
       const action = readStringParam(params, "action", {
         required: true,
