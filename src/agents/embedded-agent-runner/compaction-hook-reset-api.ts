@@ -18,6 +18,7 @@ export type DeferredEmbeddedHookSessionResetRequest = {
 export type DeferEmbeddedHookSessionReset = (
   request: DeferredEmbeddedHookSessionResetRequest,
 ) => void;
+type HookResetSessionFunction = EmbeddedHookApi["resetSession"];
 
 export function withEmbeddedHookSessionResetAssertion(
   request: DeferredEmbeddedHookSessionResetRequest,
@@ -39,25 +40,33 @@ export function buildEmbeddedHookApi(params?: {
   deferResetSession?: DeferEmbeddedHookSessionReset;
 }): EmbeddedHookApi {
   const sessionKey = params?.sessionKey?.trim();
+  const resetSession: HookResetSessionFunction = async (
+    reasonOrSessionKey: "new" | "reset" | string = "reset",
+    legacyReason?: "new" | "reset",
+  ) => {
+    const reason = legacyReason ?? reasonOrSessionKey;
+    if (reason !== "new" && reason !== "reset") {
+      throw new Error('resetSession only accepts reason "new" or "reset"');
+    }
+    if (legacyReason !== undefined && reasonOrSessionKey !== sessionKey) {
+      throw new Error("resetSession cannot reset a different session key from a hook context");
+    }
+    if (!sessionKey) {
+      throw new Error("resetSession is unavailable without a current session key");
+    }
+    if (!params?.deferResetSession) {
+      throw new Error("resetSession is unavailable without a deferred lifecycle owner");
+    }
+    params.deferResetSession({
+      key: sessionKey,
+      ...(params?.agentId ? { agentId: params.agentId } : {}),
+      reason,
+      commandSource: params?.commandSource ?? "embedded-agent:hook",
+    });
+    return { ok: true, key: sessionKey, deferred: true };
+  };
   return {
-    async resetSession(reason = "reset") {
-      if (reason !== "new" && reason !== "reset") {
-        throw new Error('resetSession only accepts reason "new" or "reset"');
-      }
-      if (!sessionKey) {
-        throw new Error("resetSession is unavailable without a current session key");
-      }
-      if (!params?.deferResetSession) {
-        throw new Error("resetSession is unavailable without a deferred lifecycle owner");
-      }
-      params.deferResetSession({
-        key: sessionKey,
-        ...(params?.agentId ? { agentId: params.agentId } : {}),
-        reason,
-        commandSource: params?.commandSource ?? "embedded-agent:hook",
-      });
-      return { ok: true, key: sessionKey, deferred: true };
-    },
+    resetSession,
   };
 }
 
