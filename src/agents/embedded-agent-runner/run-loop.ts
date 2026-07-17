@@ -381,6 +381,10 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason,
       });
       if (normalizedAttempt.action === "complete") {
+        const toolOutcomeAbortError = postCompactionAbortError ?? criticalToolLoopAbortError;
+        if (toolOutcomeAbortError) {
+          throw toolOutcomeAbortError;
+        }
         return normalizedAttempt.result;
       }
       if (normalizedAttempt.action === "retry") {

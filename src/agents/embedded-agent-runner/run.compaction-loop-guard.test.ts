@@ -144,7 +144,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         abortSignal?: AbortSignal;
         onToolOutcome?: ToolOutcomeObserver;
       };
-      for (let i = 0; i < 30 && abortSignal?.aborted !== true; i += 1) {
+      for (let i = 0; i < 30; i += 1) {
+        if (abortSignal?.aborted === true) {
+          break;
+        }
         await executeWrappedToolOutcome(
           "read",
           { path: "/workspace/missing" },
