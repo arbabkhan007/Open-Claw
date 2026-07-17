@@ -502,6 +502,21 @@ describe("discoverOpenClawPlugins", () => {
     expect(diagnostics).toStrictEqual([]);
   });
 
+  it("ignores TypeScript declaration files (.d.ts, .d.mts, .d.cts) in extension roots", async () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+    fs.writeFileSync(path.join(globalExt, "types.d.ts"), "export type Foo = string;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "types.d.mts"), "export type Bar = number;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "types.d.cts"), "export type Baz = boolean;", "utf-8");
+
+    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, { workspaceDir });
+
+    expectCandidateIds(candidates, { excludes: ["types"] });
+    expect(diagnostics).toStrictEqual([]);
+  });
+
   it("warns without blocking when a plugin requires a missing plugin", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "diffs-language-pack");
