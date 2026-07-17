@@ -619,6 +619,46 @@ export function createFollowupRunner(params: {
       let activeSessionEntry =
         (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ??
         (replySessionKey === sessionKey ? sessionEntry : undefined);
+      const loadCurrentFollowupSessionEntry = () => {
+        if (!replySessionKey) {
+          return activeSessionEntry;
+        }
+        if (storePath) {
+          return loadSessionEntry({
+            storePath,
+            sessionKey: replySessionKey,
+            readConsistency: "latest",
+          });
+        }
+        return sessionStore?.[replySessionKey] ?? activeSessionEntry;
+      };
+      const refreshFollowupSessionState = (previousSessionId?: string) => {
+        const updatedEntry = loadCurrentFollowupSessionEntry();
+        if (!updatedEntry) {
+          return;
+        }
+        activeSessionEntry = updatedEntry;
+        if (replySessionKey && sessionStore) {
+          sessionStore[replySessionKey] = updatedEntry;
+        }
+        run = {
+          ...run,
+          sessionId: updatedEntry.sessionId,
+          ...(updatedEntry.sessionFile ? { sessionFile: updatedEntry.sessionFile } : {}),
+          modelSelectionLocked: updatedEntry.modelSelectionLocked === true,
+        };
+        effectiveQueued = { ...effectiveQueued, run };
+        replyOperation?.updateSessionId(updatedEntry.sessionId);
+        const queueKey = run.sessionKey ?? sessionKey;
+        if (queueKey && previousSessionId && previousSessionId !== updatedEntry.sessionId) {
+          refreshQueuedFollowupSession({
+            key: queueKey,
+            previousSessionId,
+            nextSessionId: updatedEntry.sessionId,
+            nextSessionFile: updatedEntry.sessionFile,
+          });
+        }
+      };
       run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
         run,
         entry: activeSessionEntry,
@@ -781,6 +821,8 @@ export function createFollowupRunner(params: {
         }),
       );
       let autoCompactionCount = 0;
+      let followupResetCommitted = false;
+      let followupResetPreviousSessionId: string | undefined;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
@@ -1484,6 +1526,8 @@ export function createFollowupRunner(params: {
                   }
                 },
                 onSessionResetCommitted: (commit) => {
+                  followupResetCommitted = true;
+                  followupResetPreviousSessionId = run.sessionId;
                   opts?.onSessionMetadataChanges?.([
                     {
                       sessionKey: commit.key,
@@ -1546,6 +1590,9 @@ export function createFollowupRunner(params: {
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         fallbackExhausted = fallbackResult.outcome === "exhausted";
+        if (followupResetCommitted) {
+          refreshFollowupSessionState(followupResetPreviousSessionId);
+        }
         const settledLifecycleTerminal =
           pendingLifecycleTerminal?.provider === fallbackProvider &&
           pendingLifecycleTerminal.model === fallbackModel
@@ -1976,30 +2023,36 @@ export function createFollowupRunner(params: {
       }
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
-        const count = await incrementRunCompactionCount({
-          cfg: runtimeConfig,
-          sessionEntry: activeSessionEntry,
-          sessionStore,
-          sessionKey: replySessionKey,
-          storePath,
-          amount: autoCompactionCount,
-          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-          contextTokensUsed,
-          newSessionId: runResult.meta?.agentMeta?.sessionId,
-          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
-        });
-        const refreshedSessionEntry =
-          replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
-        if (refreshedSessionEntry) {
-          const queueKey = run.sessionKey ?? sessionKey;
-          if (queueKey) {
-            refreshQueuedFollowupSession({
-              key: queueKey,
-              previousSessionId,
-              nextSessionId: refreshedSessionEntry.sessionId,
-              nextSessionFile: refreshedSessionEntry.sessionFile,
-            });
+        let count: number | undefined;
+        if (followupResetCommitted) {
+          refreshFollowupSessionState(followupResetPreviousSessionId ?? previousSessionId);
+          count = activeSessionEntry?.compactionCount;
+        } else {
+          count = await incrementRunCompactionCount({
+            cfg: runtimeConfig,
+            sessionEntry: activeSessionEntry,
+            sessionStore,
+            sessionKey: replySessionKey,
+            storePath,
+            amount: autoCompactionCount,
+            compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+            lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+            contextTokensUsed,
+            newSessionId: runResult.meta?.agentMeta?.sessionId,
+            newSessionFile: runResult.meta?.agentMeta?.sessionFile,
+          });
+          const refreshedSessionEntry =
+            replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
+          if (refreshedSessionEntry) {
+            const queueKey = run.sessionKey ?? sessionKey;
+            if (queueKey) {
+              refreshQueuedFollowupSession({
+                key: queueKey,
+                previousSessionId,
+                nextSessionId: refreshedSessionEntry.sessionId,
+                nextSessionFile: refreshedSessionEntry.sessionFile,
+              });
+            }
           }
         }
         if (shouldEmitVerboseProgress()) {
