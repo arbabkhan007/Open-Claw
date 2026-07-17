@@ -24,6 +24,8 @@ import {
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
+  consoleUid: "",
+  loadedServiceTargets: new Set<string>(),
   listOutput: "",
   printOutput: "",
   printNotLoadedRemaining: 0,
@@ -36,6 +38,7 @@ const state = vi.hoisted(() => ({
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
+  kickstartUnloadsServiceOnFailure: false,
   disableError: "",
   disableCode: 1,
   stopError: "",
@@ -228,12 +231,24 @@ function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
 
 vi.mock("./exec-file.js", () => ({
   execFileUtf8: vi.fn(async (file: string, args: string[]) => {
+    if (file === "stat") {
+      return state.consoleUid
+        ? { stdout: `${state.consoleUid}\n`, stderr: "", code: 0 }
+        : { stdout: "", stderr: "stat unavailable", code: 1 };
+    }
     const call = normalizeLaunchctlArgs(file, args);
     state.launchctlCalls.push(call);
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
+      const serviceTarget = call[1];
+      if (
+        state.loadedServiceTargets.size > 0 &&
+        (!serviceTarget || !state.loadedServiceTargets.has(serviceTarget))
+      ) {
+        return { stdout: "", stderr: "Could not find service", code: 113 };
+      }
       if (state.printNotLoadedRemaining > 0) {
         state.printNotLoadedRemaining -= 1;
         return { stdout: "", stderr: "Could not find service", code: 113 };
@@ -291,6 +306,10 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "kickstart") {
       if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
         state.kickstartFailuresRemaining -= 1;
+        if (state.kickstartUnloadsServiceOnFailure) {
+          state.serviceLoaded = false;
+          state.serviceRunning = false;
+        }
         return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
       }
       state.serviceLoaded = true;
@@ -380,7 +399,15 @@ vi.mock("node:fs/promises", async () => {
 });
 
 beforeEach(() => {
+  deleteTestEnvValue("LAUNCH_JOB_LABEL");
+  deleteTestEnvValue("LAUNCH_JOB_NAME");
+  deleteTestEnvValue("XPC_SERVICE_NAME");
+  deleteTestEnvValue("OPENCLAW_LAUNCHD_LABEL");
+  deleteTestEnvValue("OPENCLAW_SERVICE_KIND");
+  deleteTestEnvValue("OPENCLAW_SERVICE_MARKER");
   state.launchctlCalls.length = 0;
+  state.consoleUid = "";
+  state.loadedServiceTargets.clear();
   state.listOutput = "";
   state.printOutput = "";
   state.printNotLoadedRemaining = 0;
@@ -393,6 +420,7 @@ beforeEach(() => {
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
+  state.kickstartUnloadsServiceOnFailure = false;
   state.disableError = "";
   state.disableCode = 1;
   state.stopError = "";
@@ -1966,11 +1994,38 @@ describe("launchd install", () => {
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
     expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
       ["enable", serviceId],
       ["kickstart", "-k", serviceId],
     ]);
     expect(launchctlCommandNames()).not.toContain("bootout");
     expect(launchctlCommandNames()).not.toContain("bootstrap");
+  });
+
+  it("restarts the already-loaded console LaunchAgent instead of bootstrapping caller domain", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_UID: "777",
+    };
+    const consoleServiceId = "gui/501/ai.openclaw.gateway";
+    state.consoleUid = "501";
+    state.loadedServiceTargets.add(consoleServiceId);
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.launchctlCalls).toEqual([
+      ["print", "gui/777/ai.openclaw.gateway"],
+      ["print", consoleServiceId],
+      ["enable", consoleServiceId],
+      ["kickstart", "-k", consoleServiceId],
+    ]);
+    expect(launchctlCommandNames()).not.toContain("bootstrap");
+    expect(launchctlCommandNames()).not.toContain("bootout");
   });
 
   it("reloads launchd after rewriting an existing plist", async () => {
@@ -2008,7 +2063,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootout", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -2046,7 +2101,14 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap", "print"]);
+    expect(launchctlCommandNames()).toEqual([
+      "print",
+      "enable",
+      "bootout",
+      "enable",
+      "bootstrap",
+      "print",
+    ]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -2234,7 +2296,7 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
-    state.printNotLoadedRemaining = 1;
+    state.kickstartUnloadsServiceOnFailure = true;
 
     await expectRestartLaunchAgentKickstartFailure(env);
 
