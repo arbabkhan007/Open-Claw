@@ -2776,5 +2776,30 @@ describe("Anthropic provider", () => {
       expect(capturedPayload).not.toHaveProperty("output_config");
     }
   });
+
+  it("surfaces HTTP response body text from Anthropic-compatible errors", async () => {
+    // The SDK throws an APIError carrying status + body on 429/5xx; the stream
+    // must surface the body, not just the bare status message.
+    const error = Object.assign(new Error("529 status code (no body)"), {
+      status: 529,
+      body: "overloaded",
+    });
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () => Promise.reject(error),
+        })),
+      },
+    };
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("529: overloaded");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
