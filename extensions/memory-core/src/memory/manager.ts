@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -47,6 +48,7 @@ import {
   buildFtsQuery,
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
+  type ManagerHybridMergeParams,
 } from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
@@ -1207,22 +1209,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     );
   }
 
-  private mergeHybridResults(params: {
-    query: string;
-    vector: Array<MemorySearchResult & { id: string }>;
-    keyword: Array<
-      MemorySearchResult & {
-        id: string;
-        textScore: number;
-        pathScore: number;
-        exactPathSpecificity: ExactPathSpecificity;
-      }
-    >;
-    vectorWeight: number;
-    textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
-    temporalDecay?: { enabled: boolean; halfLifeDays: number };
-  }): Promise<MemorySearchResult[]> {
+  private mergeHybridResults(params: ManagerHybridMergeParams): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
         id: r.id,
@@ -1248,6 +1235,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
+      isNonTextMediaPath: (path) =>
+        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
