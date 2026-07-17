@@ -8,6 +8,7 @@ import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
+  runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
 
 const model: Model<"google-generative-ai"> = {
@@ -89,6 +90,57 @@ describe("buildGoogleSimpleThinking", () => {
 async function* chunks(items: GenerateContentResponse[]) {
   yield* items;
 }
+
+async function runGoogleLifecycleWithThrownValue(thrown: unknown): Promise<AssistantMessage> {
+  const output = createOutput();
+  const stream = new AssistantMessageEventStream();
+
+  await runGoogleGenerateContentLifecycle({
+    stream,
+    model,
+    output,
+    createClient: () =>
+      ({
+        models: {
+          generateContentStream: async () => {
+            throw thrown;
+          },
+        },
+      }) as never,
+    buildParams: () => ({}) as never,
+    nextToolCallId: (name) => `generated-${name}`,
+  });
+
+  return stream.result();
+}
+
+describe("runGoogleGenerateContentLifecycle", () => {
+  it("terminates the stream when a circular non-Error value is thrown", async () => {
+    const thrown: Record<string, unknown> = { code: "ECONNRESET" };
+    thrown.self = thrown;
+
+    await expect(runGoogleLifecycleWithThrownValue(thrown)).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "[object Object]",
+    });
+  });
+
+  it("terminates the stream when fallback primitive conversion throws", async () => {
+    const thrown = {
+      toJSON() {
+        throw new Error("toJSON failed");
+      },
+      [Symbol.toPrimitive]() {
+        throw new Error("primitive conversion failed");
+      },
+    };
+
+    await expect(runGoogleLifecycleWithThrownValue(thrown)).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "Unknown error",
+    });
+  });
+});
 
 describe("consumeGoogleGenerateContentStream", () => {
   it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {

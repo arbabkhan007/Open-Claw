@@ -21,6 +21,13 @@ const context = {
 } satisfies Context;
 
 describe("azure-openai-responses", () => {
+  it("formats hostile thrown values without escaping error handling", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    expect(testing.formatAzureOpenAIError(proxy)).toBe("Unknown error");
+  });
+
   it("keeps traditional Azure OpenAI hosts on the AzureOpenAI client path", () => {
     const config = testing.resolveAzureConfig(azureResponsesModel, {
       azureResourceName: "example",

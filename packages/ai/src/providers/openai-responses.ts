@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { formatUnknownError } from "../utils/format-unknown-error.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -49,19 +50,14 @@ function getPromptCacheRetention(
 }
 
 function formatOpenAIResponsesError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
+  return formatUnknownError(error, (apiError) => {
+    const status = (apiError as Error & { status?: unknown }).status;
     const statusCode = typeof status === "number" ? status : undefined;
     if (statusCode !== undefined) {
-      return `OpenAI API error (${statusCode}): ${error.message}`;
+      return `OpenAI API error (${statusCode}): ${apiError.message}`;
     }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
+    return apiError.message;
+  });
 }
 
 // OpenAI Responses-specific options
