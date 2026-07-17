@@ -129,10 +129,19 @@ vi.mock("express", () => {
 });
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn<RegisterMSTeamsHandlersMock>((handler) => handler),
+  vi.fn<RegisterMSTeamsHandlersMock>((handler) =>
+    Object.assign(handler, { runCardAction: vi.fn(async () => {}) }),
+  ),
 );
 const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
+const cardActionIngress = vi.hoisted(() => ({
+  enqueue: vi.fn(async () => ({ kind: "accepted", duplicate: false })),
+  drainOnce: vi.fn(async () => ({ started: 0 })),
+  waitForIdle: vi.fn(async () => {}),
+  dispose: vi.fn(),
+}));
+const createMSTeamsCardActionIngress = vi.hoisted(() => vi.fn(() => cardActionIngress));
 const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
 const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
   vi.fn(async (_creds?: unknown, _options?: unknown) => ({
@@ -165,6 +174,8 @@ vi.mock("./monitor-handler.js", () => ({
   isSigninInvokeAuthorized,
   registerMSTeamsHandlers,
 }));
+
+vi.mock("./card-action-ingress.js", () => ({ createMSTeamsCardActionIngress }));
 
 vi.mock("./file-consent-invoke.js", () => ({
   runMSTeamsFileConsentInvokeHandler,
@@ -761,7 +772,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
-  it("acks non-poll card actions before agent dispatch settles", async () => {
+  it("acks non-poll card actions after the durable commit", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -770,45 +781,34 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       conversationStore: createStores().conversationStore,
       pollStore: createStores().pollStore,
     });
-
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
-
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    await waitForMSTeamsTestState(() => expect(registerMSTeamsHandlers).toHaveBeenCalled());
+    const app = (await loadMSTeamsSdkWithAuth.mock.results[0]!.value).app;
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
-    )?.[1];
-    if (typeof cardActionHandler !== "function") {
-      throw new Error("expected card.action handler");
-    }
-    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
-    if (!registeredHandler) {
-      throw new Error("expected registered Teams handler");
-    }
-    let releaseDispatch: (() => void) | undefined;
-    const dispatchWork = new Promise<void>((resolve) => {
-      releaseDispatch = resolve;
-    });
-    const run = vi.spyOn(registeredHandler, "run").mockReturnValueOnce(dispatchWork);
-
-    const response = await cardActionHandler({
+    )?.[1] as (event: unknown) => Promise<unknown>;
+    let releaseCommit: (() => void) | undefined;
+    cardActionIngress.enqueue.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCommit = () => resolve({ kind: "accepted", duplicate: false });
+        }),
+    );
+    const responsePromise = cardActionHandler({
       activity: {
         type: "invoke",
         name: "adaptiveCard/action",
         value: { action: { data: { action: "nonPoll" } } },
       },
     });
-
-    expect(response).toMatchObject({ statusCode: 200, value: "OK" });
-    expect(run).toHaveBeenCalledTimes(1);
-    releaseDispatch?.();
-    await dispatchWork;
-
+    await vi.waitFor(() => expect(cardActionIngress.enqueue).toHaveBeenCalledTimes(1));
+    let acked = false;
+    void responsePromise.then(() => {
+      acked = true;
+    });
+    await Promise.resolve();
+    expect(acked).toBe(false);
+    releaseCommit?.();
+    expect(await responsePromise).toMatchObject({ statusCode: 200, value: "OK" });
     abort.abort();
     await task;
   });

@@ -12,6 +12,7 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
@@ -98,6 +99,10 @@ import {
   shouldAttemptMSTeamsGraphMediaFallback,
 } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
+
+export type MSTeamsTurnAdoptionLifecycle = ReturnType<
+  typeof bindIngressLifecycleToReplyOptions
+>["turnAdoptionLifecycle"];
 
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;
@@ -219,7 +224,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     implicitMentionKinds: Array<"reply_to_bot">;
   };
 
-  const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
+  const handleTeamsMessageNow = async (
+    params: MSTeamsDebounceEntry,
+    options?: {
+      rethrowDispatchFailure?: boolean;
+      notifyDispatchFailure?: boolean;
+      turnAdoptionLifecycle?: MSTeamsTurnAdoptionLifecycle;
+    },
+  ) => {
     const context = params.context;
     const activity = context.activity;
     const rawText = params.rawText;
@@ -997,7 +1009,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
                 ctxPayload,
                 dispatcher,
                 onSettled: () => markDispatchIdle(),
-                replyOptions,
+                replyOptions: options?.turnAdoptionLifecycle
+                  ? { ...replyOptions, turnAdoptionLifecycle: options.turnAdoptionLifecycle }
+                  : replyOptions,
                 configOverride,
               }),
           }),
@@ -1020,10 +1034,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     } catch (err) {
       log.error("dispatch failed", { error: formatUnknownError(err) });
       runtime.error(`msteams dispatch failed: ${formatUnknownError(err)}`);
-      try {
-        await context.sendActivity("⚠️ Something went wrong. Please try again.");
-      } catch {
-        // Best effort.
+      if (options?.notifyDispatchFailure !== false) {
+        try {
+          await context.sendActivity("⚠️ Something went wrong. Please try again.");
+        } catch {
+          // Best effort.
+        }
+      }
+      if (options?.rethrowDispatchFailure) {
+        throw err;
       }
     }
   };
@@ -1086,7 +1105,37 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     },
   });
 
-  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+  const buildDebounceEntry = async (context: MSTeamsTurnContext): Promise<MSTeamsDebounceEntry> => {
+    const activity = context.activity;
+    const attachments = Array.isArray(activity.attachments)
+      ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
+      : [];
+    const rawText = activity.text?.trim() ?? "";
+    const htmlText = extractTextFromHtmlAttachments(attachments);
+    const valueText =
+      rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
+    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
+    const wasMentioned = wasMSTeamsBotMentioned(activity);
+    const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+    const replyToId = activity.replyToId ?? undefined;
+    const implicitMentionKinds: Array<"reply_to_bot"> =
+      conversationId &&
+      replyToId &&
+      (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+        ? ["reply_to_bot"]
+        : [];
+
+    return {
+      context,
+      rawText,
+      text,
+      attachments,
+      wasMentioned,
+      implicitMentionKinds,
+    };
+  };
+
+  async function handleTeamsMessage(context: MSTeamsTurnContext) {
     const activity = context.activity;
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
@@ -1114,6 +1163,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       wasMentioned,
       implicitMentionKinds,
     });
-  };
+  }
+
+  return Object.assign(handleTeamsMessage, {
+    // Durable replays surface pre-adoption failures to the queue and bypass
+    // debounce so an enqueue cannot hide a later dispatch failure.
+    runImmediate: async (
+      context: MSTeamsTurnContext,
+      turnAdoptionLifecycle?: MSTeamsTurnAdoptionLifecycle,
+    ) => {
+      await handleTeamsMessageNow(await buildDebounceEntry(context), {
+        rethrowDispatchFailure: true,
+        notifyDispatchFailure: false,
+        turnAdoptionLifecycle,
+      });
+    },
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
