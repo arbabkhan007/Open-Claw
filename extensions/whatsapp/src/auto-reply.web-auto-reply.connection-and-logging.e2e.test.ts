@@ -48,9 +48,24 @@ const deliveryQueueMocks = vi.hoisted(() => ({
   drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
 }));
 
+const inboundDebounceHookMocks = vi.hoisted(() => ({
+  hasHooks: vi.fn(() => false),
+  runInboundDebounce: vi.fn(async () => undefined),
+}));
+
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getGlobalHookRunner: () => inboundDebounceHookMocks,
+  };
+});
 
 installWebAutoReplyTestHomeHooks();
 
@@ -1027,6 +1042,71 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
+  it("resolves per-conversation WhatsApp debounce overrides", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          debounceMs: 250,
+          direct: {
+            "+15551234567": { debounceMs: 0 },
+            "*": { debounceMs: 1_000 },
+          },
+          groups: {
+            "120363@g.us": { debounceMs: 30_000 },
+            "*": { debounceMs: 2_000 },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+    const resolveDebounceMs = capture.getLastOptions()?.resolveDebounceMs;
+    expect(resolveDebounceMs).toBeTypeOf("function");
+
+    const direct = createTestWebInboundMessage({
+      admission: {
+        accountId: "default",
+        account: { accountId: "default" },
+        conversation: { id: "+15551234567", kind: "direct" },
+        sender: { id: "+15551234567" },
+        ingress: { admission: "dispatch", decision: "allow" },
+      },
+      platform: { chatJid: "+15551234567", sendComposing, reply, sendMedia },
+    });
+    const otherDirect = createTestWebInboundMessage({
+      ...direct,
+      admission: {
+        ...direct.admission,
+        conversation: { id: "+15550000000", kind: "direct" },
+      },
+    });
+    const group = createTestWebInboundMessage({
+      ...direct,
+      admission: {
+        ...direct.admission,
+        conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
+      },
+    });
+
+    expect(resolveDebounceMs?.(direct)).toBe(0);
+    expect(resolveDebounceMs?.(otherDirect)).toBe(1_000);
+    expect(resolveDebounceMs?.(group)).toBe(30_000);
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(direct)),
+    ).resolves.toEqual({ action: "bypass" });
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(otherDirect)),
+    ).resolves.toEqual({ action: "debounce", debounceMs: 1_000 });
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(group)),
+    ).resolves.toEqual({ action: "debounce", debounceMs: 30_000 });
+  });
+
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
@@ -1043,7 +1123,9 @@ describe("web auto-reply connection", () => {
       reply,
     });
 
-    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(msg)),
+    ).resolves.toEqual({ action: "bypass" });
     expect(
       capture
         .getLastOptions()
@@ -1052,6 +1134,42 @@ describe("web auto-reply connection", () => {
     expect(
       capture.getLastOptions()?.shouldDebounce?.(
         createTestWebInboundMessage({
+          payload: { body: "replying with more context" },
+          quote: { id: "quoted-agent-message", body: "previous agent reply" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: { body: "<media:image>", media: { path: "/tmp/image.jpg", type: "image/jpeg" } },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "Shared location",
+            location: { latitude: -27.59487, longitude: -48.548219 },
+          },
+        }),
+      ),
+    ).toBe(false);
+    await expect(
+      Promise.resolve(
+        capture.getLastOptions()?.resolveDebounceDecision?.(
+          createTestWebInboundMessage({
+            payload: { body: "replying with more context" },
+            quote: { id: "quoted-agent-message", body: "previous agent reply" },
+            platform: { sendComposing, reply, sendMedia },
+          }),
+        ),
+      ),
+    ).resolves.toEqual({ action: "bypass" });
+    expect(
+      await capture.getLastOptions()?.resolveDebounceDecision?.(
+        createTestWebInboundMessage({
           payload: {
             body: "/stop\n\n[whatsapp attachment unavailable]",
             commandBody: "/stop",
@@ -1059,7 +1177,7 @@ describe("web auto-reply connection", () => {
           platform: { sendComposing, reply, sendMedia },
         }),
       ),
-    ).toBe(false);
+    ).toEqual({ action: "bypass" });
     await onMessage(msg);
 
     expect(reply).toHaveBeenCalledWith("ok", undefined);
@@ -1090,6 +1208,60 @@ describe("web auto-reply connection", () => {
         payload: { body: "partial nested" },
       } as unknown as WebInboundMessageInput),
     ).rejects.toThrow(/legacy flat or canonical nested/);
+  });
+
+  it("lets a plugin override the debounce window for rich messages", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
+    inboundDebounceHookMocks.hasHooks.mockReturnValueOnce(true);
+    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValueOnce({
+      action: "debounce",
+      debounceMs: 120_000,
+    });
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+    const msg = createTestWebInboundMessage({
+      admission: {
+        accountId: "default",
+        account: { accountId: "default" },
+        conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
+        sender: { id: "15550001111@s.whatsapp.net" },
+        ingress: { admission: "dispatch", decision: "allow" },
+      },
+      event: { id: "rich-1" },
+      payload: {
+        body: "<media:image>",
+        media: { path: "/tmp/inbound.jpg", type: "image/jpeg" },
+      },
+      platform: {
+        chatJid: "120363@g.us",
+        senderJid: "15550001111@s.whatsapp.net",
+        sendComposing,
+        reply,
+        sendMedia,
+      },
+    });
+
+    await expect(capture.getLastOptions()?.resolveDebounceDecision?.(msg)).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 120_000,
+    });
+    expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debounceKey: "default:120363@g.us:15550001111@s.whatsapp.net",
+        defaultAction: "bypass",
+        conversationKind: "group",
+        message: { hasMedia: true, hasLocation: false, hasQuote: false },
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: "120363@g.us",
+        senderId: "15550001111@s.whatsapp.net",
+      }),
+    );
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

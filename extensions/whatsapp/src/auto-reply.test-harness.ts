@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { InboundDebounceDecision } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
@@ -246,6 +247,10 @@ export function createWebListenerFactoryCapture(): AnyExport {
     | {
         onMessage: (msg: WebInboundMessageInput) => Promise<void>;
         shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+        resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
+        resolveDebounceDecision?: (
+          msg: WebInboundMessageInput,
+        ) => Promise<InboundDebounceDecision | undefined>;
         debounceMs?: number;
         appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
         selfChatMode?: boolean;
@@ -254,6 +259,10 @@ export function createWebListenerFactoryCapture(): AnyExport {
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessageInput) => Promise<void>;
     shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+    resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
+    resolveDebounceDecision?: (
+      msg: WebInboundMessageInput,
+    ) => Promise<InboundDebounceDecision | undefined>;
     debounceMs?: number;
     appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
     selfChatMode?: boolean;

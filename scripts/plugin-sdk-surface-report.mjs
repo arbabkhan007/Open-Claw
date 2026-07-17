@@ -262,7 +262,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired dual-field plan payload builder -1.
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      8149,
+      // +3: inbound debounce event/result and debouncer decision exports.
+      8152,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
