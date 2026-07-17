@@ -276,6 +276,7 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
           model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
           voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
         }),
+        signal: AbortSignal.timeout(30_000),
       });
       return {
         audioBuffer: createAudioBuffer(1),
@@ -300,6 +301,7 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
           voice: config?.voice ?? "alloy",
           instructions,
         }),
+        signal: AbortSignal.timeout(30_000),
       });
       return {
         audioBuffer: createAudioBuffer(2),
@@ -1205,6 +1207,27 @@ export function describeTtsProviderRuntimeContract() {
           await expectTelephonyInstructions(testCase.model, testCase.expectedInstructions);
         },
       );
+    });
+
+    it("passes a timeout signal to fetch in the OpenAI synthesize provider", async () => {
+      const provider = buildTestOpenAISpeechProvider();
+      expect(typeof provider.synthesize).toBe("function");
+      let capturedSignal: AbortSignal | undefined;
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        capturedSignal = init?.signal as AbortSignal | undefined;
+        return new Response(null, { status: 200 });
+      });
+      try {
+        await provider.synthesize({
+          text: "regression test",
+          providerConfig: {},
+          providerOverrides: {},
+        });
+        expect(capturedSignal).toBeDefined();
+        expect(capturedSignal?.aborted).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 }
