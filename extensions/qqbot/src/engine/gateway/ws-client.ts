@@ -8,14 +8,12 @@ import WebSocket from "ws";
 // releases GatewayConnection.isConnecting, and allows reconnects.
 const QQBOT_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 
-// Bound inbound gateway frames at 1 MiB so a single overgrown payload cannot
-// pin memory before JSON.parse. QQ Bot gateway frames are JSON envelopes only —
-// media and file attachments travel through HTTP upload APIs, never the
-// WebSocket. The largest valid inbound event (GROUP_AT_MESSAGE_CREATE carrying
-// attached message content, mentions, msg_elements, and metadata) stays well
-// under 1 MiB. This follows the JSON-only channel precedent: Slack, Signal, and
-// Mattermost all use the same 1 MiB cap for their gateway WebSocket clients.
-const QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Bound inbound gateway frames so a single overgrown payload cannot pin memory
+// before JSON.parse. QQ Bot gateway frames are JSON envelopes; media and file
+// attachments are URL metadata rather than inline binary. Keep the larger
+// Mattermost channel precedent to preserve headroom for unusually large valid
+// JSON events while still replacing ws's 100 MiB default.
+const QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 interface QQWSClientOptions {
   gatewayUrl: string;

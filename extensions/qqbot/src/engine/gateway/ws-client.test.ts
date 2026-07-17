@@ -12,6 +12,7 @@ const proxyAgentCtorMock = vi.hoisted(() =>
 );
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
+const QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 vi.mock("ws", () => ({
   default: webSocketCtorMock,
@@ -78,7 +79,7 @@ describe("createQQWSClient", () => {
       {
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
-        maxPayload: 1024 * 1024,
+        maxPayload: QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES,
       },
     ]);
   });
@@ -99,7 +100,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
-        maxPayload: 1024 * 1024,
+        maxPayload: QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES,
       },
     ]);
   });
@@ -120,7 +121,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
-        maxPayload: 1024 * 1024,
+        maxPayload: QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES,
       },
     ]);
   });
@@ -141,7 +142,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
-        maxPayload: 1024 * 1024,
+        maxPayload: QQBOT_WEBSOCKET_MAX_PAYLOAD_BYTES,
       },
     ]);
   });
