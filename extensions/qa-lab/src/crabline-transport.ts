@@ -209,6 +209,7 @@ async function postCrablineInbound(params: {
   });
   try {
     if (!response.ok) {
+      response.body?.cancel().catch(() => undefined);
       throw new Error(
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );
