@@ -376,6 +376,16 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 hookSessionResetQueue.deferResetSession({
                   ...request,
                   assertCurrent: request.assertCurrent ?? assertCompactionResetCurrent,
+                  onCommitted: (commit) => {
+                    request.onCommitted?.(commit);
+                    emitSessionsChanged(context, {
+                      sessionKey: commit.key,
+                      ...(commit.key === "global"
+                        ? { agentId: request.agentId ?? target.agentId ?? requestedAgentId }
+                        : {}),
+                      reason: request.reason,
+                    });
+                  },
                 }),
             });
           } catch (err) {

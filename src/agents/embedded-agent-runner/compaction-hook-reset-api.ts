@@ -13,6 +13,7 @@ export type DeferredEmbeddedHookSessionResetRequest = {
   reason: EmbeddedHookSessionResetReason;
   commandSource: string;
   assertCurrent?: () => void;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 };
 export type DeferEmbeddedHookSessionReset = (
   request: DeferredEmbeddedHookSessionResetRequest,

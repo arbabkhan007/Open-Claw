@@ -1106,9 +1106,27 @@ test("sessions.compact hook reset guard accepts persisted compaction successor s
   });
 
   const { ws } = await openClient();
+  await rpcReq(ws, "sessions.subscribe", {});
+  const hookResetChanged = onceMessage(ws, (message) => {
+    const candidate = message as {
+      event?: unknown;
+      payload?: { reason?: unknown; sessionKey?: unknown };
+      type?: unknown;
+    };
+    return (
+      candidate.type === "event" &&
+      candidate.event === "sessions.changed" &&
+      candidate.payload?.sessionKey === "agent:main:main" &&
+      candidate.payload?.reason === "new"
+    );
+  });
   const response = await rpcReq(ws, "sessions.compact", { key: "main" });
 
   expect(response.ok).toBe(true);
+  expect((await hookResetChanged).payload).toMatchObject({
+    sessionKey: "agent:main:main",
+    reason: "new",
+  });
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBeTruthy();
   expect(resetEntry?.sessionId).not.toBe("sess-compact-old");

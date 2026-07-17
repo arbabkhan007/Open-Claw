@@ -13,6 +13,7 @@ vi.mock("../../gateway/session-reset-service.js", () => ({
 describe("createEmbeddedHookSessionResetQueue", () => {
   it("passes current-lifecycle assertions through deferred reset flushes", async () => {
     const assertCurrent = vi.fn();
+    const onCommitted = vi.fn();
     const queue = createEmbeddedHookSessionResetQueue();
 
     queue.deferResetSession({
@@ -21,6 +22,7 @@ describe("createEmbeddedHookSessionResetQueue", () => {
       reason: "new",
       commandSource: "embedded-agent:hook",
       assertCurrent,
+      onCommitted,
     });
 
     await queue.flush();
@@ -31,6 +33,7 @@ describe("createEmbeddedHookSessionResetQueue", () => {
       reason: "new",
       commandSource: "embedded-agent:hook",
       assertCurrent,
+      onCommitted,
     });
   });
 });
