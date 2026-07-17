@@ -274,13 +274,17 @@ function makeRootForTest(overrides?: {
     }) as never;
 }
 
-function makeCall(method: keyof typeof agentsHandlers, params: Record<string, unknown>) {
+function makeCall(
+  method: keyof typeof agentsHandlers,
+  params: Record<string, unknown>,
+  contextOverrides: { configReadOnlyReason?: string } = {},
+) {
   const respond = vi.fn();
   const handler = expectDefined(agentsHandlers[method], "agentsHandlers[method] test invariant");
   const promise = handler({
     params,
     respond,
-    context: { getRuntimeConfig: () => mocks.loadConfigReturn } as never,
+    context: { getRuntimeConfig: () => mocks.loadConfigReturn, ...contextOverrides } as never,
     req: { type: "req" as const, id: "1", method },
     client: null,
     isWebchatConnect: () => false,
@@ -541,6 +545,22 @@ describe("agents.create", () => {
     });
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("rejects managed config mutations before workspace side effects", async () => {
+    const { respond, promise } = makeCall(
+      "agents.create",
+      {
+        name: "Managed Agent",
+        workspace: "/tmp/managed-agent",
+      },
+      { configReadOnlyReason: "configuration writes are unavailable" },
+    );
+    await promise;
+
+    expectRespondErrorContaining(respond, "configuration writes are unavailable");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("ensures workspace is set up before writing config", async () => {

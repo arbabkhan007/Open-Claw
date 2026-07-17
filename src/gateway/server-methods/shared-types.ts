@@ -120,6 +120,8 @@ export type GatewayRequestContext = {
   getRuntimeConfig: () => OpenClawConfig;
   notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
+  configSnapshot?: ConfigFileSnapshot;
+  configReadOnlyReason?: string;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
