@@ -22,6 +22,7 @@ import {
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultIMessageAccountId, resolveIMessageAccount } from "./accounts.js";
+import { IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION } from "./constants.js";
 import { normalizeIMessageHandle } from "./targets.js";
 
 const t = createSetupTranslator();
@@ -30,6 +31,7 @@ const channel = "imessage" as const;
 
 export const IMESSAGE_INSTALL_COMMAND = "brew install steipete/tap/imsg";
 export const IMESSAGE_UPDATE_COMMAND = "brew update && brew upgrade imsg";
+export { IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION };
 
 const HOMEBREW_IMSG_PATHS = new Set([
   "/opt/homebrew/bin/imsg",
@@ -200,6 +202,7 @@ export function createIMessageCliPathTextInput(
     helpTitle: "iMessage",
     helpLines: [
       "imsg CLI path required to enable iMessage.",
+      `OpenClaw requires imsg ${IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION} or newer.`,
       `Install imsg on the Messages Mac: ${IMESSAGE_INSTALL_COMMAND}`,
       `Update imsg when channel probes report missing RPC or private API capabilities: ${IMESSAGE_UPDATE_COMMAND}`,
     ],
@@ -211,6 +214,7 @@ export const imessageCompletionNote = {
   lines: [
     "For the usual setup, run OpenClaw on the Mac signed into Messages.",
     "If the Gateway runs elsewhere, set cliPath to a transparent SSH wrapper that runs imsg on the Messages Mac.",
+    `OpenClaw requires imsg ${IMESSAGE_MINIMUM_SUPPORTED_CLI_VERSION} or newer.`,
     `Install imsg on the Messages Mac: ${IMESSAGE_INSTALL_COMMAND}`,
     `Update imsg after imsg fixes or missing-capability errors: ${IMESSAGE_UPDATE_COMMAND}`,
     "Private API mode is strongly encouraged for replies, tapbacks, effects, polls, attachments, and group actions.",

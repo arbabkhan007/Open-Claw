@@ -602,6 +602,99 @@ describe("probeIMessage", () => {
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 
+  it("marks a parsed imsg version below the supported floor as fatal", async () => {
+    vi.spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "0.13.0\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg-old" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toContain("imsg 0.13.0 is too old");
+    expect(result.error).toContain("Install imsg 0.13.1 or newer");
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prerelease at the supported imsg version floor", async () => {
+    vi.spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "0.13.1-beta.1\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg-prerelease" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toContain("imsg 0.13.1-beta.1 is too old");
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps transient imsg version probe failures retryable", async () => {
+    vi.spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockRejectedValueOnce(new Error("ssh connection refused"));
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg-ssh" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(false);
+    expect(result.error).toContain("ssh connection refused");
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
   it("drops cached rpc support when the current clock is not a valid date timestamp", async () => {
     vi.spyOn(Date, "now")
       .mockReturnValueOnce(1_700_000_000_000)
@@ -619,6 +712,14 @@ describe("probeIMessage", () => {
       })
       .mockResolvedValueOnce({
         stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "0.13.1\n",
         stderr: "",
         code: 0,
         signal: null,

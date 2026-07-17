@@ -13,12 +13,14 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 
@@ -322,18 +324,44 @@ export async function runDoctorConfigPreflight(
       ...(options.observe === false ? { observe: false } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
     };
-    let snapshot = addDoctorLegacyIssues(
-      await measureStartupPreflightStep("config-snapshot", () =>
-        readConfigFileSnapshot(readOptions),
-      ),
-    );
+    const readDoctorSnapshot = async () => {
+      let next = addDoctorLegacyIssues(
+        await measureStartupPreflightStep("config-snapshot", () =>
+          readConfigFileSnapshot(readOptions),
+        ),
+      );
+      if (
+        options.repairPrefixedConfig === true &&
+        !readOptions.skipPluginValidation &&
+        next.exists &&
+        !next.valid &&
+        next.legacyIssues.length > 0
+      ) {
+        const legacySnapshot = addDoctorLegacyIssues(
+          await measureStartupPreflightStep("config-snapshot-legacy-plugin", () =>
+            readConfigFileSnapshot({ ...readOptions, skipPluginValidation: true }),
+          ),
+        );
+        if (legacySnapshot.valid) {
+          // Only bypass the stale schema long enough to prove that applying the
+          // registered doctor migrations leaves no unrelated plugin errors.
+          const rawConfig = legacySnapshot.sourceConfig ?? legacySnapshot.config ?? {};
+          const normalized = normalizeCompatibilityConfigValues(rawConfig);
+          if (validateConfigObjectWithPlugins(normalized.config).ok) {
+            next = legacySnapshot;
+          }
+        }
+      }
+      return next;
+    };
+    let snapshot = await readDoctorSnapshot();
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
       if (await recoverConfigFromJsonRootSuffix(snapshot)) {
         note(
           "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
           "Config",
         );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+        snapshot = await readDoctorSnapshot();
       } else if (
         await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
       ) {
@@ -341,7 +369,7 @@ export async function runDoctorConfigPreflight(
           "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
           "Config",
         );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+        snapshot = await readDoctorSnapshot();
       }
       if (
         !snapshot.valid &&
