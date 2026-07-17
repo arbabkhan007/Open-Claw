@@ -596,9 +596,13 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       job.state.nextRunAtMs = undefined;
       changed = true;
     }
+    // Keep a live in-flight marker across disable (#102238) so re-enable + tick
+    // cannot clear the concurrency guard. Queued force reservations keep their
+    // marker; only stuck markers are cleared here (same STUCK_RUN_MS as below).
     if (
       job.state.runningAtMs !== undefined &&
-      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs)
+      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs) &&
+      nowMs - job.state.runningAtMs > STUCK_RUN_MS
     ) {
       job.state.runningAtMs = undefined;
       changed = true;

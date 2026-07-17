@@ -494,7 +494,11 @@ function finalizeUpdatedJob(params: {
       nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
     } else {
       nextJob.state.nextRunAtMs = undefined;
-      nextJob.state.runningAtMs = undefined;
+      // Preserve numeric in-flight runningAtMs across disable (#102238).
+      // Stuck markers are cleared by normalizeJobTickState (STUCK_RUN_MS).
+      if (typeof nextJob.state.runningAtMs !== "number") {
+        nextJob.state.runningAtMs = undefined;
+      }
     }
   } else if (isJobEnabled(nextJob) && !hasScheduledNextRunAtMs(nextJob.state.nextRunAtMs)) {
     nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);

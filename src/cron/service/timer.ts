@@ -23,6 +23,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
@@ -1808,6 +1809,10 @@ function isRunnableJob(params: {
     return false;
   }
   if (typeof job.state.runningAtMs === "number") {
+    return false;
+  }
+  // In-process guard when persisted runningAtMs was cleared mid-run (#102238).
+  if (isCronJobActive(job.id)) {
     return false;
   }
   const lastRunStatus = resolveJobLastRunStatus(job);
