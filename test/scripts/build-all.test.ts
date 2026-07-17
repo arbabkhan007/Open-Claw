@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   BUILD_ALL_PROFILES,
@@ -37,8 +38,24 @@ function withBuildCacheFixture(
     step: {
       label: string;
       cache: {
-        inputs: string[];
-        outputs: Array<string | { path: string; extensions?: string[]; recursive?: boolean }>;
+        inputs: Array<
+          | string
+          | {
+              path: string;
+              excludeDirectories?: string[];
+              extensions?: string[];
+              recursive?: boolean;
+            }
+        >;
+        outputs: Array<
+          | string
+          | {
+              path: string;
+              excludeDirectories?: string[];
+              extensions?: string[];
+              recursive?: boolean;
+            }
+        >;
         restore?: "always";
       };
     };
@@ -216,11 +233,6 @@ describe("resolveBuildAllStep", () => {
       scriptPath: "scripts/write-cli-startup-metadata.ts",
       expectedEnv: { FOO: "bar" },
     },
-    {
-      label: "write-cli-compat",
-      scriptPath: "scripts/write-cli-compat.ts",
-      expectedEnv: { FOO: "bar" },
-    },
   ])("runs the $label TypeScript step through tsx", ({ label, scriptPath, expectedEnv }) => {
     const step = getBuildAllStep(label);
 
@@ -317,29 +329,35 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "plugins:assets:copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
-      "write-cli-compat",
     ]);
   });
 
   it("skips bundled tsdown declarations for runtime-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
+    for (const profile of [
+      "gatewayWatch",
+      "qaRuntime",
+      "sourcePerformance",
+      "cliStartup",
+    ] as const) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
       }
 
-      expect(BUILD_ALL_PROFILE_STEP_ENV[profile].tsdown).toMatchObject({
+      expect(
+        expectDefined(BUILD_ALL_PROFILE_STEP_ENV[profile], `${profile} build step env`).tsdown,
+      ).toMatchObject({
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       });
       expect(
@@ -350,22 +368,66 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("keeps canonical declarations enabled for package artifact builds", () => {
-    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+  it("skips global declarations on CI artifacts and self-builds the plugin-sdk gate", () => {
+    // Global dts emission is ~95% of the tsdown wall clock; PR CI dist
+    // consumers are runtime JS, and the plugin-sdk export gate validates
+    // self-built scoped declarations instead. Release/package builds keep
+    // canonical declarations (full profile, docker packaging).
+    const steps = resolveBuildAllSteps("ciArtifacts");
+    const tsdown = steps.find((step) => step.label === "tsdown");
     if (!tsdown) {
       throw new Error("Missing ciArtifacts tsdown step");
     }
-
-    expect(
-      resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } }).options.env,
-    ).toMatchObject({
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+    expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    });
+
+    const entryDts = steps.find((step) => step.label === "write-plugin-sdk-entry-dts");
+    if (!entryDts) {
+      throw new Error("Missing ciArtifacts write-plugin-sdk-entry-dts step");
+    }
+    expect(entryDts.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0" });
+    expect(entryDts.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        "package.json",
+        "pnpm-lock.yaml",
+        "tsconfig.plugin-sdk.dts.json",
+        expect.objectContaining({
+          path: "src",
+          excludeDirectories: ["dist", "node_modules"],
+        }),
+        expect.objectContaining({
+          path: "packages",
+          excludeDirectories: ["dist", "node_modules"],
+        }),
+      ]),
+    );
+    expect(entryDts.cache?.outputs).toEqual(
+      expect.arrayContaining([
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+      ]),
+    );
+    expect(entryDts.cache?.restore).toBe("always");
+
+    const fullEntryDts = resolveBuildAllSteps("full").find(
+      (step) => step.label === "write-plugin-sdk-entry-dts",
+    );
+    expect(fullEntryDts?.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" });
+    expect(fullEntryDts?.cache).toBeDefined();
+    expect(fullEntryDts?.cache?.inputs).not.toContainEqual(
+      expect.objectContaining({ path: "src" }),
+    );
+    expect(fullEntryDts?.cache?.outputs).not.toContainEqual({
+      path: "dist/plugin-sdk",
+      extensions: [".d.ts"],
+      recursive: false,
     });
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
-    for (const profile of ["full", "ciArtifacts", "cliStartup"]) {
+    for (const profile of ["full", "ciArtifacts", "sourcePerformance", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -403,9 +465,23 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+    ]);
+  });
+
+  it("uses a source performance profile with QA assets and startup metadata", () => {
+    expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
+      "plugins:assets:build",
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+      "write-cli-startup-metadata",
     ]);
   });
 
@@ -417,12 +493,11 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-cli-startup-metadata",
-      "write-cli-compat",
     ]);
   });
 
   it("skips generated static plugin assets for minimal backend-only profiles", () => {
-    for (const profile of ["gatewayWatch", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "cliStartup"] as const) {
       const runtimePostbuild = resolveBuildAllSteps(profile).find(
         (step) => step.label === "runtime-postbuild",
       );
@@ -430,7 +505,11 @@ describe("resolveBuildAllSteps", () => {
         throw new Error(`Missing ${profile} runtime-postbuild step`);
       }
 
-      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toEqual({
+      expect(
+        expectDefined(BUILD_ALL_PROFILE_STEP_ENV[profile], `${profile} build step env`)[
+          "runtime-postbuild"
+        ],
+      ).toEqual({
         OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
       });
       expect(
@@ -443,22 +522,41 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("keeps generated static plugin assets enabled for the QA runtime profile", () => {
-    const runtimePostbuild = resolveBuildAllSteps("qaRuntime").find(
-      (step) => step.label === "runtime-postbuild",
-    );
-    if (!runtimePostbuild) {
-      throw new Error("Missing qaRuntime runtime-postbuild step");
-    }
+  it("keeps generated static plugin assets enabled for QA-backed profiles", () => {
+    for (const profile of ["qaRuntime", "sourcePerformance"] as const) {
+      const runtimePostbuild = resolveBuildAllSteps(profile).find(
+        (step) => step.label === "runtime-postbuild",
+      );
+      if (!runtimePostbuild) {
+        throw new Error(`Missing ${profile} runtime-postbuild step`);
+      }
 
-    expect(BUILD_ALL_PROFILE_STEP_ENV.qaRuntime["runtime-postbuild"]).toBeUndefined();
-    expect(
-      resolveBuildAllStep(runtimePostbuild, {
-        env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
-      }).options.env,
-    ).toMatchObject({
-      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
-    });
+      expect(
+        expectDefined(BUILD_ALL_PROFILE_STEP_ENV[profile], `${profile} build step env`)[
+          "runtime-postbuild"
+        ],
+      ).toBeUndefined();
+      expect(
+        resolveBuildAllStep(runtimePostbuild, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+        }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
+      });
+    }
+  });
+
+  it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
+    for (const profile of ["full", "ciArtifacts", "qaRuntime", "sourcePerformance"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf("tsdown"));
+      expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
+        labels.indexOf("plugins:assets:copy"),
+      );
+      expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+        labels.indexOf("runtime-postbuild"),
+      );
+    }
   });
 
   it("writes the runtime postbuild stamp after the build stamp", () => {
@@ -486,7 +584,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("keeps ui:build out of minimal backend-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
       expect(labels).not.toContain("ui:build");
     }
@@ -557,7 +655,7 @@ describe("build-all timing output", () => {
         { label: "write-plugin-sdk-entry-dts", status: "ran", durationMs: 34567 },
       ]),
     ).toBe(
-      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
+      "[build-all] phase timings: total 2m 13.6s; slowest tsdown 1m 39s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
     );
   });
 });
@@ -637,6 +735,39 @@ describe("resolveBuildAllStepCacheState", () => {
         stampedOutputs: ["dist/output.js"],
         stampPath: stale.stampPath,
       });
+    });
+  });
+
+  it("ignores generated and installed directories in broad cache inputs", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const ignoredDist = path.join(rootDir, "src/nested/dist/generated.ts");
+      const ignoredModules = path.join(rootDir, "src/node_modules/dependency.ts");
+      fs.mkdirSync(path.dirname(ignoredDist), { recursive: true });
+      fs.mkdirSync(path.dirname(ignoredModules), { recursive: true });
+      fs.writeFileSync(ignoredDist, "generated");
+      fs.writeFileSync(ignoredModules, "dependency");
+      const broadStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          inputs: [
+            {
+              path: "src",
+              excludeDirectories: ["dist", "node_modules"],
+              extensions: [".ts"],
+            },
+          ],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(broadStep, { rootDir });
+      writeBuildAllStepCacheStamp(broadStep, cacheState, { rootDir });
+
+      fs.writeFileSync(ignoredDist, "changed generated output");
+      fs.writeFileSync(ignoredModules, "changed installed dependency");
+      const fresh = resolveBuildAllStepCacheState(broadStep, { rootDir });
+
+      expect(fresh.fresh).toBe(true);
+      expect(fresh.inputFiles).toBe(1);
     });
   });
 

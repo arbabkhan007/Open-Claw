@@ -20,7 +20,6 @@ const PACKAGE_ACCEPTANCE = ".github/workflows/package-acceptance.yml";
 const PLUGIN_PRERELEASE = ".github/workflows/plugin-prerelease.yml";
 const LIVE_E2E = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
-const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
 const SHARED_IMAGE_PUBLISHER = ".github/workflows/openclaw-shared-image-publish-reusable.yml";
 const SCHEDULED_LIVE = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const DOCKER_RELEASE = ".github/workflows/docker-release.yml";
@@ -99,7 +98,7 @@ function permissionScopes(...permissions: Array<PermissionMap | undefined>): str
       }
     }
   }
-  return [...scopes].sort();
+  return [...scopes].toSorted();
 }
 
 function reusablePermissionViolations(
@@ -189,6 +188,23 @@ function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
 }
 
 describe("release validation no-push transport", () => {
+  it("builds planned live images locally without entering pull fallback", () => {
+    const workflow = readWorkflow(LIVE_E2E);
+    for (const jobName of [
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "validate_docker_openwebui",
+    ]) {
+      const job = workflow.jobs?.[jobName];
+      const runStep = job?.steps?.find((candidate) =>
+        candidate.run?.includes("test-live-build-docker.sh"),
+      );
+
+      expect(runStep?.run, jobName).toContain("OPENCLAW_SKIP_DOCKER_BUILD=0");
+      expect(runStep?.run, jobName).not.toContain("OPENCLAW_DOCKER_BUILD_ON_MISSING=1");
+    }
+  });
+
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
@@ -271,6 +287,7 @@ describe("release validation no-push transport", () => {
     const dockerAssets = job(full, "docker_runtime_assets_preflight");
     expect(step(dockerAssets, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
     expect(evidenceReuse.if).toContain("github.ref == 'refs/heads/main'");
+    expect(evidenceReuse.if).toContain("startsWith(github.ref, 'refs/heads/release-ci/')");
     expect(
       evidenceReuse.steps?.find(
         (candidate) => candidate.name === "Require trusted main workflow ref",
@@ -308,6 +325,23 @@ describe("release validation no-push transport", () => {
     expect(verify.run).not.toContain('"$head_sha" != "$TARGET_SHA"');
   });
 
+  it("keeps the Release SHA wrapper as the durable evidence identity", () => {
+    const full = readWorkflow(FULL_RELEASE);
+    const verify = step(job(full, "summary"), "Verify child workflow results");
+    const dispatch = step(job(full, "summary"), "Request release evidence update");
+
+    expect(verify.run).toContain(
+      'echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"',
+    );
+    expect(verify.run).toContain('"ci.yml"');
+    expect(verify.run).toContain('"openclaw-release-checks.yml"');
+    expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
+    expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+    expect(dispatch.run).toContain("--connect-timeout 10");
+    expect(dispatch.run).toContain("--max-time 30");
+    expect(dispatch.run).toContain("https://api.github.com/repos/openclaw/releases/dispatches");
+  });
+
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
     const summary = job(readWorkflow(FULL_RELEASE), "summary");
     expect(step(summary, "Upload release validation manifest").with).toMatchObject({
@@ -341,10 +375,14 @@ describe("release validation no-push transport", () => {
       'if [[ "$source_sha" != "$PACKAGE_REF" ]]',
     );
     expect(live.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       shared_image_artifact_namespace: "release-live",
       shared_image_policy: "no-push-artifact",
     });
     expect(docker.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
       package_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
@@ -398,6 +436,8 @@ describe("release validation no-push transport", () => {
       package_source_sha: "${{ needs.resolve_package.outputs.package_source_sha }}",
       package_version: "${{ needs.resolve_package.outputs.package_version }}",
     });
+    expect(standardAcceptance.with).not.toHaveProperty("allow_unreleased_changelog");
+    expect(registryAcceptance.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(standardAcceptance.if).toContain("shared_image_policy == 'no-push-artifact'");
     expectReadOnlyPackagePermission(standardAcceptance);
     expect(registryAcceptance.if).toContain("shared_image_policy == 'existing-only'");
@@ -456,6 +496,19 @@ describe("release validation no-push transport", () => {
 
     const dockerProducer = job(workflow, "prepare_docker_e2e_image");
     const liveProducer = job(workflow, "prepare_live_test_image");
+    const liveProducerSteps = liveProducer.steps ?? [];
+    const liveBuildIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Build shared live-test image",
+    );
+    const trustedHarnessIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Checkout trusted release harness",
+    );
+    const livePackIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Pack live-test image artifact",
+    );
+    expect(liveBuildIndex).toBeGreaterThanOrEqual(0);
+    expect(trustedHarnessIndex).toBeGreaterThan(liveBuildIndex);
+    expect(livePackIndex).toBeGreaterThan(trustedHarnessIndex);
     expect(permissionAt(workflow.permissions, "actions", "none")).toBe("read");
     expect(permissionAt(workflow.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(dockerProducer);
@@ -831,6 +884,7 @@ describe("release validation no-push transport", () => {
     expect(permissionAt(scheduled.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(scheduledValidation);
     expect(scheduledValidation.with).toMatchObject({
+      allow_unreleased_changelog: true,
       shared_image_artifact_namespace: "scheduled-live",
       shared_image_policy: "no-push-artifact",
     });

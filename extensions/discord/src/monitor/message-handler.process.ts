@@ -57,7 +57,11 @@ import {
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
+import {
+  completeDiscordSessionConflict,
+  withDiscordSessionRetry,
+} from "./message-handler.retry.js";
+import { deliverDiscordReply, formatDiscordReplyDeliveryFailure } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 
@@ -68,21 +72,6 @@ const TARGETED_ONLY_ALLOWED_MENTIONS = {
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
-}
-
-function formatDiscordReplyDeliveryFailure(params: {
-  kind: string;
-  err: unknown;
-  target: string;
-  sessionKey?: string;
-}) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
@@ -148,11 +137,7 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
-  try {
-    await processDiscordMessageInner(ctx, observer);
-  } finally {
-    ctx.replyTypingFeedback?.onCleanup?.();
-  }
+  await processDiscordMessageInner(ctx, observer);
 }
 
 async function processDiscordMessageInner(
@@ -185,7 +170,6 @@ async function processDiscordMessageInner(
     threadBindings,
     route,
     abortSignal,
-    replyTypingFeedback,
     preparedMedia: mediaList,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
@@ -201,7 +185,7 @@ async function processDiscordMessageInner(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
-  const { dispatchReplyWithBufferedBlockDispatcher } = await loadReplyRuntime();
+  const { dispatchReplyWithBufferedBlockDispatcher: dispatchReply } = await loadReplyRuntime();
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
     ctx: {
@@ -220,10 +204,9 @@ async function processDiscordMessageInner(
   const configuredTypingInterval =
     cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
-    Boolean(replyTypingFeedback) ||
-    (sourceRepliesAreToolOnly &&
-      configuredTypingMode === undefined &&
-      configuredTypingInterval === undefined);
+    sourceRepliesAreToolOnly &&
+    configuredTypingMode === undefined &&
+    configuredTypingInterval === undefined;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -426,11 +409,9 @@ async function processDiscordMessageInner(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
-  // Deliver target can move into a thread after preflight accepted the message.
-  // The typing owner follows the final target before reply dispatch starts.
-  const typingFeedback =
-    replyTypingFeedback ??
-    createDiscordReplyTypingFeedback({
+  let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
+  const getTypingFeedback = () =>
+    (typingFeedback ??= createDiscordReplyTypingFeedback({
       cfg,
       token,
       accountId,
@@ -438,21 +419,20 @@ async function processDiscordMessageInner(
       rest: feedbackRest,
       log: logVerbose,
       keepaliveIntervalMs: shouldDisableCoreTypingKeepalive ? undefined : 0,
-    });
-  if (replyTypingFeedback) {
-    // A carried prestart only covers queue wait time; dispatch needs a fresh
-    // controller after retargeting so an expired TTL cannot silence the run.
-    replyTypingFeedback.restartForDispatch(typingChannelId);
-  } else {
-    typingFeedback.updateChannelId(typingChannelId);
-  }
+    }));
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
-    typingCallbacks: typingFeedback,
+    // The core lifecycle reaches this callback only after reply admission.
+    // Silent pre-dispatch outcomes therefore never allocate or emit feedback.
+    typingCallbacks: {
+      onReplyStart: () => getTypingFeedback().onReplyStart(),
+      onIdle: () => typingFeedback?.onIdle?.(),
+      onCleanup: () => typingFeedback?.onCleanup?.(),
+    },
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -599,7 +579,7 @@ async function processDiscordMessageInner(
   })();
   const reasoningDurableEnabled = reasoningLevel === "on";
   const reasoningWindowEnabled = reasoningLevel === "stream";
-  const progressTurnStartedAt = Date.now();
+  let progressTurnStartedAt = Date.now();
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
   let progressCommentaryNotes = 0;
@@ -636,6 +616,26 @@ async function processDiscordMessageInner(
       progressReasoningSteps += 1;
     }
   };
+  const resetProgressTurnState = () => {
+    finalReplyStartNotified = false;
+    userFacingFinalDelivered = false;
+    userFacingFinalDeliveryFailed = false;
+    pendingToolWarningFinal = undefined;
+    progressTurnStartedAt = Date.now();
+    progressReasoningSteps = 0;
+    progressToolCalls = 0;
+    progressCommentaryNotes = 0;
+    progressReceiptLine = undefined;
+    clearProgressDraftAfterFinalDelivery = false;
+    seenCommentaryIds.clear();
+    lastCommentaryNoteText = "";
+    windowReasoningOpen = false;
+  };
+  const handleAssistantMessageBoundary = () => {
+    if (draftPreview.handleAssistantMessageBoundary()) {
+      resetProgressTurnState();
+    }
+  };
   const buildProgressSummaryLine = () => {
     closePendingWindowThought();
     const seconds = Math.max(1, Math.round((Date.now() - progressTurnStartedAt) / 1000));
@@ -652,6 +652,15 @@ async function processDiscordMessageInner(
       `⏱️ ${seconds}s`,
     ];
     return `-# ${parts.join(" · ")}`;
+  };
+  let replyLifecycleStarted = false;
+  const onDiscordReplyStart = async () => {
+    if (isProcessAborted(abortSignal)) {
+      return;
+    }
+    replyLifecycleStarted = true;
+    await replyPipeline.typingCallbacks?.onReplyStart();
+    await statusReactions.setThinking();
   };
   const beforeDiscordPayloadDelivery = (
     payload: ReplyPayload,
@@ -781,6 +790,11 @@ async function processDiscordMessageInner(
       );
       return { visibleReplySent: false };
     }
+    if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
+      // Fast replies can bypass the normal resolver lifecycle. Start feedback
+      // only after a deliverable final survives every suppression boundary.
+      await onDiscordReplyStart();
+    }
     const draftStream = draftPreview.draftStream;
     if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
@@ -792,8 +806,8 @@ async function processDiscordMessageInner(
       draftStream &&
       isFinal &&
       draftPreview.isProgressMode &&
-      draftPreview.hasProgressDraftStarted &&
-      !deliverablePayload.isError;
+      !deliverablePayload.isError &&
+      draftPreview.hasProgressDraftToCollapse;
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
       // The activity receipt rides on the final answer and the working draft
@@ -915,9 +929,6 @@ async function processDiscordMessageInner(
     }
     const receiptLine =
       isFinal && deliverablePayload.isError !== true ? progressReceiptLine : undefined;
-    if (receiptLine) {
-      progressReceiptLine = undefined;
-    }
     const payloadForDelivery = receiptLine
       ? {
           ...deliverablePayload,
@@ -947,6 +958,12 @@ async function processDiscordMessageInner(
     });
     replyReference.markSent();
     if (isFinal && deliverablePayload.isError !== true) {
+      if (receiptLine) {
+        progressReceiptLine = undefined;
+        // Commit only after Discord accepted the receipt-bearing final. A
+        // failed send leaves the same receipt available to the queued retry.
+        draftPreview.markProgressDraftCollapsed();
+      }
       markUserFacingFinalDelivered();
       if (clearProgressDraftAfterFinalDelivery) {
         clearProgressDraftAfterFinalDelivery = false;
@@ -973,17 +990,8 @@ async function processDiscordMessageInner(
       ),
     );
   };
-  const onDiscordReplyStart = async () => {
-    if (isProcessAborted(abortSignal)) {
-      return;
-    }
-    await replyPipeline.typingCallbacks?.onReplyStart();
-    await statusReactions.setThinking();
-  };
-
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
-  let dispatchResult: Awaited<ReturnType<typeof dispatchReplyWithBufferedBlockDispatcher>> | null =
-    null;
+  let dispatchResult: Awaited<ReturnType<typeof dispatchReply>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
@@ -1017,7 +1025,7 @@ async function processDiscordMessageInner(
       ctxPayload,
       recordInboundSession,
       afterRecord: queueInitialAckReactionAfterRecord,
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: withDiscordSessionRetry(dispatchReply, abortSignal),
       dispatcherOptions: {
         ...replyPipeline,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -1060,12 +1068,12 @@ async function processDiscordMessageInner(
             ? (payload) => draftPreview.updateFromPartial(payload.text)
             : undefined,
         onAssistantMessageStart: draftPreview.draftStream
-          ? () => draftPreview.handleAssistantMessageBoundary()
+          ? handleAssistantMessageBoundary
           : undefined,
         onReasoningEnd: draftPreview.draftStream
           ? () => {
               closePendingWindowThought();
-              return draftPreview.handleAssistantMessageBoundary();
+              handleAssistantMessageBoundary();
             }
           : undefined,
         onModelSelected,
@@ -1078,6 +1086,8 @@ async function processDiscordMessageInner(
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
+        progressPreambleEnabled:
+          draftPreview.draftStream && draftPreview.isProgressMode ? true : undefined,
         commentaryPayloadsEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
@@ -1092,6 +1102,12 @@ async function processDiscordMessageInner(
               }
               await draftPreview.pushNarrationProgress(payload.text);
             }
+          : undefined,
+        onProgressNarratorLifecycle: draftPreview.narrationProgressEnabled
+          ? (lifecycle) => draftPreview.setProgressNarratorLifecycle(lifecycle)
+          : undefined,
+        isProgressDraftVisible: draftPreview.narrationProgressEnabled
+          ? () => draftPreview.isProgressDraftVisible
           : undefined,
         narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
         onReasoningStream: async (payload) => {
@@ -1147,14 +1163,7 @@ async function processDiscordMessageInner(
             if (shouldYieldDraftProgress()) {
               return undefined;
             }
-            if (draftPreview.commentaryProgressEnabled && payload.progressText) {
-              // Count only commentary that actually streams to the window draft.
-              noteWindowCommentary(payload.itemId, payload.progressText);
-              await draftPreview.pushCommentaryProgress(payload.progressText, {
-                itemId: payload.itemId,
-              });
-            }
-            return undefined;
+            return await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
           }
           if (shouldYieldDraftProgress()) {
             return undefined;
@@ -1174,21 +1183,14 @@ async function processDiscordMessageInner(
               meta: payload.meta,
             }),
           );
-          return undefined;
         },
         onPlanUpdate: async (payload) => {
           if (payload.phase !== "update") {
             return;
           }
-          await draftPreview.pushToolProgress(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase,
-              title: payload.title,
-              explanation: payload.explanation,
-              steps: payload.steps,
-            }),
-          );
+          await draftPreview.pushPlanProgress(payload.steps, {
+            explanation: payload.explanation,
+          });
         },
         onApprovalEvent: async (payload) => {
           if (payload.phase !== "requested") {
@@ -1280,6 +1282,10 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
+    if (await completeDiscordSessionConflict(err, deliverDiscordPayload, onDiscordDeliveryError)) {
+      // The visible terminal notice owns this event, so replay can commit.
+      return;
+    }
     throw err;
   } finally {
     endDiscordInboundEventDeliveryCorrelation();
@@ -1342,3 +1348,4 @@ async function processDiscordMessageInner(
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

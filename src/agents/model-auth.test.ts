@@ -2,6 +2,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
+import type { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
@@ -168,11 +169,13 @@ let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntim
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 let looksLikeSecretSentinel: typeof import("../secrets/sentinel.js").looksLikeSecretSentinel;
 let resolveSecretSentinel: typeof import("../secrets/sentinel.js").resolveSecretSentinel;
+let setActiveDegradedSecretOwners: typeof import("../secrets/runtime-degraded-state.js").setActiveDegradedSecretOwners;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ looksLikeSecretSentinel, resolveSecretSentinel } = await import("../secrets/sentinel.js"));
+  ({ setActiveDegradedSecretOwners } = await import("../secrets/runtime-degraded-state.js"));
   cliCredentials = await import("./cli-credentials.js");
   ({
     applyAuthHeaderOverride,
@@ -195,10 +198,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
+  setActiveDegradedSecretOwners([]);
 });
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  setActiveDegradedSecretOwners([]);
 });
 
 describe("createRuntimeProviderAuthLookup", () => {
@@ -880,6 +885,99 @@ describe("resolveUsableCustomProviderApiKey", () => {
 });
 
 describe("resolveApiKeyForProvider", () => {
+  it("does not fall back to env or profiles after an explicit provider SecretRef fails", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "env", provider: "default", id: "MISSING_OPENAI_KEY" } as const,
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:MISSING_OPENAI_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    await withEnv("OPENAI_API_KEY", "must-not-be-used", async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "openai",
+          cfg: sourceConfig,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:fallback": {
+                type: "api_key",
+                provider: "openai",
+                key: "must-not-be-used-profile",
+              },
+            },
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
+        ownerKind: "provider",
+        ownerId: "openai",
+      } satisfies Partial<SecretSurfaceUnavailableError>);
+    });
+  });
+
+  it("keeps the whole provider cold when a non-api-key SecretRef fails", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            headers: {
+              "X-Provider-Secret": {
+                source: "env",
+                provider: "default",
+                id: "MISSING_OPENAI_HEADER",
+              } as const,
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.headers.X-Provider-Secret"],
+        refKeys: ["env:default:MISSING_OPENAI_HEADER"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    await withEnv("OPENAI_API_KEY", "must-not-be-used", async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "openai",
+          cfg: sourceConfig,
+          store: { version: 1, profiles: {} },
+        }),
+      ).rejects.toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
+        ownerKind: "provider",
+        ownerId: "openai",
+      } satisfies Partial<SecretSurfaceUnavailableError>);
+    });
+  });
+
   it("keeps plain environment credentials as plaintext", async () => {
     const resolved = await withEnv("OPENAI_API_KEY", "sk-plain-env-key", () =>
       resolveApiKeyForProvider({
@@ -1328,6 +1426,102 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  it("preserves explicit subscription modes for literal provider credentials", async () => {
+    for (const mode of ["oauth", "token"] as const) {
+      const provider = `custom-${mode}`;
+      const resolved = await getApiKeyForModel({
+        model: {
+          id: "subscription-model",
+          provider,
+          api: "openai-completions",
+        } as Model,
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                auth: mode,
+                apiKey: "configured-subscription-credential",
+                baseUrl: "https://subscription.example/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      });
+
+      expect(resolved).toMatchObject({
+        apiKey: "configured-subscription-credential",
+        source: "models.json",
+        mode,
+      });
+    }
+  });
+
+  it("does not reinterpret explicit OpenAI oauth material as a Platform API key", async () => {
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "platform-model",
+          provider: "openai",
+          api: "openai-responses",
+        } as Model,
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                auth: "oauth",
+                apiKey: "configured-subscription-credential",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "openai"');
+  });
+
+  it("preserves token mode for an env-backed provider SecretRef", async () => {
+    await withEnv(
+      "OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN",
+      "env-subscription-credential",
+      async () => {
+        const resolved = await getApiKeyForModel({
+          model: {
+            id: "subscription-model",
+            provider: "custom-token-env",
+            api: "openai-completions",
+          } as Model,
+          cfg: {
+            models: {
+              providers: {
+                "custom-token-env": {
+                  auth: "token",
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN",
+                  },
+                  baseUrl: "https://subscription.example/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+          store: { version: 1, profiles: {} },
+        });
+
+        expect(resolved).toMatchObject({
+          apiKey: "env-subscription-credential",
+          mode: "token",
+        });
+        expect(resolved.source).toContain("OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN");
+      },
+    );
+  });
+
   it("prefers explicit api-key provider SecretRef config over ambient auth profiles", async () => {
     const sourceConfig = {
       models: {
@@ -1376,6 +1570,52 @@ describe("resolveApiKeyForProvider", () => {
       value: "sk-runtime-cliproxy",
       source: "models.providers.cliproxyapi",
       mode: "api-key",
+    });
+  });
+
+  it("preserves oauth mode for a managed provider SecretRef", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          "custom-oauth-ref": {
+            api: "openai-completions" as const,
+            auth: "oauth" as const,
+            apiKey: { source: "file", provider: "vault", id: "/custom/oauth" } as const,
+            baseUrl: "https://subscription.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(
+      {
+        models: {
+          providers: {
+            "custom-oauth-ref": {
+              ...sourceConfig.models.providers["custom-oauth-ref"],
+              apiKey: "resolved-oauth-credential",
+            },
+          },
+        },
+      },
+      sourceConfig,
+    );
+
+    const resolved = await getApiKeyForModel({
+      model: {
+        id: "subscription-model",
+        provider: "custom-oauth-ref",
+        api: "openai-completions",
+      } as Model,
+      cfg: sourceConfig,
+      store: { version: 1, profiles: {} },
+      secretSentinels: true,
+    });
+
+    expectSecretSentinelAuth(resolved, {
+      value: "resolved-oauth-credential",
+      source: "models.providers.custom-oauth-ref",
+      mode: "oauth",
     });
   });
 
@@ -2185,3 +2425,4 @@ describe("applyAuthHeaderOverride", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

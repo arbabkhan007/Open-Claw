@@ -7,29 +7,55 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import prettyMilliseconds from "pretty-ms";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
-const BUILD_CACHE_VERSION = 3;
+const BUILD_CACHE_VERSION = 4;
 const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
 ];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+const PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entries.mjs",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+];
+const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
   { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+];
+const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
+  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
+  "package.json",
+  "pnpm-lock.yaml",
+  "npm-shrinkwrap.json",
+  "tsconfig.json",
+  "tsconfig.plugin-sdk.dts.json",
+  {
+    path: "src",
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+    excludeDirectories: ["dist", "node_modules"],
+  },
+  {
+    path: "packages",
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+    excludeDirectories: ["dist", "node_modules"],
+  },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
   "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
+];
+const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS = [
+  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+  ...PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS,
 ];
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
@@ -43,6 +69,11 @@ export const BUILD_ALL_STEPS = [
     label: "check-cli-bootstrap-imports",
     kind: "node",
     args: ["scripts/check-cli-bootstrap-imports.mjs"],
+  },
+  {
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
   },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
@@ -69,11 +100,6 @@ export const BUILD_ALL_STEPS = [
     label: "check-plugin-sdk-exports",
     kind: "node",
     args: ["scripts/check-plugin-sdk-exports.mjs"],
-  },
-  {
-    label: "plugins:assets:copy",
-    kind: "pnpm",
-    pnpmArgs: ["plugins:assets:copy"],
   },
   {
     label: "copy-hook-metadata",
@@ -113,11 +139,6 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
-  {
-    label: "write-cli-compat",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
-  },
 ];
 
 export const BUILD_ALL_PROFILES = {
@@ -126,18 +147,17 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
   gatewayWatch: [
     "tsdown",
@@ -150,9 +170,20 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+  ],
+  sourcePerformance: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
   ],
   cliStartup: [
     "tsdown",
@@ -161,7 +192,6 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
 };
 
@@ -173,8 +203,15 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   },
   ciArtifacts: {
     tsdown: {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      // Global declaration emission is ~95% of the tsdown wall clock and PR
+      // CI's dist consumers are runtime JS only; the plugin-sdk gate below
+      // self-builds its scoped declarations instead. Release/package builds
+      // (full profile, docker packaging) keep canonical dts.
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+    "write-plugin-sdk-entry-dts": {
+      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0",
     },
   },
   gatewayWatch: {
@@ -188,6 +225,12 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+  sourcePerformance: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {
@@ -256,7 +299,21 @@ export function resolveBuildAllSteps(profile = "full") {
       return step;
     }
     const mergedEnv = Object.assign({}, step.env, env);
-    return Object.assign({}, step, { env: mergedEnv });
+    const merged = Object.assign({}, step, { env: mergedEnv });
+    // Self-built declarations need both the complete repository-owned type
+    // graph and the flat declarations that this step generates after tsdown
+    // clears dist. Canonical mode keeps its narrower generated-dts cache.
+    if (
+      step.label === "write-plugin-sdk-entry-dts" &&
+      mergedEnv.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS !== "1"
+    ) {
+      merged.cache = {
+        ...step.cache,
+        inputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS,
+        outputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS,
+      };
+    }
+    return merged;
   });
 }
 
@@ -368,6 +425,10 @@ function cacheEntryIncludesFile(entry, filePath) {
   return entry.extensions.some((extension) => filePath.endsWith(extension));
 }
 
+function cacheEntryExcludesDirectory(entry, name) {
+  return entry.excludeDirectories?.includes(name) ?? false;
+}
+
 function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath }) {
   let stat;
   try {
@@ -389,6 +450,9 @@ function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath })
       continue;
     }
     const entryPath = path.join(rootPath, dirent.name);
+    if (dirent.isDirectory() && cacheEntryExcludesDirectory(cacheEntry, dirent.name)) {
+      continue;
+    }
     if (dirent.isDirectory() && recursive) {
       out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
     } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {
@@ -576,13 +640,15 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 
 export function formatBuildAllDuration(durationMs) {
   const clampedMs = Math.max(0, durationMs);
-  if (clampedMs < 1000) {
-    return `${Math.round(clampedMs)}ms`;
-  }
-  if (clampedMs < 10000) {
-    return `${(clampedMs / 1000).toFixed(2)}s`;
-  }
-  return `${(clampedMs / 1000).toFixed(1)}s`;
+  const roundedMs =
+    clampedMs < 1000
+      ? Math.round(clampedMs)
+      : clampedMs < 10_000
+        ? Math.round(clampedMs / 10) * 10
+        : Math.round(clampedMs / 100) * 100;
+  return prettyMilliseconds(roundedMs, {
+    secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
+  });
 }
 
 export function formatBuildAllTimingSummary(timings) {

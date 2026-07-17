@@ -32,7 +32,8 @@ import type { ExecHostResponse } from "../infra/exec-host.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
-import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
+
+type HandleSystemRunInvokeOptions = Parameters<typeof handleSystemRunInvoke>[0];
 
 vi.mock("../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logger.js")>()),
@@ -946,6 +947,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(macHostCall.request?.command).toEqual(["env", "sh", "-c", "echo SAFE"]);
           expect(macHostCall.request?.rawCommand).toBe('env sh -c "echo SAFE"');
           expect(macHostCall.request?.cwd).toBe(canonicalCwd);
+          expect(macHostCall.request?.approvalDecision).toBe("allow-once");
+          expect(macHostCall.request?.approvalSource).toBeUndefined();
           expect(macHostCall.request?.policySnapshot).toEqual(
             createExecApprovalPolicySnapshot({ file: loadExecApprovals(), agentId: undefined }),
           );
@@ -3624,3 +3627,4 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
