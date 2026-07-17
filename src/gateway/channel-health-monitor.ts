@@ -149,6 +149,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             );
             continue;
           }
+          if (channelManager.getRestartState(channelId as ChannelId, accountId) === "backoff") {
+            continue;
+          }
 
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
