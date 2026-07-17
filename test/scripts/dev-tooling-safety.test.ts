@@ -223,6 +223,57 @@ describe("dev tooling safety helpers", () => {
   it("does not split boundary emoji in script log previews", () => {
     expect(previewForDevToolLog("123456😀tail", 10)).toBe("123456...");
   });
+
+  it("does not split boundary emoji in Google Live debug messages", () => {
+    expect(realtimeSmokeTesting.previewGoogleLiveDebugMessage(`${"a".repeat(296)}😀tail`)).toBe(
+      `${"a".repeat(296)}...`,
+    );
+  });
+
+  it("sanitizes the final Google Live close diagnostic after frame capture", () => {
+    const diagnostic = realtimeSmokeTesting.formatGoogleLiveBrowserDiagnostic("close", {
+      opened: true,
+      messages: [`${"a".repeat(296)}😀tail`],
+      messagesDropped: 0,
+      close: { code: 1006, reason: `${"b".repeat(296)}😀tail` },
+      error: false,
+    });
+
+    expect(diagnostic).toContain(`"messages":["${"a".repeat(296)}..."]`);
+    expect(diagnostic).toContain(`"reason":"${"b".repeat(296)}..."`);
+    expect(diagnostic).not.toContain("😀");
+    expect(diagnostic).not.toContain("tail");
+  });
+
+  it("includes a content-free Google Live message failure category", () => {
+    const diagnostic = realtimeSmokeTesting.formatGoogleLiveBrowserDiagnostic(
+      "message-error",
+      {
+        opened: true,
+        messages: ["malformed frame"],
+        messagesDropped: 0,
+        error: false,
+      },
+      "SyntaxError",
+    );
+
+    expect(diagnostic).toContain('"messageError":"SyntaxError"');
+  });
+
+  it("redacts a complete structured secret before previewing Google Live diagnostics", () => {
+    const keyLabel = ["PRIVATE", "KEY"].join(" ");
+    const structuredBlock = `${"p".repeat(250)}-----BEGIN ${keyLabel}-----${"A".repeat(400)}-----END ${keyLabel}-----`;
+    const diagnostic = realtimeSmokeTesting.formatGoogleLiveBrowserDiagnostic("close", {
+      opened: true,
+      messages: [structuredBlock],
+      messagesDropped: 0,
+      close: { code: 1006, reason: "" },
+      error: false,
+    });
+
+    expect(diagnostic).not.toContain(`BEGIN ${keyLabel}`);
+    expect(diagnostic).not.toContain("A".repeat(100));
+  });
 });
 
 describe("script-specific dev tooling hardening", () => {

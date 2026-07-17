@@ -15,6 +15,8 @@ const OPENAI_REALTIME_MODEL =
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
 const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
+const GOOGLE_LIVE_DEBUG_MESSAGE_LIMIT = 8;
+const GOOGLE_LIVE_DEBUG_MESSAGE_MAX_CODE_UNITS = 16 * 1024;
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() || "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
@@ -57,6 +59,27 @@ type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
   openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
 };
 
+type GoogleLiveDebugSnapshot = {
+  opened: boolean;
+  messages: string[];
+  messagesDropped: number;
+  close?: { code: number; reason: string };
+  error: boolean;
+};
+
+type GoogleLiveBrowserFailureKind = "timeout" | "error" | "close" | "message-error";
+
+type GoogleLiveBrowserResult =
+  | {
+      kind: "setup-complete";
+      setupComplete: boolean;
+      videoFrameSent: boolean;
+      describeViewCalled: boolean;
+      functionResponseAccepted: boolean;
+      readyState: number;
+    }
+  | { kind: GoogleLiveBrowserFailureKind; debug: GoogleLiveDebugSnapshot; error?: string };
+
 class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
@@ -95,6 +118,39 @@ function getEnv(name: string): string | undefined {
 
 function shortError(error: unknown): string {
   return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
+}
+
+function previewGoogleLiveDebugMessage(text: string): string {
+  return previewForDevToolLog(text, 300);
+}
+
+function formatGoogleLiveBrowserDiagnostic(
+  kind: GoogleLiveBrowserFailureKind,
+  debug: GoogleLiveDebugSnapshot,
+  errorMessage?: string,
+): string {
+  const details: Record<string, unknown> = {
+    ...debug,
+    messages: debug.messages.map(previewGoogleLiveDebugMessage),
+  };
+  if (debug.close) {
+    details.close = {
+      ...debug.close,
+      reason: previewGoogleLiveDebugMessage(debug.close.reason),
+    };
+  }
+  if (errorMessage) {
+    details.messageError = previewForDevToolLog(errorMessage, 800);
+  }
+  const label =
+    kind === "timeout"
+      ? "Google Live setup timed out"
+      : kind === "close"
+        ? "Google Live browser WebSocket closed"
+        : kind === "message-error"
+          ? "Google Live browser WebSocket message failed"
+          : "Google Live browser WebSocket errored";
+  return `${label}: ${JSON.stringify(details)}`;
 }
 
 async function readBoundedText(
@@ -479,44 +535,62 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
     }
     const page = await browser.newPage();
     await page.evaluate("globalThis.__name = (fn) => fn");
-    const result = await page.evaluate(
+    const result = (await page.evaluate(
       async ({
+        debugMessageLimit,
+        debugMessageMaxCodeUnits,
         initialMessage,
         tokenName,
         websocketUrl,
       }: {
+        debugMessageLimit: number;
+        debugMessageMaxCodeUnits: number;
         initialMessage: unknown;
         tokenName: string;
         websocketUrl: string;
-      }) => {
-        const debug: {
-          opened: boolean;
-          messages: string[];
-          close?: { code: number; reason: string };
-          error: boolean;
-        } = { opened: false, messages: [], error: false };
+      }): Promise<GoogleLiveBrowserResult> => {
+        const debug: GoogleLiveDebugSnapshot = {
+          opened: false,
+          messages: [],
+          messagesDropped: 0,
+          error: false,
+        };
         let setupComplete = false;
         let videoFrameSent = false;
         let describeViewCalled = false;
         let functionResponseSent = false;
-        const dataToText = async (data: unknown): Promise<string> => {
+        const dataToText = (data: unknown): string => {
           if (typeof data === "string") {
             return data;
-          }
-          if (data instanceof Blob) {
-            return await data.text();
           }
           if (data instanceof ArrayBuffer) {
             return new TextDecoder().decode(data);
           }
           return String(data);
         };
+        const snapshot = (): GoogleLiveDebugSnapshot => ({
+          opened: debug.opened,
+          messages: [...debug.messages],
+          messagesDropped: debug.messagesDropped,
+          close: debug.close,
+          error: debug.error,
+        });
         const url = new URL(websocketUrl);
         url.searchParams.set("access_token", tokenName);
         const ws = new WebSocket(url.toString());
-        const done = new Promise<Record<string, unknown>>((resolve, reject) => {
+        ws.binaryType = "arraybuffer";
+        const done = new Promise<GoogleLiveBrowserResult>((resolve) => {
+          let settled = false;
+          const finish = (value: GoogleLiveBrowserResult): void => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            window.clearTimeout(timeout);
+            resolve(value);
+          };
           const timeout = window.setTimeout(
-            () => reject(new Error(`Google Live setup timed out: ${JSON.stringify(debug)}`)),
+            () => finish({ kind: "timeout", debug: snapshot() }),
             15_000,
           );
           ws.addEventListener("open", () => {
@@ -524,9 +598,20 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
             ws.send(JSON.stringify(initialMessage));
           });
           ws.addEventListener("message", (event) => {
-            void (async () => {
-              const text = await dataToText(event.data);
-              debug.messages.push(text.slice(0, 300));
+            const text = dataToText(event.data);
+            // Capture before any asynchronous host work so close diagnostics cannot miss a frame.
+            // Never truncate a retained message before redaction because doing so can split a
+            // structured secret. Oversized frames are replaced wholesale with a content-free marker.
+            debug.messages.push(
+              text.length <= debugMessageMaxCodeUnits
+                ? text
+                : `[message omitted: ${text.length} UTF-16 code units]`,
+            );
+            if (debug.messages.length > debugMessageLimit) {
+              debug.messages.shift();
+              debug.messagesDropped += 1;
+            }
+            try {
               const message = JSON.parse(text) as {
                 setupComplete?: unknown;
                 serverContent?: unknown;
@@ -584,8 +669,8 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
                 return;
               }
               if (message.serverContent && functionResponseSent) {
-                window.clearTimeout(timeout);
-                resolve({
+                finish({
+                  kind: "setup-complete",
                   setupComplete,
                   videoFrameSent,
                   describeViewCalled,
@@ -593,48 +678,58 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
                   readyState: ws.readyState,
                 });
               }
-            })().catch((error: unknown) => {
-              window.clearTimeout(timeout);
-              reject(toLintErrorObject(error, "Non-Error rejection"));
-            });
+            } catch (error: unknown) {
+              // JSON parse errors can embed raw frame fragments, so only carry a stable category
+              // across the browser boundary; the complete frame is already retained for redaction.
+              finish({
+                kind: "message-error",
+                debug: snapshot(),
+                error: error instanceof SyntaxError ? "SyntaxError" : "MessageHandlerError",
+              });
+            }
           });
           ws.addEventListener("error", () => {
             debug.error = true;
-            window.clearTimeout(timeout);
-            reject(new Error("Google Live browser WebSocket errored"));
+            finish({ kind: "error", debug: snapshot() });
           });
           ws.addEventListener("close", (event) => {
             debug.close = { code: event.code, reason: event.reason };
             if (event.code !== 1000) {
-              window.clearTimeout(timeout);
-              reject(new Error(`Google Live browser WebSocket closed: ${JSON.stringify(debug)}`));
+              finish({ kind: "close", debug: snapshot() });
             }
           });
         });
         const value = await done;
-        ws.close(1000);
+        if (value.kind === "setup-complete") {
+          ws.close(1000);
+        }
         return value;
       },
       {
+        debugMessageLimit: GOOGLE_LIVE_DEBUG_MESSAGE_LIMIT,
+        debugMessageMaxCodeUnits: GOOGLE_LIVE_DEBUG_MESSAGE_MAX_CODE_UNITS,
         initialMessage: session.initialMessage ?? { setup: {} },
         tokenName: session.clientSecret,
         websocketUrl: session.websocketUrl || GOOGLE_LIVE_WS_URL,
       },
-    );
+    )) as GoogleLiveBrowserResult;
     await page.close();
+    if (result.kind !== "setup-complete") {
+      throw new Error(formatGoogleLiveBrowserDiagnostic(result.kind, result.debug, result.error));
+    }
     return {
       name: "google-live-browser-ws",
       ok:
-        result.setupComplete === true &&
-        result.videoFrameSent === true &&
-        result.describeViewCalled === true &&
-        result.functionResponseAccepted === true,
+        result.setupComplete &&
+        result.videoFrameSent &&
+        result.describeViewCalled &&
+        result.functionResponseAccepted,
       details: {
         model: GOOGLE_REALTIME_MODEL,
-        setupComplete: result.setupComplete === true,
-        videoFrameSent: result.videoFrameSent === true,
-        describeViewCalled: result.describeViewCalled === true,
-        functionResponseAccepted: result.functionResponseAccepted === true,
+        setupComplete: result.setupComplete,
+        videoFrameSent: result.videoFrameSent,
+        describeViewCalled: result.describeViewCalled,
+        functionResponseAccepted: result.functionResponseAccepted,
       },
     };
   } catch (error) {
@@ -898,23 +993,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 export const testing = {
   OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
+  formatGoogleLiveBrowserDiagnostic,
   parseRealtimeSmokeArgs,
+  previewGoogleLiveDebugMessage,
   readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
   usage,
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
