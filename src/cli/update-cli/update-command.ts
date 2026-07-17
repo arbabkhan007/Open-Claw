@@ -77,15 +77,14 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
+import { completeManagedGitCheckout, isManagedGitCheckoutRetry } from "./managed-checkout.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript } from "./restart-helper.js";
 import {
   DEFAULT_PACKAGE_NAME,
-  completeManagedGitCheckout,
   createGlobalCommandRunner,
   createGitCheckout,
   createSanitizedGitEnv,
-  isManagedGitCheckoutRetry,
   normalizeTag,
   parseTimeoutMsOrExit,
   readPackageName,
@@ -440,6 +439,7 @@ async function runGitUpdate(params: {
     }
     try {
       await fs.rm(updateRoot, { recursive: true, force: true });
+      await completeManagedGitCheckout(updateRoot, installEnv);
     } catch (cleanupError) {
       if (primaryError !== undefined) {
         throw createAggregateErrorWithCause(

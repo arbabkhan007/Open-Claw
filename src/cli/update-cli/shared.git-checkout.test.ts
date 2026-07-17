@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
+import { claimManagedGitCheckout, completeManagedGitCheckout } from "./managed-checkout.js";
 import { createGitCheckout } from "./shared.js";
 
 const CANONICAL_REPO_URL = "https://github.com/openclaw/openclaw.git";
@@ -28,6 +30,10 @@ async function createHostileCheckout(setup: (dir: string) => void): Promise<stri
 }
 
 describe("createGitCheckout", () => {
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   beforeEach(() => {
     runCommandWithTimeout.mockReset();
     runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
@@ -57,7 +63,7 @@ describe("createGitCheckout", () => {
 
     expect(result?.name).toBe("git clone");
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["git", "clone", CANONICAL_REPO_URL, dir],
+      ["git", "clone", CANONICAL_REPO_URL, expect.stringMatching(/checkout\.staging-/u)],
       expect.objectContaining({
         env: expect.objectContaining({
           GIT_CONFIG_GLOBAL: os.devNull,
@@ -66,6 +72,8 @@ describe("createGitCheckout", () => {
         timeoutMs: 30_000,
       }),
     );
+    await expect(fs.stat(path.join(dir, ".git"))).resolves.toBeDefined();
+    expect(await fs.readdir(root)).not.toContainEqual(expect.stringContaining("staging-"));
   });
 
   it("ignores config injection that could rewrite the canonical clone URL", async () => {
@@ -164,5 +172,108 @@ describe("createGitCheckout", () => {
     await expect(createGitCheckout({ dir, timeoutMs: 30_000, env: process.env })).rejects.toThrow(
       /OPENCLAW_GIT_DIR already exists/u,
     );
+  });
+
+  it("retries after an interrupted conversion left its reserved destination behind", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-crash-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    claimManagedGitCheckout(dir, env);
+    await fs.mkdir(dir, { recursive: true });
+
+    const result = await createGitCheckout({ dir, timeoutMs: 30_000, env });
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.stat(path.join(dir, ".git"))).resolves.toBeDefined();
+  });
+
+  it("refuses a destination that gained checkout state after the conversion was interrupted", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-crash-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    claimManagedGitCheckout(dir, env);
+    await fs.mkdir(path.join(dir, ".git"), { recursive: true });
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env })).rejects.toThrow(
+      /creates a fresh OpenClaw checkout and will not reuse existing directories/u,
+    );
+  });
+
+  it("refuses the destination again once a completed conversion retires its ownership", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-done-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+
+    await createGitCheckout({ dir, timeoutMs: 30_000, env });
+    await completeManagedGitCheckout(dir, env);
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env })).rejects.toThrow(
+      /creates a fresh OpenClaw checkout and will not reuse existing directories/u,
+    );
+  });
+
+  it("keeps the previous checkout when replacing it fails", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-swap-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+
+    await createGitCheckout({ dir, timeoutMs: 30_000, env });
+    await fs.writeFile(path.join(dir, "partial-build"), "retained\n");
+    runCommandWithTimeout.mockImplementationOnce(async () => {
+      throw new Error("clone exploded");
+    });
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env })).rejects.toThrow(
+      /clone exploded/u,
+    );
+
+    await expect(fs.readFile(path.join(dir, "partial-build"), "utf8")).resolves.toBe("retained\n");
+  });
+
+  it("refuses an unrelated empty directory after a failed conversion was cleaned up", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-stale-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    runCommandWithTimeout.mockImplementationOnce(async () => {
+      throw new Error("killed mid-clone");
+    });
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env })).rejects.toThrow(
+      /killed mid-clone/u,
+    );
+    await fs.mkdir(dir, { recursive: true });
+
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env })).rejects.toThrow(
+      /creates a fresh OpenClaw checkout and will not reuse existing directories/u,
+    );
+  });
+
+  it("keeps a failed replacement retryable", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-retry-")));
+    const dir = path.join(root, "checkout");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+
+    await createGitCheckout({ dir, timeoutMs: 30_000, env });
+    await fs.writeFile(path.join(dir, "partial-build"), "retained\n");
+    runCommandWithTimeout.mockImplementationOnce(async () => {
+      throw new Error("clone exploded");
+    });
+    await expect(createGitCheckout({ dir, timeoutMs: 30_000, env })).rejects.toThrow(
+      /clone exploded/u,
+    );
+
+    const stopped = vi.fn(async () => undefined);
+    const result = await createGitCheckout({
+      dir,
+      timeoutMs: 30_000,
+      env,
+      beforeReplaceManagedCheckout: stopped,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(stopped).toHaveBeenCalledTimes(1);
+    await expect(fs.stat(path.join(dir, "partial-build"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });

@@ -1,12 +1,12 @@
 // Shared update command primitives for channel resolution, install roots, and subprocess steps.
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
@@ -28,6 +28,14 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { createAggregateErrorWithCause } from "./aggregate-error.js";
+import {
+  claimManagedGitCheckout,
+  completeManagedGitCheckout,
+  isReclaimableManagedReservation,
+  resolveManagedGitCheckoutToken,
+  writeManagedCheckoutMarker,
+} from "./managed-checkout.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -60,38 +68,6 @@ export type UpdateWizardOptions = {
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
-const MANAGED_CHECKOUT_MARKER = ".openclaw-update-managed";
-
-function managedCheckoutRecordPath(dir: string, env?: NodeJS.ProcessEnv): string {
-  const digest = createHash("sha256").update(path.resolve(dir)).digest("hex");
-  return path.join(resolveStateDir(env), "update-checkouts", `${digest}.token`);
-}
-
-async function readTrimmed(file: string): Promise<string | null> {
-  return await fs
-    .readFile(file, "utf8")
-    .then((value) => value.trim())
-    .catch(() => null);
-}
-
-export async function isManagedGitCheckoutRetry(
-  dir: string,
-  env?: NodeJS.ProcessEnv,
-): Promise<boolean> {
-  const [recordToken, markerToken] = await Promise.all([
-    readTrimmed(managedCheckoutRecordPath(dir, env)),
-    readTrimmed(path.join(dir, ".git", MANAGED_CHECKOUT_MARKER)),
-  ]);
-  return Boolean(recordToken && markerToken && recordToken === markerToken);
-}
-
-export async function completeManagedGitCheckout(
-  dir: string,
-  env?: NodeJS.ProcessEnv,
-): Promise<void> {
-  await fs.rm(managedCheckoutRecordPath(dir, env), { force: true });
-  await fs.rm(path.join(dir, ".git", MANAGED_CHECKOUT_MARKER), { force: true });
-}
 
 /** Build a Git environment that cannot redirect the canonical repository through config. */
 export function createSanitizedGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -261,6 +237,46 @@ export async function runUpdateStep(params: {
   };
 }
 
+/** Reserve the destination so no pre-existing directory is ever adopted. */
+async function reserveGitCheckoutDir(dir: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  try {
+    await fs.mkdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw err;
+    }
+    if (!(await isReclaimableManagedReservation(dir, env))) {
+      throw new Error(
+        `OPENCLAW_GIT_DIR already exists: ${dir}. Package-to-dev conversion creates a fresh OpenClaw checkout and will not reuse existing directories. Move it or set OPENCLAW_GIT_DIR to an unused path.`,
+        { cause: err },
+      );
+    }
+  }
+}
+
+/** Move a finished checkout onto the destination, keeping the old one until it lands. */
+async function swapInGitCheckout(params: {
+  dir: string;
+  stagingDir: string;
+  managedRetry: boolean;
+}): Promise<void> {
+  if (!params.managedRetry) {
+    await fs.rmdir(params.dir);
+    await fs.rename(params.stagingDir, params.dir);
+    return;
+  }
+  const backupDir = `${params.dir}.previous-${randomUUID()}`;
+  await fs.rename(params.dir, backupDir);
+  try {
+    await fs.rename(params.stagingDir, params.dir);
+  } catch (err) {
+    await fs.rm(params.dir, { recursive: true, force: true });
+    await fs.rename(backupDir, params.dir);
+    throw err;
+  }
+  await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+}
+
 /** Create the source-update checkout without adopting any pre-existing directory state. */
 export async function createGitCheckout(params: {
   dir: string;
@@ -269,76 +285,56 @@ export async function createGitCheckout(params: {
   env?: NodeJS.ProcessEnv;
   beforeReplaceManagedCheckout?: () => Promise<void>;
 }): Promise<UpdateStepResult> {
-  const recordPath = managedCheckoutRecordPath(params.dir, params.env);
-  const managedRetry = await isManagedGitCheckoutRetry(params.dir, params.env);
-  const cloneDir = managedRetry
-    ? path.join(
-        path.dirname(params.dir),
-        `.${path.basename(params.dir)}.replacement-${randomUUID()}`,
-      )
-    : params.dir;
-  const markerPath = path.join(cloneDir, ".git", MANAGED_CHECKOUT_MARKER);
+  const ownedToken = await resolveManagedGitCheckoutToken(params.dir, params.env);
+  const managedRetry = ownedToken !== null;
   if (managedRetry) {
     await params.beforeReplaceManagedCheckout?.();
   }
   await fs.mkdir(path.dirname(params.dir), { recursive: true });
-  try {
-    // Creating the destination ourselves closes the check/create race that
-    // would otherwise let an existing empty directory be adopted by git clone.
-    await fs.mkdir(cloneDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(
-        `OPENCLAW_GIT_DIR already exists: ${params.dir}. Package-to-dev conversion creates a fresh OpenClaw checkout and will not reuse existing directories. Move it or set OPENCLAW_GIT_DIR to an unused path.`,
-        { cause: err },
-      );
-    }
-    throw err;
+  if (!managedRetry) {
+    await reserveGitCheckoutDir(params.dir, params.env);
   }
+
+  const token = ownedToken ?? claimManagedGitCheckout(params.dir, params.env);
+  const stagingDir = path.join(
+    path.dirname(params.dir),
+    `.${path.basename(params.dir)}.staging-${randomUUID()}`,
+  );
+  await fs.mkdir(stagingDir);
+  const discard = async (): Promise<void> => {
+    await fs.rm(stagingDir, { recursive: true, force: true });
+    if (!managedRetry) {
+      await fs.rm(params.dir, { recursive: true, force: true });
+      await completeManagedGitCheckout(params.dir, params.env);
+    }
+  };
 
   try {
     const gitEnv = createSanitizedGitEnv(params.env ?? (await createGlobalInstallEnv()));
     const result = await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, cloneDir],
+      argv: ["git", "clone", OPENCLAW_REPO_URL, stagingDir],
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
-    if (managedRetry && result.exitCode !== 0) {
-      await fs.rm(cloneDir, { recursive: true, force: true });
+    if (result.exitCode !== 0) {
+      await discard();
+      return result;
     }
-    if (result.exitCode === 0) {
-      const token = randomUUID();
-      await fs.mkdir(path.dirname(recordPath), { recursive: true });
-      await fs.writeFile(markerPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
-      if (managedRetry) {
-        const backupDir = `${params.dir}.previous-${randomUUID()}`;
-        await fs.rename(params.dir, backupDir);
-        try {
-          await fs.rename(cloneDir, params.dir);
-          await fs.writeFile(recordPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
-        } catch (err) {
-          await fs.rm(params.dir, { recursive: true, force: true });
-          await fs.rename(backupDir, params.dir);
-          throw err;
-        }
-        await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
-      } else {
-        await fs.writeFile(recordPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
-      }
-    }
+    await writeManagedCheckoutMarker(stagingDir, token);
+    await swapInGitCheckout({ dir: params.dir, stagingDir, managedRetry });
     return result;
   } catch (err) {
-    const cleanupError = await fs.rm(cloneDir, { recursive: true, force: true }).then(
+    const cleanupError = await discard().then(
       () => null,
       (error: unknown) => error,
     );
     if (cleanupError) {
-      throw new AggregateError(
+      throw createAggregateErrorWithCause(
         [err, cleanupError],
-        `Git clone failed (${String(err)}) and its new checkout could not be removed (${String(cleanupError)})`,
-        { cause: err },
+        `Git clone failed (${formatErrorMessage(err)}) and its new checkout could not be removed (${formatErrorMessage(cleanupError)})`,
+        err,
       );
     }
     throw err;

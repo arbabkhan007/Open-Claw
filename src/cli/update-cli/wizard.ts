@@ -13,8 +13,8 @@ import {
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
+import { isReusableManagedGitCheckoutPath } from "./managed-checkout.js";
 import {
-  isManagedGitCheckoutRetry,
   parseTimeoutMsOrExit,
   resolveGitInstallDir,
   resolveUpdateRoot,
@@ -107,7 +107,10 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
   if (requestedChannel === "dev" && updateStatus.installKind !== "git") {
     const gitDir = resolveGitInstallDir();
-    if ((await pathExists(gitDir)) && !(await isManagedGitCheckoutRetry(gitDir, process.env))) {
+    if (
+      (await pathExists(gitDir)) &&
+      !(await isReusableManagedGitCheckoutPath(gitDir, process.env))
+    ) {
       defaultRuntime.error(
         `OPENCLAW_GIT_DIR already exists: ${gitDir}. Package-to-dev conversion creates a fresh OpenClaw checkout and will not reuse existing directories. Move it or set OPENCLAW_GIT_DIR to an unused path.`,
       );
