@@ -1238,7 +1238,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ).toBe(true);
   });
 
-  it("preserves non-empty text when aggregate budget is exhausted to zero without spill markers", () => {
+  it("shares the aggregate elision reserve across all results when budget is exhausted without spill markers", () => {
     const messages: AgentMessage[] = [
       makeToolResult("a".repeat(100), "exhausted_1"),
       makeToolResult("b".repeat(100), "exhausted_2"),
@@ -1248,23 +1248,21 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 1);
     const texts = result.messages.map((message) => getFirstToolResultText(message));
 
-    // All tool results must retain non-empty text even with an exhausted aggregate budget
-    // and no spill-file pointers. The fix ensures at least 1 character is kept so the
-    // model never sees an empty result ("").
-    expect(texts.every((text) => text.length > 0)).toBe(true);
+    // The aggregate elision reserve is a single shared pool, not per-result.
+    // Only the first eligible result gets 1 char (the "[" prefix);
+    // subsequent results get 0 — the shared pool is exhausted.
+    const nonEmptyCount = texts.filter((text) => text.length > 0).length;
+    expect(nonEmptyCount).toBe(1);
+    expect(texts.some((text) => text.startsWith("["))).toBe(true);
     expect(result.truncatedCount).toBeGreaterThan(0);
     expect(result.aggregateTruncatedCount).toBeGreaterThan(0);
 
-    // Global aggregate cap assertion: the fix's 1-char floor is applied per
-    // message in clearToolResultText, so total output across all messages is
-    // bounded by messageCount (each gets at most 1 char). This prevents the
-    // aggregate budget from ballooning under tiny caps.
+    // Global aggregate cap: total output is bounded by the shared reserve (1 char).
     const totalOutputChars = result.messages.reduce(
       (sum, message) => sum + getToolResultTextLength(message),
       0,
     );
-    expect(totalOutputChars).toBeLessThanOrEqual(messages.length);
-    expect(totalOutputChars).toBeLessThan(messages.length * 100); // far smaller than original
+    expect(totalOutputChars).toBeLessThanOrEqual(1);
   });
 
   it("keeps realistic spill pointers intact in near-zero aggregate elision budgets", async () => {
