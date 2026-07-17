@@ -1382,7 +1382,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       .catch((err: unknown) => {
         if (!isTuiTerminalLossError(err)) {
           try {
-            process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
+            process.stderr.write(`openclaw tui shutdown failed: ${formatErrorMessage(err)}\n`);
           } catch {
             // Best effort only; exit must still complete.
           }
@@ -1590,7 +1590,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       try {
         await client.subscribeSessionEvents?.();
       } catch (err) {
-        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+        chatLog.addSystem(`session event subscribe failed: ${formatErrorMessage(err)}`);
       }
       await refreshAgents();
       await restoreRememberedSession();
@@ -1599,12 +1599,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatErrorMessage(err)}`);
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatErrorMessage(err)}`);
       }
       await loadHistory();
       if (activityStatus === "starting up") {
@@ -1624,7 +1624,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       updateFooter();
       tui.requestRender();
     })().catch((err: unknown) => {
-      chatLog.addSystem(`startup failed: ${String(err)}`);
+      chatLog.addSystem(`startup failed: ${formatErrorMessage(err)}`);
       if (activityStatus === "starting up") {
         setActivityStatus("idle");
       }
@@ -1668,12 +1668,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatErrorMessage(err)}`);
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatErrorMessage(err)}`);
       }
     })();
     tui.requestRender();
