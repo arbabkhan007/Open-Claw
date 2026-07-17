@@ -1236,9 +1236,7 @@ describe("launchd bootstrap repair", () => {
       expect(repair.detail).toContain(
         "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
       );
-      expect(repair.detail).not.toContain(
-        "/Library/LaunchDaemons/ai.openclaw.gateway.plist",
-      );
+      expect(repair.detail).not.toContain("/Library/LaunchDaemons/ai.openclaw.gateway.plist");
       expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
       expectNoLaunchAgentActivationCalls();
     });
@@ -2361,7 +2359,9 @@ describe("launchd install", () => {
 
       expect(state.launchctlCalls).toEqual([["print", "system/ai.openclaw.gateway"]]);
       expectNoLaunchAgentActivationCalls();
-      expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+      expect(
+        launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
+      ).not.toHaveBeenCalled();
     });
   });
 
@@ -2434,7 +2434,9 @@ describe("launchd install", () => {
         "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl",
       );
 
-      expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+      expect(
+        launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
+      ).not.toHaveBeenCalled();
       expect(state.launchctlCalls).toEqual([["print", "system/ai.openclaw.gateway"]]);
       expectNoLaunchAgentActivationCalls();
     });

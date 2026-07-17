@@ -94,8 +94,7 @@ describe("recoverInstalledLaunchAgent", () => {
     repairLaunchAgentBootstrap.mockResolvedValue({
       ok: false,
       status: "system-launchdaemon-conflict",
-      detail:
-        "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+      detail: "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
     });
 
     await expect(recoverInstalledLaunchAgent({ result: "restarted" })).rejects.toThrow(
