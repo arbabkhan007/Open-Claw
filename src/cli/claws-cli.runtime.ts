@@ -1,3 +1,4 @@
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { resolve } from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import {
@@ -32,6 +33,8 @@ import {
 import { agentsDeleteCommand } from "../commands/agents.commands.delete.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
@@ -72,6 +75,21 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
+  for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
+    const server = action.details as Record<string, unknown> | undefined;
+    const target =
+      typeof server?.url === "string"
+        ? redactSensitiveUrlLikeString(server.url)
+        : typeof server?.command === "string"
+          ? redactSensitiveArgv([
+              server.command,
+              ...(Array.isArray(server.args)
+                ? server.args.filter((arg): arg is string => typeof arg === "string")
+                : []),
+            ]).join(" ")
+          : "invalid declaration";
+    runtime.log(`  MCP ${action.id}: ${target}`);
+  }
   runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
   if (plan.summary.blockedActions > 0) {
     runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
@@ -214,6 +232,12 @@ export async function runClawsAddCommand(
   }
 
   const config = getRuntimeConfig();
+  const listedMcpServers = await listConfiguredMcpServers();
+  if (!listedMcpServers.ok) {
+    runtime.error(listedMcpServers.error);
+    runtime.exit(1);
+    return;
+  }
   const existingAgentIds = listAgentIds(config);
   const existingWorkspacePaths = existingAgentIds.map((agentId) =>
     resolveAgentWorkspaceDir(config, agentId),
@@ -226,7 +250,7 @@ export async function runClawsAddCommand(
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
     existingAgentIds,
     existingWorkspacePaths,
-    existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
+    existingMcpServers: listedMcpServers.mcpServers,
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
@@ -455,7 +479,14 @@ export async function runClawsExportCommand(
 ): Promise<void> {
   assertExperimentalClawsEnabled();
   try {
-    const result = await exportClawAgent(agentId, opts.out, { config: getRuntimeConfig() });
+    const listedMcpServers = await listConfiguredMcpServers();
+    if (!listedMcpServers.ok) {
+      throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
+    }
+    const result = await exportClawAgent(agentId, opts.out, {
+      config: getRuntimeConfig(),
+      sourceMcpServers: listedMcpServers.mcpServers,
+    });
     if (opts.json) {
       writeRuntimeJson(runtime, result);
       return;
