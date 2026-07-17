@@ -12,6 +12,7 @@ export const FIELD_LABELS: Record<string, string> = {
   marketplaces: "Marketplaces",
   "marketplaces.feeds": "Marketplace Feeds",
   "marketplaces.feeds.*.url": "Marketplace Feed URL",
+  "marketplaces.feeds.*.feedId": "Marketplace Expected Feed ID",
   "marketplaces.feeds.*.verification": "Marketplace Feed Verification",
   "marketplaces.feeds.*.verification.mode": "Marketplace Feed Verification Mode",
   "marketplaces.feeds.*.verification.keys": "Marketplace Feed Trusted Public Keys",

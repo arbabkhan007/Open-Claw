@@ -27,6 +27,13 @@ class HostedCatalogSnapshotWriteError extends Error {
   }
 }
 
+class HostedCatalogTrustConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedCatalogTrustConfigurationError";
+  }
+}
+
 export type OfficialExternalProviderAuthChoice = {
   method?: string;
   choiceId?: string;
@@ -142,6 +149,7 @@ type OfficialExternalPluginCatalogSourceProfile =
 
 type OfficialExternalPluginCatalogFeedProfile = {
   url: string;
+  feedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
 };
 
@@ -155,7 +163,7 @@ type OfficialExternalPluginCatalogFeedVerification =
       threshold?: number;
     };
 
-type OfficialExternalPluginCatalogFeedSigningKey = {
+export type OfficialExternalPluginCatalogFeedSigningKey = {
   keyId: string;
   publicKey: string;
 };
@@ -170,6 +178,7 @@ export type OfficialExternalPluginCatalogFeed = {
   schemaVersion: 1 | 2;
   id: string;
   generatedAt: string;
+  expiresAt?: string;
   sequence: number;
   description?: string;
   entries: readonly OfficialExternalPluginCatalogEntry[];
@@ -246,15 +255,24 @@ type OfficialExternalProviderContract =
   | "webFetchProviders";
 
 const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);
-const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL = "https://clawhub.ai/v1/feeds/plugins";
-const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
+  "https://clawhub.ai/v1/feeds/plugins";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID = "clawhub-official";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV =
+  "OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV =
+  "OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS: readonly OfficialExternalPluginCatalogFeedSigningKey[] =
+  [];
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
   {
     feeds: {
       [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
         url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+        feedId: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID,
       },
     },
     sources: {
@@ -347,13 +365,58 @@ function resolveHostedCatalogFeedUrl(raw: string): URL {
   return parsed;
 }
 
+function resolveDefaultClawHubFeedVerificationFromEnv(
+  env?: NodeJS.ProcessEnv,
+): OfficialExternalPluginCatalogFeedVerification | undefined {
+  const keyId = normalizeOptionalString(
+    env?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV],
+  );
+  const publicKey = normalizeOptionalString(
+    env?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV],
+  );
+  if (!keyId && !publicKey) return undefined;
+  if (!keyId || !publicKey) {
+    throw new HostedCatalogTrustConfigurationError(
+      "default ClawHub feed trust requires both key id and public key env vars",
+    );
+  }
+  return {
+    mode: "signed",
+    keys: [{ keyId, publicKey }],
+  };
+}
+
 function resolveOfficialExternalPluginCatalogProfileConfig(
   config?: OfficialExternalPluginCatalogProfileConfig,
+  env?: NodeJS.ProcessEnv,
 ): Required<OfficialExternalPluginCatalogProfileConfig> {
+  const configuredDefaultFeed =
+    config?.feeds?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE];
+  const envVerification = configuredDefaultFeed?.verification
+    ? undefined
+    : resolveDefaultClawHubFeedVerificationFromEnv(env);
+  const bundledVerification =
+    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS.length > 0
+      ? {
+          mode: "signed" as const,
+          keys: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS,
+        }
+      : undefined;
+  const defaultVerification = envVerification ?? bundledVerification;
+  const defaultFeed = DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds?.[
+    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
+  ] ?? {
+    url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+    feedId: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID,
+  };
   return {
     feeds: {
-      ...DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds,
       ...config?.feeds,
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
+        ...defaultFeed,
+        ...(defaultVerification ? { verification: defaultVerification } : {}),
+        ...configuredDefaultFeed,
+      },
     },
     sources: {
       ...DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.sources,
@@ -366,12 +429,13 @@ function resolveHostedCatalogFeedSource(params: {
   feedUrl?: string;
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+  env?: NodeJS.ProcessEnv;
 }): {
   url: URL;
   hostnameAllowlist: string[];
+  expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
 } {
-  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
   const explicitFeedUrl = normalizeOptionalString(params.feedUrl);
   const explicitProfileName = normalizeOptionalString(params.feedProfile);
   if (explicitFeedUrl) {
@@ -379,21 +443,45 @@ function resolveHostedCatalogFeedSource(params: {
     if (!OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST.includes(url.hostname)) {
       throw new Error("hosted catalog feed URL hostname is not allowed");
     }
+    const profileConfig =
+      explicitProfileName === undefined
+        ? undefined
+        : resolveOfficialExternalPluginCatalogProfileConfig(
+            params.catalogConfig,
+            explicitProfileName === DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
+              ? params.env
+              : undefined,
+          );
     const profile =
-      explicitProfileName === undefined ? undefined : profileConfig.feeds[explicitProfileName];
+      explicitProfileName === undefined ? undefined : profileConfig?.feeds[explicitProfileName];
     if (explicitProfileName !== undefined && !profile) {
       throw new Error(`hosted catalog feed profile "${explicitProfileName}" is not configured`);
+    }
+    if (profile?.verification?.mode === "signed" && !profile.feedId) {
+      throw new HostedCatalogTrustConfigurationError(
+        `signed hosted catalog feed profile "${explicitProfileName}" requires feedId`,
+      );
     }
     return {
       url,
       hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
+      ...(profile?.feedId ? { expectedFeedId: profile.feedId } : {}),
       ...(profile?.verification ? { verification: profile.verification } : {}),
     };
   }
   const profileName = explicitProfileName ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
+  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(
+    params.catalogConfig,
+    profileName === DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE ? params.env : undefined,
+  );
   const profile = profileConfig.feeds[profileName];
   if (!profile) {
     throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
+  }
+  if (profile.verification?.mode === "signed" && !profile.feedId) {
+    throw new HostedCatalogTrustConfigurationError(
+      `signed hosted catalog feed profile "${profileName}" requires feedId`,
+    );
   }
   const url = resolveHostedCatalogFeedUrl(profile.url);
   return {
@@ -402,6 +490,7 @@ function resolveHostedCatalogFeedSource(params: {
       ...OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
       url.hostname,
     ]),
+    ...(profile.feedId ? { expectedFeedId: profile.feedId } : {}),
     verification: profile.verification,
   };
 }
@@ -637,11 +726,16 @@ function emptyBundledFallbackResult(error: unknown): HostedOfficialExternalPlugi
 
 async function parseHostedCatalogFeedBody(params: {
   body: string;
+  expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   verifiedAt: string;
+  now: Date;
+  allowExpired?: boolean;
+  allowMissingExpiry?: boolean;
 }): Promise<{
   feed: OfficialExternalPluginCatalogFeed;
   trust?: HostedOfficialExternalPluginCatalogTrustState;
+  expired?: boolean;
 }> {
   const raw = JSON.parse(params.body) as unknown;
   if (params.verification?.mode === "signed") {
@@ -655,6 +749,39 @@ async function parseHostedCatalogFeedBody(params: {
     if (!verification.ok) {
       throw new Error(verification.message);
     }
+    if (params.expectedFeedId && verification.feed.id !== params.expectedFeedId) {
+      throw new Error(
+        `hosted catalog feed id "${verification.feed.id}" did not match expected "${params.expectedFeedId}"`,
+      );
+    }
+    const generatedAtMs = Date.parse(verification.feed.generatedAt);
+    const expiresAt = normalizeOptionalString(verification.feed.expiresAt);
+    if (!Number.isFinite(generatedAtMs)) {
+      throw new Error("hosted catalog signed feed requires a valid generatedAt value");
+    }
+    let expired = false;
+    if (!expiresAt) {
+      if (params.allowMissingExpiry !== true) {
+        throw new Error("hosted catalog signed feed requires a valid expiresAt value");
+      }
+      expired = true;
+    } else {
+      const expiresAtMs = Date.parse(expiresAt);
+      if (!Number.isFinite(expiresAtMs)) {
+        throw new Error("hosted catalog signed feed requires a valid expiresAt value");
+      }
+      if (expiresAtMs <= generatedAtMs) {
+        throw new Error("hosted catalog signed feed expiresAt must be later than generatedAt");
+      }
+      expired = expiresAtMs <= params.now.getTime();
+    }
+    if (expired && params.allowExpired !== true) {
+      throw new Error(
+        expiresAt
+          ? `hosted catalog signed feed expired at ${expiresAt}`
+          : "hosted catalog signed feed has no expiresAt",
+      );
+    }
     return {
       feed: verification.feed,
       trust: {
@@ -664,10 +791,16 @@ async function parseHostedCatalogFeedBody(params: {
         threshold,
         verifiedAt: params.verifiedAt,
       },
+      ...(expired ? { expired: true } : {}),
     };
   }
   if (!isOfficialExternalPluginCatalogFeed(raw)) {
     throw new Error("hosted catalog feed did not match a supported schema version");
+  }
+  if (params.expectedFeedId && raw.id !== params.expectedFeedId) {
+    throw new Error(
+      `hosted catalog feed id "${raw.id}" did not match expected "${params.expectedFeedId}"`,
+    );
   }
   return { feed: raw };
 }
@@ -680,7 +813,9 @@ async function loadHostedCatalogSnapshotResult(params: {
   ifModifiedSince?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
   requireManifestInstallSourceRef?: boolean;
+  expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
+  now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   assertSnapshotMatchesRequestValidators({
     snapshot: params.snapshot,
@@ -696,25 +831,50 @@ async function loadHostedCatalogSnapshotResult(params: {
   }
   const parsed = await parseHostedCatalogFeedBody({
     body: params.snapshot.body,
+    expectedFeedId: params.expectedFeedId,
     verification: params.verification,
     verifiedAt: params.snapshot.trust?.verifiedAt ?? params.snapshot.savedAt,
+    now: params.now,
+    allowExpired: true,
+    allowMissingExpiry: true,
   });
+  const entries = dedupeOfficialExternalPluginCatalogEntries(
+    filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+      parseOfficialExternalPluginCatalogEntries(parsed.feed),
+      {
+        catalogConfig: params.catalogConfig,
+        requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+      },
+    ),
+  );
+  const visibleEntries = parsed.expired
+    ? entries.map((entry) => removeOfficialExternalPluginCatalogInstallAuthority(entry))
+    : entries;
   return {
     source: "hosted-snapshot",
-    entries: dedupeOfficialExternalPluginCatalogEntries(
-      filterOfficialExternalPluginCatalogEntriesBySourceRefs(
-        parseOfficialExternalPluginCatalogEntries(parsed.feed),
-        {
-          catalogConfig: params.catalogConfig,
-          requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
-        },
-      ),
-    ),
-    feed: parsed.feed,
+    entries: visibleEntries,
+    feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
     metadata: params.snapshot.metadata,
     snapshot: params.snapshot,
     ...(parsed.trust ? { trust: parsed.trust } : {}),
-    error: formatHostedCatalogError(params.error),
+    error: parsed.expired
+      ? `${formatHostedCatalogError(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
+      : formatHostedCatalogError(params.error),
+  };
+}
+
+function removeOfficialExternalPluginCatalogInstallAuthority(
+  entry: OfficialExternalPluginCatalogEntry,
+): OfficialExternalPluginCatalogEntry {
+  const { install: _feedInstall, [MANIFEST_KEY]: manifest, ...metadata } = entry;
+  if (!manifest) {
+    return { ...metadata, state: "unavailable" };
+  }
+  const { install: _manifestInstall, ...manifestMetadata } = manifest;
+  return {
+    ...metadata,
+    state: "unavailable",
+    [MANIFEST_KEY]: manifestMetadata,
   };
 }
 
@@ -758,7 +918,9 @@ async function snapshotOrBundledFallbackResult(params: {
   ifModifiedSince?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
   requireManifestInstallSourceRef?: boolean;
+  expectedFeedId?: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
+  now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   if (params.snapshotStore) {
     try {
@@ -772,7 +934,9 @@ async function snapshotOrBundledFallbackResult(params: {
           ifModifiedSince: params.ifModifiedSince,
           catalogConfig: params.catalogConfig,
           requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+          expectedFeedId: params.expectedFeedId,
           verification: params.verification,
+          now: params.now,
         });
       }
     } catch (snapshotErr) {
@@ -832,6 +996,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   let source: {
     url: URL;
     hostnameAllowlist: string[];
+    expectedFeedId?: string;
     verification?: OfficialExternalPluginCatalogFeedVerification;
   };
   try {
@@ -839,9 +1004,12 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       feedUrl: params?.feedUrl,
       feedProfile: params?.feedProfile,
       catalogConfig: params?.catalogConfig,
+      env: params?.env ?? process.env,
     });
   } catch (err) {
-    return bundledFallbackResult(err);
+    return err instanceof HostedCatalogTrustConfigurationError
+      ? emptyBundledFallbackResult(err)
+      : bundledFallbackResult(err);
   }
   const { url } = source;
   const snapshotStore = await resolveHostedCatalogSnapshotStore({
@@ -851,6 +1019,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     stateDatabasePath: params?.stateDatabasePath,
   });
   const expectedSha256 = normalizeOptionalString(params?.expectedSha256);
+  const currentTime = () => params?.now?.() ?? new Date();
   const requireManifestInstallSourceRef = shouldRequireManifestInstallSourceRef({
     feedUrl: params?.feedUrl,
     feedProfile: params?.feedProfile,
@@ -864,7 +1033,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       expectedSha256,
       catalogConfig: params?.catalogConfig,
       requireManifestInstallSourceRef,
+      expectedFeedId: source.expectedFeedId,
       verification: source.verification,
+      now: currentTime(),
     });
   }
   const headers = new Headers();
@@ -914,7 +1085,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         ifModifiedSince,
         catalogConfig: params?.catalogConfig,
         requireManifestInstallSourceRef,
+        expectedFeedId: source.expectedFeedId,
         verification: source.verification,
+        now: currentTime(),
       });
     }
     if (!response.ok) {
@@ -928,7 +1101,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         ifModifiedSince,
         catalogConfig: params?.catalogConfig,
         requireManifestInstallSourceRef,
+        expectedFeedId: source.expectedFeedId,
         verification: source.verification,
+        now: currentTime(),
       });
     }
     const body = await readHostedCatalogResponseText({
@@ -950,14 +1125,19 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         ifModifiedSince,
         catalogConfig: params?.catalogConfig,
         requireManifestInstallSourceRef,
+        expectedFeedId: source.expectedFeedId,
         verification: source.verification,
+        now: currentTime(),
       });
     }
-    const verifiedAt = (params?.now?.() ?? new Date()).toISOString();
+    const now = currentTime();
+    const verifiedAt = now.toISOString();
     const parsed = await parseHostedCatalogFeedBody({
       body,
+      expectedFeedId: source.expectedFeedId,
       verification: source.verification,
       verifiedAt,
+      now,
     }).catch(async (err: unknown) => {
       return await snapshotOrBundledFallbackResult({
         error: err,
@@ -969,7 +1149,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         ifModifiedSince,
         catalogConfig: params?.catalogConfig,
         requireManifestInstallSourceRef,
+        expectedFeedId: source.expectedFeedId,
         verification: source.verification,
+        now,
       });
     });
     if ("source" in parsed) {
@@ -980,8 +1162,12 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       if (currentSnapshot?.trust?.mode === "signed") {
         const current = await parseHostedCatalogFeedBody({
           body: currentSnapshot.body,
+          expectedFeedId: source.expectedFeedId,
           verification: source.verification,
           verifiedAt: currentSnapshot.trust.verifiedAt,
+          now,
+          allowExpired: true,
+          allowMissingExpiry: true,
         });
         if (
           isHostedCatalogSignedFeedRollback({
@@ -1047,7 +1233,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       ifModifiedSince,
       catalogConfig: params?.catalogConfig,
       requireManifestInstallSourceRef,
+      expectedFeedId: source.expectedFeedId,
       verification: source.verification,
+      now: currentTime(),
     });
   } finally {
     if (response?.bodyUsed !== true) {
@@ -1211,6 +1399,10 @@ export function resolveOfficialExternalPluginInstall(
   entry: OfficialExternalPluginCatalogEntry,
   params?: { catalogConfig?: OfficialExternalPluginCatalogProfileConfig },
 ): PluginPackageInstall | null {
+  const state = normalizeOptionalString(entry.state);
+  if (state && state !== "available") {
+    return null;
+  }
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   const install = manifest?.install;
   const clawhubSpec = normalizeOptionalString(install?.clawhubSpec);

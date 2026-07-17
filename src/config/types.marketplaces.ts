@@ -14,6 +14,8 @@ export type MarketplaceFeedVerificationConfig =
 
 export type MarketplaceFeedProfileConfig = {
   url: string;
+  /** Expected payload feed identity. Required for signed profiles. */
+  feedId?: string;
   verification?: MarketplaceFeedVerificationConfig;
 };
 
