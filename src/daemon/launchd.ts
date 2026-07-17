@@ -405,10 +405,21 @@ async function resolveSystemLaunchDaemonConflict(
   if (printed.code === 0) {
     return { detectedBy: "launchctl", serviceTarget };
   }
+  if (!isLaunchctlNotLoaded(printed)) {
+    const detail = formatLaunchctlResultDetail(printed) || `exit code ${printed.code}`;
+    throw new Error(
+      `Could not verify whether system LaunchDaemon ${serviceTarget} is loaded: ${detail}`,
+    );
+  }
   try {
     await fs.access(plistPath);
     return { detectedBy: "plist", serviceTarget, plistPath };
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      // This guard must fail closed: an unreadable system plist location does
+      // not prove that activating a competing gui LaunchAgent is safe.
+      throw err;
+    }
     return null;
   }
 }

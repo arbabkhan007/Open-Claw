@@ -30,6 +30,7 @@ const state = vi.hoisted(() => ({
   systemPrintError: "",
   systemPrintCode: 113,
   systemServiceLoaded: false,
+  systemPlistAccessErrorCode: "",
   printNotLoadedRemaining: 0,
   printError: "",
   printCode: 1,
@@ -374,7 +375,14 @@ vi.mock("node:fs/promises", async () => {
       if (state.files.has(key) || state.dirs.has(key)) {
         return;
       }
-      throw new Error(`ENOENT: no such file or directory, access '${key}'`);
+      const code =
+        key === "/Library/LaunchDaemons/ai.openclaw.gateway.plist" &&
+        state.systemPlistAccessErrorCode
+          ? state.systemPlistAccessErrorCode
+          : "ENOENT";
+      const error = new Error(`${code}: access failed, access '${key}'`) as NodeJS.ErrnoException;
+      error.code = code;
+      throw error;
     }),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
       const key = p;
@@ -433,6 +441,7 @@ beforeEach(() => {
   state.systemPrintError = "";
   state.systemPrintCode = 113;
   state.systemServiceLoaded = false;
+  state.systemPlistAccessErrorCode = "";
   state.printNotLoadedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
@@ -1285,6 +1294,45 @@ describe("launchd install", () => {
 
       expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
+
+  it("fails closed when the system LaunchDaemon probe fails unexpectedly", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemPrintError = "launchctl print failed: permission denied";
+      state.systemPrintCode = 1;
+      const env = createDefaultLaunchdEnv();
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow(
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: launchctl print failed: permission denied",
+      );
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
+
+  it("fails closed when the system LaunchDaemon plist cannot be inspected", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemPlistAccessErrorCode = "EACCES";
+      const env = createDefaultLaunchdEnv();
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toMatchObject({ code: "EACCES" });
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expectNoLaunchAgentActivationCalls();
     });
   });
