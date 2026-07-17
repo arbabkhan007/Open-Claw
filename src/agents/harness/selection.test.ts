@@ -2396,14 +2396,14 @@ describe("selectAgentHarness", () => {
       compacted: true,
     }));
     const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
+      id: "workspace-runtime",
+      label: "Workspace runtime",
       supports: (ctx) =>
         ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
-      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      runAttempt: vi.fn(async () => createAttemptResult("workspace-runtime")),
       compact,
     };
-    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    registerAgentHarness(harness, { ownerPluginId: "workspace-runtime" });
 
     await expect(
       maybeCompactAgentHarnessSession({
@@ -2413,7 +2413,7 @@ describe("selectAgentHarness", () => {
         workspaceDir: "/tmp/workspace",
         provider: "openai",
         model: "gpt-5.5",
-        agentHarnessId: "codex",
+        agentHarnessId: "workspace-runtime",
         deferEmbeddedHookSessionReset: vi.fn(),
       }),
     ).resolves.toMatchObject({ ok: true, compacted: true });
@@ -2422,43 +2422,46 @@ describe("selectAgentHarness", () => {
     expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
   });
 
-  it("preserves compaction reset queues for bundled Copilot compact handlers", async () => {
-    const deferEmbeddedHookSessionReset = vi.fn();
-    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
-      ok: true,
-      compacted: true,
-    }));
-    registerAgentHarness(
-      {
-        id: "copilot",
-        label: "GitHub Copilot agent runtime",
-        supports: (ctx) =>
-          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt: vi.fn(async () => createAttemptResult("copilot")),
-        compact,
-      },
-      { ownerPluginId: "copilot" },
-    );
+  it.each(["codex", "copilot"] as const)(
+    "preserves compaction reset queues for bundled %s compact handlers",
+    async (id) => {
+      const deferEmbeddedHookSessionReset = vi.fn();
+      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+        ok: true,
+        compacted: true,
+      }));
+      registerAgentHarness(
+        {
+          id,
+          label: `${id} agent runtime`,
+          supports: (ctx) =>
+            ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+          runAttempt: vi.fn(async () => createAttemptResult(id)),
+          compact,
+        },
+        { ownerPluginId: id },
+      );
 
-    await expect(
-      maybeCompactAgentHarnessSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        model: "gpt-5.5",
-        agentHarnessId: "copilot",
+      await expect(
+        maybeCompactAgentHarnessSession({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: id,
+          deferEmbeddedHookSessionReset,
+        }),
+      ).resolves.toMatchObject({ ok: true, compacted: true });
+
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(compact.mock.calls[0]?.[0]).toHaveProperty(
+        "deferEmbeddedHookSessionReset",
         deferEmbeddedHookSessionReset,
-      }),
-    ).resolves.toMatchObject({ ok: true, compacted: true });
-
-    expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact.mock.calls[0]?.[0]).toHaveProperty(
-      "deferEmbeddedHookSessionReset",
-      deferEmbeddedHookSessionReset,
-    );
-  });
+      );
+    },
+  );
 
   it("strips compaction reset queues from non-bundled compact handlers using bundled ids", async () => {
     const deferEmbeddedHookSessionReset = vi.fn();

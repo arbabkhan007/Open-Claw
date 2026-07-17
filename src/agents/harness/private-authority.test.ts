@@ -34,14 +34,19 @@ describe("harnessOwnsPrivateLifecycleResetAuthority", () => {
     expect(harnessOwnsPrivateLifecycleResetAuthority(harness)).toBe(false);
   });
 
-  it("accepts only the bundled Copilot-owned registered harness object", () => {
-    const harness = makeHarness("copilot");
-    registerAgentHarness(harness, { ownerPluginId: "copilot" });
-    const registeredHarness = getRegisteredAgentHarness("copilot")?.harness;
+  it.each(["codex", "copilot"] as const)(
+    "accepts only the bundled %s-owned registered harness object",
+    (id) => {
+      const harness = makeHarness(id);
+      registerAgentHarness(harness, { ownerPluginId: id });
+      const registeredHarness = getRegisteredAgentHarness(id)?.harness;
 
-    expect(registeredHarness).toBeDefined();
-    expect(harnessOwnsPrivateLifecycleResetAuthority(registeredHarness as AgentHarness)).toBe(true);
-    expect(harnessOwnsPrivateLifecycleResetAuthority(harness)).toBe(false);
-    expect(harnessOwnsPrivateLifecycleResetAuthority(makeHarness("copilot"))).toBe(false);
-  });
+      expect(registeredHarness).toBeDefined();
+      expect(harnessOwnsPrivateLifecycleResetAuthority(registeredHarness as AgentHarness)).toBe(
+        true,
+      );
+      expect(harnessOwnsPrivateLifecycleResetAuthority(harness)).toBe(false);
+      expect(harnessOwnsPrivateLifecycleResetAuthority(makeHarness(id))).toBe(false);
+    },
+  );
 });

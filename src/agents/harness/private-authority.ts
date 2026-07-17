@@ -3,6 +3,7 @@ import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarness } from "./types.js";
 
 const BUNDLED_LIFECYCLE_RESET_HARNESS_OWNERS: ReadonlyMap<string, string> = new Map([
+  ["codex", "codex"],
   ["copilot", "copilot"],
 ]);
 
