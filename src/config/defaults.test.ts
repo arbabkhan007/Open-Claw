@@ -12,6 +12,8 @@ import {
   applyContextPruningDefaults,
   applyCronDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
+  resolveNormalizedProviderModelMaxTokens,
 } from "./defaults.js";
 
 const mocks = vi.hoisted(() => ({
@@ -150,5 +152,110 @@ describe("config defaults", () => {
 
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+  });
+
+  it("caps known Mistral model maxTokens at the safe maximum during config loading", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          mistral: {
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0.05, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 17_000,
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
+  });
+
+  it("preserves custom Mistral model maxTokens during config loading", () => {
+    const next = applyModelDefaults({
+      models: {
+        providers: {
+          mistral: {
+            models: [
+              {
+                id: "custom-mistral-model",
+                name: "Custom Mistral",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 32_000,
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(32_000);
+  });
+
+  describe("resolveNormalizedProviderModelMaxTokens", () => {
+    it("leaves non-Mistral providers unchanged", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "openai",
+          modelId: "gpt-4o",
+          contextWindow: 128_000,
+          rawMaxTokens: 200_000,
+        }),
+      ).toBe(128_000);
+    });
+
+    it("keeps Mistral raw maxTokens below the safe cap", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "mistral-large-latest",
+          contextWindow: 32_768,
+          rawMaxTokens: 8_192,
+        }),
+      ).toBe(8_192);
+    });
+
+    it("caps Mistral maxTokens at the per-model safe maximum", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "mistral-large-latest",
+          contextWindow: 32_768,
+          rawMaxTokens: 17_000,
+        }),
+      ).toBe(16_384);
+    });
+
+    it("caps Mistral maxTokens by context window when it is smaller than the safe cap", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "mistral-large-latest",
+          contextWindow: 8_192,
+          rawMaxTokens: 20_000,
+        }),
+      ).toBe(8_192);
+    });
+
+    it("preserves maxTokens for unknown Mistral models", () => {
+      expect(
+        resolveNormalizedProviderModelMaxTokens({
+          providerId: "mistral",
+          modelId: "unknown-model",
+          contextWindow: 32_768,
+          rawMaxTokens: 20_000,
+        }),
+      ).toBe(20_000);
+    });
   });
 });

@@ -91,15 +91,18 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   rawMaxTokens: number;
 }): number {
   const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
-  if (normalizeProviderId(params.providerId) !== "mistral" || clamped < params.contextWindow) {
+  if (normalizeProviderId(params.providerId) !== "mistral") {
     return clamped;
   }
 
   const safeMaxTokens =
     MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
       params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
-    ] ?? DEFAULT_MODEL_MAX_TOKENS;
-  return Math.min(safeMaxTokens, params.contextWindow);
+    ];
+  if (safeMaxTokens === undefined) {
+    return clamped;
+  }
+  return Math.min(clamped, safeMaxTokens);
 }
 
 type SessionDefaultsOptions = {
