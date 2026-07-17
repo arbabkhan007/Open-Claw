@@ -55,13 +55,11 @@ export async function authenticate(
             drained += value.byteLength;
           }
         }
-        await reader.cancel().catch(() => {});
       } catch {
         // Drain failure is non-fatal — the cookie may still be available.
+      } finally {
+        await reader.cancel().catch(() => {});
       }
-    } else {
-      // Body stream unavailable; drain via text() with post-hoc cap.
-      await response.text().catch(() => {});
     }
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {

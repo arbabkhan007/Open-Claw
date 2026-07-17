@@ -99,13 +99,15 @@ describe("tlon urbit auth body drain", () => {
     expect(cookie).toContain("urbauth-~zod=789");
   });
 
-  it("handles a body-less response fallback via text() without failing", async () => {
-    const cookieValue = "urbauth-~zod=nobody; Path=/; HttpOnly";
+  it("skips the drain for body-less responses and still extracts the cookie", async () => {
+    // When no body stream is available, there is nothing to drain — cookie
+    // headers are already finalised. The authenticate function should extract
+    // the cookie without attempting an unbounded text() read.
+    const cookieValue = "urbauth-~zod=streamless; Path=/; HttpOnly";
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       body: null,
-      text: async () => "small body",
       headers: new Headers({ "set-cookie": cookieValue }),
     });
     vi.stubGlobal("fetch", mockFetch);
@@ -116,6 +118,6 @@ describe("tlon urbit auth body drain", () => {
       lookupFn,
       fetchImpl: mockFetch as typeof fetch,
     });
-    expect(cookie).toContain("urbauth-~zod=nobody");
+    expect(cookie).toContain("urbauth-~zod=streamless");
   });
 });
