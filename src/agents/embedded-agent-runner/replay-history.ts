@@ -264,11 +264,18 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (sanitizedContent.length === 0) {
     return null;
   }
-  // When a silent-reply text block was dropped and the remaining content is
-  // only thinking blocks (no tool_use, no text), drop the entire message.
+  // Transcript-hygiene rule: When a silent-reply (NO_REPLY) text block was
+  // dropped and the remaining content is only thinking/redacted_thinking
+  // blocks (no tool_use, no visible text), drop the entire message.
+  //
+  // Invariant: no assistant message in replayed history should consist
+  // exclusively of thinking-family blocks after silent text is removed.
   // Keeping orphaned thinking blocks causes adjacent assistant messages to
   // merge in provider payloads, producing [thinking, thinking, tool_use]
   // which Anthropic rejects as "cannot be modified" (#99620).
+  // This is provider-agnostic: an all-thinking assistant turn is never
+  // meaningful replay for any provider, since the companion text that made
+  // the thinking block useful was a silent reply.
   if (
     hasSilentText &&
     sanitizedContent.every((block) => {
