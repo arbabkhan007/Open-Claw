@@ -442,7 +442,16 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
       .description("Replace the Workspaces layout")
       .requiredOption("--file <path>", "Workspace JSON file"),
   ).action(async (commandOptions: GatewayOptions & { file: string }) => {
-    const doc = validateWorkspaceDoc(JSON.parse(await fs.readFile(commandOptions.file, "utf8")));
+    const raw = await fs.readFile(commandOptions.file, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(
+        `Malformed JSON in workspace layout file: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const doc = validateWorkspaceDoc(parsed);
     const result = await callWorkspaceGateway("workspaces.replace", commandOptions, {
       doc,
     });

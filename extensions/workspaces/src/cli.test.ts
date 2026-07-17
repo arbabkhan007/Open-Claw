@@ -211,6 +211,22 @@ describe("workspace CLI", () => {
     });
   });
 
+  it("rejects malformed JSON in workspace layout file with a friendly error", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      installGatewayMock(store);
+      const program = createProgram(stateDir);
+      const filePath = path.join(stateDir, "bad-layout.json");
+      await fs.writeFile(filePath, "{invalid json", "utf8");
+
+      await expect(
+        program.parseAsync(["workspaces", "layout", "set", "--file", filePath], {
+          from: "user",
+        }),
+      ).rejects.toThrow("Malformed JSON in workspace layout file:");
+    });
+  });
+
   it("round-trips every remaining subcommand through the gateway", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });
