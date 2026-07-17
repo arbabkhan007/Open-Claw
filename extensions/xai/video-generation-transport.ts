@@ -71,6 +71,7 @@ export async function downloadXaiVideo(
     maxBytes: number;
   } & XaiVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
+  const timeoutMs = resolveXaiVideoFetchTimeoutMs(params.timeoutMs, params.defaultTimeoutMs);
   const { response, release } = await fetchXaiVideoResponse({
     url: params.url,
     stage: "download",
@@ -85,9 +86,16 @@ export async function downloadXaiVideo(
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+    // fetchWithSsrFGuard keeps its abort until release(), so continuous drips still hit the
+    // request wall-clock. chunkTimeoutMs is shorter than the guarded-request deadline so
+    // a mid-body stall produces the download-owned idle error instead of a generic request
+    // timeout; a continuously dripping CDN body resets the idle on every chunk.
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      chunkTimeoutMs: Math.ceil(timeoutMs / 2),
       onOverflow: ({ maxBytes }) =>
         new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`xAI generated video download stalled after ${chunkTimeoutMs}ms`),
     });
     return {
       buffer,
