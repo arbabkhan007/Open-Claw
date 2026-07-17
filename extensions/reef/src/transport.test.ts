@@ -452,35 +452,31 @@ describe("ReefInboxConnection response frame bounds", () => {
 });
 
 describe("ReefTransportClient relay request timeout", () => {
-  it(
-    "times out when the relay stalls before returning headers",
-    async () => {
-      const server = http.createServer();
-      // Accept the TCP connection but never send an HTTP response.
-      server.on("connection", () => {});
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => resolve());
+  it("times out when the relay stalls before returning headers", async () => {
+    const server = http.createServer();
+    // Accept the TCP connection but never send an HTTP response.
+    server.on("connection", () => {});
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    try {
+      const { port } = server.address() as AddressInfo;
+      const client = new ReefTransportClient(
+        `http://127.0.0.1:${port}`,
+        "alice",
+        keys,
+        fetch,
+        () => ts,
+      );
+
+      await expect(client.pull(0)).rejects.toMatchObject({ name: "TimeoutError" });
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
       });
-
-      try {
-        const { port } = server.address() as AddressInfo;
-        const client = new ReefTransportClient(
-          `http://127.0.0.1:${port}`,
-          "alice",
-          keys,
-          fetch,
-          () => ts,
-        );
-
-        await expect(client.pull(0)).rejects.toMatchObject({ name: "TimeoutError" });
-      } finally {
-        server.closeAllConnections?.();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
-    },
-    30_000,
-  );
+    }
+  }, 30_000);
 });
