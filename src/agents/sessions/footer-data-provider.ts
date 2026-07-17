@@ -87,7 +87,7 @@ async function resolveBranchWithGitAsync(repoDir: string): Promise<string | null
     const { stdout } = await runExec(
       "git",
       ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
-      { cwd: repoDir, logOutput: false },
+      { cwd: repoDir, logOutput: false, timeoutMs: 5_000 },
     );
     return stdout.trim() || null;
   } catch {
