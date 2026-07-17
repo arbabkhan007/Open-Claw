@@ -150,7 +150,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("repairs an incompatible context engine by switching the global slot to legacy", async () => {
-    const engineId = registerEngine(["assemble-before-prompt"]);
+    const engineId = registerEngine(["runtime-llm-complete"]);
     const result = await maybeRepairContextEngineHostCompatibility({
       cfg: configWithEngine(engineId, {
         agents: {
@@ -192,7 +192,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it("warns but does not auto-repair mixed compatible and incompatible runtimes", async () => {
-    const engineId = registerEngine(["assemble-before-prompt"]);
+    const engineId = registerEngine(["runtime-llm-complete"]);
     const cfg = configWithEngine(engineId, {
       agents: {
         defaults: {
