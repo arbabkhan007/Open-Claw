@@ -260,9 +260,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
       // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
       // Harvest: retired dual-field plan payload builder -1.
+      // +1: memory host event storage validator for doctor-owned legacy import.
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      8149,
+      8150,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -294,9 +295,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // WhatsApp-split harvest (#108656).
       // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
       // Harvest: retired dual-field plan payload builder -1.
+      // +1: memory host event storage validator for doctor-owned legacy import.
       // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      4533,
+      4534,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -321,8 +323,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      104,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1;
+      // retire the Memory Core facade's event-store wildcard -1.
+      103,
       env,
     ),
   };
