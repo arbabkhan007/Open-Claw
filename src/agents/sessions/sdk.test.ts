@@ -372,6 +372,7 @@ describe("createAgentSession tool defaults", () => {
       name: "internal_wait",
       label: "Internal Wait",
       hideFromChannelProgress: true,
+      canYield: true,
       description: "Waits for internal work.",
       parameters: Type.Object({}),
       execute: async () => ({
@@ -394,6 +395,7 @@ describe("createAgentSession tool defaults", () => {
       expect.objectContaining({
         name: "internal_wait",
         hideFromChannelProgress: true,
+        canYield: true,
       }),
     ]);
   });
