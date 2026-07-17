@@ -10,13 +10,19 @@ function createHomeContext(params?: {
   slashCommandName?: string;
   trackEvent?: () => void;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
+  suggestedPromptsResult?: boolean;
 }) {
   const harness = createSlackSystemEventTestHarness();
   const publish = vi.fn().mockResolvedValue({ ok: true });
+  const setSlackSuggestedPrompts = vi.fn(async () => params?.suggestedPromptsResult ?? true);
+  const recordSlackAgentView = vi.fn(async () => undefined);
   if (params?.shouldDropMismatchedSlackEvent) {
     harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
   }
   harness.ctx.botToken = "xoxb-test";
+  harness.ctx.accountId = "default";
+  harness.ctx.setSlackSuggestedPrompts = setSlackSuggestedPrompts;
+  harness.ctx.recordSlackAgentView = recordSlackAgentView;
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
@@ -27,6 +33,8 @@ function createHomeContext(params?: {
   });
   return {
     publish,
+    setSlackSuggestedPrompts,
+    recordSlackAgentView,
     getHomeHandler: () => harness.getHandler("app_home_opened") as HomeHandler | null,
   };
 }
@@ -101,9 +109,10 @@ describe("registerSlackHomeEvents", () => {
     });
   });
 
-  it("does not publish when Slack reports the Messages tab", async () => {
+  it("sets threadless Agent View prompts when Slack reports the Messages tab", async () => {
     const trackEvent = vi.fn();
-    const { publish, getHomeHandler } = createHomeContext({ trackEvent });
+    const { publish, setSlackSuggestedPrompts, recordSlackAgentView, getHomeHandler } =
+      createHomeContext({ trackEvent });
 
     await getHomeHandler()!({
       event: {
@@ -117,6 +126,37 @@ describe("registerSlackHomeEvents", () => {
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();
+    expect(setSlackSuggestedPrompts).toHaveBeenCalledWith({
+      channelId: "D123",
+      title: "Try asking",
+      prompts: [
+        { title: "What can you do?", message: "What can you help me with?" },
+        {
+          title: "Summarize this channel",
+          message: "Summarize the recent activity in this channel.",
+        },
+        { title: "Draft a reply", message: "Help me draft a reply." },
+      ],
+    });
+    expect(recordSlackAgentView).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not infer Agent View when threadless prompts are rejected", async () => {
+    const { recordSlackAgentView, getHomeHandler } = createHomeContext({
+      suggestedPromptsResult: false,
+    });
+
+    await getHomeHandler()!({
+      event: {
+        type: "app_home_opened",
+        user: "U123",
+        channel: "D123",
+        tab: "messages",
+      },
+      body: {},
+    });
+
+    expect(recordSlackAgentView).not.toHaveBeenCalled();
   });
 
   it("does not track or publish mismatched events", async () => {
