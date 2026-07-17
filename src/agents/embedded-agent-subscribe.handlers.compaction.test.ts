@@ -397,7 +397,8 @@ describe("handleCompactionEnd", () => {
     ]);
   });
 
-  it("does not expose resetSession for incomplete terminal after_compaction hooks", async () => {
+  it("exposes resetSession for incomplete non-aborted terminal after_compaction hooks", async () => {
+    const deferredReset = vi.fn();
     const runAfterCompaction = vi.fn(
       async (
         _event: unknown,
@@ -405,7 +406,11 @@ describe("handleCompactionEnd", () => {
           api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
         },
       ) => {
-        expect(hookContext.api).toBeUndefined();
+        await expect(hookContext.api?.resetSession?.("new")).resolves.toMatchObject({
+          ok: true,
+          deferred: true,
+          key: "main",
+        });
       },
     );
     hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
@@ -416,7 +421,7 @@ describe("handleCompactionEnd", () => {
       storePath: "/tmp/unused-session-store.json",
       sessionKey: "main",
       initialCount: 0,
-      deferEmbeddedHookSessionReset: vi.fn(),
+      deferEmbeddedHookSessionReset: deferredReset,
     });
 
     await handleCompactionEnd(ctx, {
@@ -428,6 +433,12 @@ describe("handleCompactionEnd", () => {
     });
 
     expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredReset).toHaveBeenCalledWith({
+      key: "main",
+      agentId: "test-agent",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
   });
 
   it("does not expose resetSession for model-locked terminal after_compaction hooks", async () => {
