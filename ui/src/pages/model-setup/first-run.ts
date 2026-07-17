@@ -1,4 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";

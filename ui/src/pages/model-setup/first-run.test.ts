@@ -145,9 +145,12 @@ describe("model setup first-run redirect", () => {
       },
     };
     const replace = vi.fn();
+    let currentSnapshot = snapshot;
     const context = {
       gateway: {
-        snapshot,
+        get snapshot() {
+          return currentSnapshot;
+        },
         subscribe: (next: GatewayListener) => {
           listener = next;
           return () => undefined;
@@ -161,7 +164,7 @@ describe("model setup first-run redirect", () => {
     await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
 
     const reconnected = { ...snapshot, client: secondClient };
-    context.gateway.snapshot = reconnected as typeof context.gateway.snapshot;
+    currentSnapshot = reconnected;
     listener!(reconnected as Parameters<GatewayListener>[0]);
     await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
 
