@@ -1777,6 +1777,34 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  let replyResetCommitted = false;
+  let replyResetPreviousSessionId: string | undefined;
+  const refreshReplySessionState = (previousSessionId: string | undefined): void => {
+    const refreshedEntry =
+      storePath && sessionKey
+        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
+        : activeSessionEntry;
+    if (!refreshedEntry) {
+      return;
+    }
+    activeSessionEntry = refreshedEntry;
+    if (activeSessionStore && sessionKey) {
+      activeSessionStore[sessionKey] = refreshedEntry;
+    }
+    followupRun.run.sessionId = refreshedEntry.sessionId;
+    replyOperation.updateSessionId(refreshedEntry.sessionId);
+    if (refreshedEntry.sessionFile) {
+      followupRun.run.sessionFile = refreshedEntry.sessionFile;
+    }
+    if (previousSessionId) {
+      refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: refreshedEntry.sessionId,
+        nextSessionFile: refreshedEntry.sessionFile,
+      });
+    }
+  };
   let preflightCompactionApplied;
 
   try {
@@ -1980,6 +2008,17 @@ export async function runReplyAgent(params: {
             toolProgressDetail,
             replyMediaContext,
             isRestartRecoveryArmed,
+            onSessionResetCommitted: (commit) => {
+              replyResetCommitted = true;
+              replyResetPreviousSessionId = followupRun.run.sessionId;
+              opts?.onSessionMetadataChanges?.([
+                {
+                  sessionKey: commit.key,
+                  ...(commit.agentId ? { agentId: commit.agentId } : {}),
+                  reason: commit.reason,
+                },
+              ]);
+            },
           }),
         ),
     );
@@ -2633,29 +2672,35 @@ export async function runReplyAgent(params: {
 
     if (autoCompactionCount > 0) {
       const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
-      const count = await incrementRunCompactionCount({
-        cfg,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        storePath,
-        amount: autoCompactionCount,
-        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-        contextTokensUsed,
-        newSessionId: runResult.meta?.agentMeta?.sessionId,
-        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
-      });
-      const refreshedSessionEntry =
-        sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
-      if (refreshedSessionEntry) {
-        activeSessionEntry = refreshedSessionEntry;
-        refreshQueuedFollowupSession({
-          key: queueKey,
-          previousSessionId,
-          nextSessionId: refreshedSessionEntry.sessionId,
-          nextSessionFile: refreshedSessionEntry.sessionFile,
+      let count: number | undefined;
+      if (replyResetCommitted) {
+        refreshReplySessionState(replyResetPreviousSessionId ?? previousSessionId);
+        count = activeSessionEntry?.compactionCount;
+      } else {
+        count = await incrementRunCompactionCount({
+          cfg,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+          amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          contextTokensUsed,
+          newSessionId: runResult.meta?.agentMeta?.sessionId,
+          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
+        const refreshedSessionEntry =
+          sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
+        if (refreshedSessionEntry) {
+          activeSessionEntry = refreshedSessionEntry;
+          refreshQueuedFollowupSession({
+            key: queueKey,
+            previousSessionId,
+            nextSessionId: refreshedSessionEntry.sessionId,
+            nextSessionFile: refreshedSessionEntry.sessionFile,
+          });
+        }
       }
 
       // Inject post-compaction workspace context for the next agent turn
