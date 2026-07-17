@@ -24,6 +24,7 @@ import {
   STEPFUN_STANDARD_CN_BASE_URL,
   STEPFUN_STANDARD_INTL_BASE_URL,
 } from "./provider-catalog.js";
+import { stepfunMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
@@ -248,6 +249,20 @@ export default definePluginEntry({
             surface: "plan",
           }),
       },
+    });
+
+    api.registerMediaUnderstandingProvider({
+      ...stepfunMediaUnderstandingProvider,
+      id: STEPFUN_PROVIDER_ID,
+      defaultModels: { image: "step-3.7-flash", video: "step-3.7-flash" },
+      autoPriority: { video: 20 },
+    });
+
+    api.registerMediaUnderstandingProvider({
+      ...stepfunMediaUnderstandingProvider,
+      id: STEPFUN_PLAN_PROVIDER_ID,
+      defaultModels: { image: "step-3.7-flash", video: "step-3.7-flash" },
+      autoPriority: { video: 20 },
     });
   },
 });
