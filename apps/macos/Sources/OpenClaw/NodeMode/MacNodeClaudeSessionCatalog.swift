@@ -7,6 +7,7 @@ enum MacNodeClaudeSessionCatalogContract {
     static let listCommand = "anthropic.claude.sessions.list.v1"
     static let readCommand = "anthropic.claude.sessions.read.v1"
     static let commands = [listCommand, readCommand]
+    static let cliEntrypoints: Set<String> = ["sdk-cli", "cli"]
 }
 
 enum MacNodeClaudeSessionCatalog {
@@ -348,6 +349,11 @@ extension MacNodeClaudeSessionCatalog {
         return (active, archived)
     }
 
+    private static func isCliEntrypoint(_ entrypoint: Any?) -> Bool {
+        guard let ep = entrypoint as? String else { return false }
+        return MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(ep)
+    }
+
     private static func discoverCLIRecords(
         projectsURL: URL,
         resolvedProjectsURL: URL,
@@ -388,18 +394,18 @@ extension MacNodeClaudeSessionCatalog {
                         aiTitle = self.string(row["aiTitle"], maxLength: 500) ?? aiTitle
                         return
                     }
-                    if let entrypoint = row["entrypoint"] as? String, entrypoint != "sdk-cli" {
+                    if let entrypoint = row["entrypoint"] as? String, !isCliEntrypoint(entrypoint) {
                         stopFile = true
                         return
                     }
-                    if row["entrypoint"] as? String == "sdk-cli",
+                    if isCliEntrypoint(row["entrypoint"]),
                        (row["isSidechain"] as? Bool) == true
                     {
                         sidechainIds.insert(sessionId)
                         stopFile = true
                         return
                     }
-                    guard row["entrypoint"] as? String == "sdk-cli",
+                    guard isCliEntrypoint(row["entrypoint"]),
                           row["type"] as? String == "user",
                           let message = row["message"] as? [String: Any],
                           message["role"] as? String == "user",

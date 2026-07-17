@@ -906,6 +906,14 @@ describe("Claude session catalog", () => {
             version: "2.1.204",
           },
         ],
+        "cli-session": [
+          {
+            ...message("cli-session", "user", "CLI v2 prompt", 1),
+            entrypoint: "cli",
+            cwd: "/work/cli-v2",
+            version: "2.1.150",
+          },
+        ],
         "discovered-sidechain": [
           {
             ...message("discovered-sidechain", "user", "sidechain", 1),
@@ -933,6 +941,11 @@ describe("Claude session catalog", () => {
 
     expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
       expect.objectContaining({
+        threadId: "cli-session",
+        name: "CLI v2 prompt",
+        source: "claude-cli",
+      }),
+      expect.objectContaining({
         threadId: "sdk-cli-session",
         name: "CLI prompt",
         source: "claude-cli",
@@ -942,6 +955,11 @@ describe("Claude session catalog", () => {
       readLocalClaudeTranscriptPage({ threadId: "sdk-cli-session", limit: 1 }, home),
     ).resolves.toEqual(
       expect.objectContaining({ items: [expect.objectContaining({ text: "CLI prompt" })] }),
+    );
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: "cli-session", limit: 1 }, home),
+    ).resolves.toEqual(
+      expect.objectContaining({ items: [expect.objectContaining({ text: "CLI v2 prompt" })] }),
     );
     for (const threadId of [
       "sidechain-session",
