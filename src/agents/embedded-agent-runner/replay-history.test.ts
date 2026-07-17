@@ -631,7 +631,7 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     // Unknown block prevents drop — message stays, but NO_REPLY text stripped
     expect(out).toHaveLength(2); // user + assistant preserved
-    const content = out[1].content as unknown[];
+    const content = (out[1] as AgentMessage & { content: unknown[] }).content;
     expect(content).toHaveLength(2);
     expect((content[0] as Record<string, string>).type).toBe("thinking");
     expect((content[1] as Record<string, string>).customType).toBe("legacy_data");
