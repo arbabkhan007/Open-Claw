@@ -23,7 +23,7 @@ export function isDefaultChatLanding(
   return !searchSession && !hashSession;
 }
 
-export function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
+function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );
