@@ -22,11 +22,11 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -251,7 +251,9 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState & ReplyOptionsWithHeartbeatRunScope;
+  opts?: InternalGetReplyOptions &
+    ReplyOptionsWithOperationRunState &
+    ReplyOptionsWithHeartbeatRunScope;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
