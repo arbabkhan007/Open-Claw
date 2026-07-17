@@ -23,6 +23,11 @@ export type FollowedPublisherFeedStatus = FollowedPublisherFeed & {
   verifiedAt: string | null;
 };
 
+export type PublisherFeedProfileSummary = {
+  name: string;
+  sourceOrigin: string;
+};
+
 export class PublisherFeedFollowInputError extends Error {
   override name = "PublisherFeedFollowInputError";
 }
@@ -73,6 +78,24 @@ function resolveProfile(params: {
         : { threshold: profile.verification.threshold }),
     },
   };
+}
+
+export function listEligiblePublisherFeedProfiles(
+  marketplaces: MarketplacesConfig | undefined,
+): PublisherFeedProfileSummary[] {
+  const profiles: PublisherFeedProfileSummary[] = [];
+  for (const rawName of Object.keys(marketplaces?.feeds ?? {})) {
+    try {
+      const name = normalizeFollowInput(rawName, "publisher feed profile", 100);
+      const profile = resolveProfile({ marketplaces, profileName: name });
+      profiles.push({ name, sourceOrigin: new URL(profile.baseUrl).origin });
+    } catch (error) {
+      if (!(error instanceof PublisherFeedFollowInputError)) {
+        throw error;
+      }
+    }
+  }
+  return profiles.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
 export function resolveFollowedPublisherFeedTarget(params: {

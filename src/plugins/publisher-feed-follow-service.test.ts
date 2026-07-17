@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   followPublisherFeed,
+  listEligiblePublisherFeedProfiles,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
   resolveFollowedPublisherFeedTarget,
@@ -96,6 +97,41 @@ function dependencies(
 }
 
 describe("publisher feed follow service", () => {
+  it("lists only eligible signed profiles without exposing trust keys", () => {
+    const profiles = listEligiblePublisherFeedProfiles({
+      feeds: {
+        unsigned: { url: "https://unsigned.example/feed" },
+        malformed: {
+          url: "https://user:secret@example.com/feed",
+          verification: {
+            mode: "signed",
+            keys: [{ keyId: "secret-key-id", publicKey: "secret-public-key" }],
+          },
+        },
+        "z-signed": {
+          url: "https://z.example/feed/path",
+          verification: {
+            mode: "signed",
+            keys: [{ keyId: "z-key", publicKey: "z-public-key" }],
+          },
+        },
+        "a-signed": {
+          url: "https://a.example/feed/path",
+          verification: {
+            mode: "signed",
+            keys: [{ keyId: "a-key", publicKey: "a-public-key" }],
+          },
+        },
+      },
+    });
+
+    expect(profiles).toEqual([
+      { name: "a-signed", sourceOrigin: "https://a.example" },
+      { name: "z-signed", sourceOrigin: "https://z.example" },
+    ]);
+    expect(JSON.stringify(profiles)).not.toContain("public-key");
+  });
+
   it("requires a configured signed profile and binds its origin", () => {
     expect(() =>
       resolveFollowedPublisherFeedTarget({

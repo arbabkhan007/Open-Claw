@@ -2021,6 +2021,7 @@ export const en: TranslationMap = {
     tab: "Following",
     publisherId: "Publisher ID",
     feedProfile: "Signed feed profile",
+    noSignedProfiles: "No signed feed profiles configured",
     follow: "Follow",
     following: "Following…",
     followed: "Followed publishers",
