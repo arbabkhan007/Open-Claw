@@ -2645,17 +2645,20 @@ public struct UiPanelCommand: Codable, Sendable {
     public let panel: AnyCodable
     public let _open: Bool
     public let dock: AnyCodable?
+    public let terminalsessionid: String?
 
     public init(
         kind: String,
         panel: AnyCodable,
         _open: Bool,
-        dock: AnyCodable? = nil)
+        dock: AnyCodable? = nil,
+        terminalsessionid: String? = nil)
     {
         self.kind = kind
         self.panel = panel
         self._open = _open
         self.dock = dock
+        self.terminalsessionid = terminalsessionid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2663,6 +2666,7 @@ public struct UiPanelCommand: Codable, Sendable {
         case panel
         case _open = "open"
         case dock
+        case terminalsessionid = "terminalSessionId"
     }
 }
 
@@ -4550,6 +4554,46 @@ public struct SessionsFilesGetResult: Codable, Sendable {
     }
 }
 
+public struct SessionsFilesRevealParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+
+    public init(
+        key: String,
+        agentid: String? = nil)
+    {
+        self.key = key
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsFilesRevealResult: Codable, Sendable {
+    public let ok: Bool
+    public let path: String?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        path: String? = nil,
+        error: String? = nil)
+    {
+        self.ok = ok
+        self.path = path
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case path
+        case error
+    }
+}
+
 public struct SessionsFilesSetParams: Codable, Sendable {
     public let sessionkey: String
     public let path: String
@@ -6190,6 +6234,7 @@ public struct TaskSummary: Codable, Sendable {
     public let progresssummary: String?
     public let terminalsummary: String?
     public let error: String?
+    public let prompt: String?
 
     public init(
         id: String,
@@ -6214,7 +6259,8 @@ public struct TaskSummary: Codable, Sendable {
         lasttoolname: String? = nil,
         progresssummary: String? = nil,
         terminalsummary: String? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        prompt: String? = nil)
     {
         self.id = id
         self.kind = kind
@@ -6239,6 +6285,7 @@ public struct TaskSummary: Codable, Sendable {
         self.progresssummary = progresssummary
         self.terminalsummary = terminalsummary
         self.error = error
+        self.prompt = prompt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6265,6 +6312,7 @@ public struct TaskSummary: Codable, Sendable {
         case progresssummary = "progressSummary"
         case terminalsummary = "terminalSummary"
         case error
+        case prompt
     }
 }
 
@@ -7150,6 +7198,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
+    public let capabilities: [String]?
 
     public init(
         sessionkey: String? = nil,
@@ -7162,7 +7211,8 @@ public struct TalkClientCreateParams: Codable, Sendable {
         reasoningeffort: String? = nil,
         mode: AnyCodable? = nil,
         transport: AnyCodable? = nil,
-        brain: AnyCodable? = nil)
+        brain: AnyCodable? = nil,
+        capabilities: [String]? = nil)
     {
         self.sessionkey = sessionkey
         self.provider = provider
@@ -7175,6 +7225,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         self.mode = mode
         self.transport = transport
         self.brain = brain
+        self.capabilities = capabilities
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7189,6 +7240,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         case mode
         case transport
         case brain
+        case capabilities
     }
 }
 
@@ -11283,6 +11335,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
     public let cwd: String
     public let confined: Bool
     public let attached: Bool
+    public let owner: AnyCodable?
     public let createdatms: Int
 
     public init(
@@ -11292,6 +11345,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         cwd: String,
         confined: Bool,
         attached: Bool,
+        owner: AnyCodable? = nil,
         createdatms: Int)
     {
         self.sessionid = sessionid
@@ -11300,6 +11354,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         self.cwd = cwd
         self.confined = confined
         self.attached = attached
+        self.owner = owner
         self.createdatms = createdatms
     }
 
@@ -11310,6 +11365,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         case cwd
         case confined
         case attached
+        case owner
         case createdatms = "createdAtMs"
     }
 }
@@ -11621,6 +11677,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let decision: ApprovalAllowDecision
     public let reason: ApprovalAllowedReason
@@ -11632,6 +11690,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         decision: ApprovalAllowDecision,
         reason: ApprovalAllowedReason)
@@ -11642,6 +11702,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.decision = decision
         self.reason = reason
@@ -11654,6 +11716,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case decision
         case reason
@@ -11667,6 +11731,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let decision: String
     public let reason: ApprovalDeniedReason
@@ -11678,6 +11744,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         decision: String,
         reason: ApprovalDeniedReason)
@@ -11688,6 +11756,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.decision = decision
         self.reason = reason
@@ -11700,6 +11770,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case decision
         case reason
@@ -11713,6 +11785,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let reason: ApprovalExpiredReason
 
@@ -11723,6 +11797,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         reason: ApprovalExpiredReason)
     {
@@ -11732,6 +11808,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.reason = reason
     }
@@ -11743,6 +11821,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case reason
     }
@@ -11755,6 +11835,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let reason: ApprovalCancelledReason
 
@@ -11765,6 +11847,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         reason: ApprovalCancelledReason)
     {
@@ -11774,6 +11858,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.reason = reason
     }
@@ -11785,6 +11871,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case reason
     }
@@ -11815,6 +11903,46 @@ public struct ApprovalGetResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case approval
+    }
+}
+
+public struct ApprovalHistoryParams: Codable, Sendable {
+    public let cursor: String?
+    public let limit: Int?
+    public let kind: ApprovalKind?
+
+    public init(
+        cursor: String? = nil,
+        limit: Int? = nil,
+        kind: ApprovalKind? = nil)
+    {
+        self.cursor = cursor
+        self.limit = limit
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cursor
+        case limit
+        case kind
+    }
+}
+
+public struct ApprovalHistoryResult: Codable, Sendable {
+    public let items: [TerminalApprovalSnapshot]
+    public let nextcursor: String?
+
+    public init(
+        items: [TerminalApprovalSnapshot],
+        nextcursor: String? = nil)
+    {
+        self.items = items
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextcursor = "nextCursor"
     }
 }
 
@@ -12349,6 +12477,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let state: AnyCodable
     public let featured: Bool?
     public let order: Double?
+    public let hasicon: Bool?
     public let install: PluginCatalogInstallAction?
     public let error: String?
     public let category: String?
@@ -12367,6 +12496,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         state: AnyCodable,
         featured: Bool? = nil,
         order: Double? = nil,
+        hasicon: Bool? = nil,
         install: PluginCatalogInstallAction? = nil,
         error: String? = nil,
         category: String? = nil,
@@ -12384,6 +12514,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.state = state
         self.featured = featured
         self.order = order
+        self.hasicon = hasicon
         self.install = install
         self.error = error
         self.category = category
@@ -12403,6 +12534,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case state
         case featured
         case order
+        case hasicon = "hasIcon"
         case install
         case error
         case category
@@ -12589,6 +12721,22 @@ public struct PluginsListResult: Codable, Sendable {
         case plugins
         case diagnostics
         case mutationallowed = "mutationAllowed"
+    }
+}
+
+public struct PluginsRefreshParams: Codable, Sendable {}
+
+public struct PluginsRefreshResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
     }
 }
 

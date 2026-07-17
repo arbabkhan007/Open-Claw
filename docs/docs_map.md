@@ -311,6 +311,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
+  - H3: Alternative: manual token
   - H3: Alternative: env-based token
   - H3: JSON5 reference
   - H3: Account config keys
@@ -1565,6 +1566,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Run the Gateway
   - H3: Options
   - H2: Restart the Gateway
+  - H3: External supervisors
   - H3: Gateway profiling
   - H2: Query a running Gateway
   - H3: gateway health
@@ -3855,7 +3857,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: SSH backend
   - H2: OpenShell backend
   - H2: Workspace access
-  - H2: Custom bind mounts
+  - H2: Multiple folders for one agent
+  - H3: Other bind behavior
   - H2: Images and setup
   - H2: setupCommand (one-time container setup)
   - H2: Tool policy and escape hatches
@@ -3987,6 +3990,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Secret scanning
   - H2: Reporting security issues
 
+## gateway/security/rate-limiting.md
+
+- Route: /gateway/security/rate-limiting
+- Headings:
+  - H2: Authentication attempts (pre-auth)
+  - H2: Control-plane writes (post-auth backstop)
+
 ## gateway/security/secure-file-operations.md
 
 - Route: /gateway/security/secure-file-operations
@@ -4114,6 +4124,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Env var substitution in config
   - H2: Secret refs vs ${ENV} strings
   - H2: Path-related env vars
+  - H2: Agent helper tool downloads
   - H2: Logging
   - H3: OPENCLAWHOME
   - H2: nvm users: webfetch TLS failures
@@ -5828,9 +5839,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/llama-cpp
 - Headings:
-  - H2: Configuration
-  - H2: Native Runtime
-  - H2: Runtime diagnostics
+  - H2: Local text inference
+  - H3: Use another GGUF model
+  - H2: Memory embedding configuration
+  - H2: Native runtime
+  - H2: Memory runtime diagnostics
   - H2: Troubleshooting
 
 ## plugins/logbook.md
@@ -6568,6 +6581,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Llama Cpp plugin
   - H2: Distribution
   - H2: Surface
+  - H2: Default text model
   - H2: Related docs
 
 ## plugins/reference/llm-task.md
@@ -7660,7 +7674,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install plugin
   - H2: Getting started
   - H2: Non-interactive setup
-  - H2: Built-in catalog
+  - H2: Direct Arcee catalog
+  - H2: OpenRouter catalog
   - H2: Supported features
   - H2: Related
 
@@ -8239,18 +8254,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config example
   - H2: Related
 
-## providers/qwen-oauth.md
-
-- Route: /providers/qwen-oauth
-- Headings:
-  - H2: Setup
-  - H2: Defaults
-  - H2: How this differs from Qwen
-  - H2: Models
-  - H2: Migration
-  - H2: Troubleshooting
-  - H2: Related
-
 ## providers/qwen.md
 
 - Route: /providers/qwen
@@ -8340,7 +8343,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Privacy modes
   - H2: Getting started
   - H2: Model selection
-  - H2: Built-in catalog (38 models)
+  - H2: Built-in catalog (30 models)
   - H2: Model discovery
   - H2: DeepSeek V4 replay behavior
   - H2: Streaming and tool support
@@ -8740,6 +8743,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Env toggles (one-off debugging)
   - H3: What to inspect
   - H2: Quick troubleshooting
+  - H2: Related
+
+## reference/pull-request-review-flow.md
+
+- Route: /reference/pull-request-review-flow
+- Headings:
+  - H2: Barnacle
+  - H2: ClawSweeper
+  - H2: Improve a PR during review
+  - H2: When automation stays quiet
+  - H2: Troubleshooting
+  - H2: Forking the automation
   - H2: Related
 
 ## reference/release-performance-sweep.md
