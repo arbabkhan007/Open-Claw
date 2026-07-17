@@ -1,12 +1,10 @@
 // Whatsapp plugin module implements quoted message behavior.
 import type { MiscMessageGenerationOptions } from "baileys";
-import { jidToE164 } from "./text-runtime.js";
+import { areSameWhatsAppJid, classifyWhatsAppJid } from "./whatsapp-jid.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────
-// Maps messageId → { participant, participantE164, body, fromMe } so the
-// outbound adapter can
-// populate the quote key with the sender JID and preview text even though
-// the outbound path only receives a bare messageId string.
+// Retains canonical JIDs plus identity facts prepared while mapping context is
+// already available, so outbound quote lookup stays a pure cache operation.
 
 type QuotedMeta = {
   participant?: string;
@@ -14,8 +12,17 @@ type QuotedMeta = {
   body?: string;
   fromMe?: boolean;
 };
-type CacheEntry = QuotedMeta & { ts: number };
+type CacheEntry = QuotedMeta & {
+  /** Prepared direct-chat identity; mapping discovery belongs at message ingestion/send time. */
+  remoteE164?: string;
+  remoteJids?: string[];
+  ts: number;
+};
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
+type QuotedMetaCandidate = QuotedMetaLookup & {
+  remoteE164?: string;
+  remoteJids?: string[];
+};
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENTRIES = 500;
@@ -25,13 +32,42 @@ function makeCacheKey(accountId: string, remoteJid: string, messageId: string): 
   return `${accountId}:${remoteJid}:${messageId}`;
 }
 
+function canonicalizeSupportedJid(jid: string | null | undefined): string | undefined {
+  const classified = classifyWhatsAppJid(jid);
+  return classified.kind === "unsupported" ? undefined : classified.jid;
+}
+
+function canonicalizeComparableE164(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && /^\+\d+$/.test(trimmed) ? trimmed : undefined;
+}
+
+function directPnE164(jid: string | null | undefined): string | undefined {
+  const classified = classifyWhatsAppJid(jid);
+  return classified.kind === "pn" ? `+${classified.user}` : undefined;
+}
+
+export function canonicalizeWhatsAppDirectJids(
+  values: readonly (string | null | undefined)[] | null | undefined,
+): string[] | undefined {
+  const canonical = new Set<string>();
+  for (const value of values ?? []) {
+    const classified = classifyWhatsAppJid(value);
+    if (classified.kind === "pn" || classified.kind === "lid") {
+      canonical.add(classified.jid);
+    }
+  }
+  return canonical.size > 0 ? [...canonical] : undefined;
+}
+
 export function cacheInboundMessageMeta(
   accountId: string,
   remoteJid: string,
   messageId: string,
-  meta: QuotedMeta,
+  meta: QuotedMeta & { remoteE164?: string; remoteJids?: string[] },
 ): void {
-  if (!accountId || !messageId || !remoteJid) {
+  const canonicalRemoteJid = canonicalizeSupportedJid(remoteJid);
+  if (!accountId || !messageId || !canonicalRemoteJid) {
     return;
   }
   if (cache.size >= MAX_ENTRIES) {
@@ -40,7 +76,14 @@ export function cacheInboundMessageMeta(
       cache.delete(oldest);
     }
   }
-  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+  cache.set(makeCacheKey(accountId, canonicalRemoteJid, messageId), {
+    ...meta,
+    participant: canonicalizeSupportedJid(meta.participant),
+    participantE164: canonicalizeComparableE164(meta.participantE164),
+    remoteE164: canonicalizeComparableE164(meta.remoteE164),
+    remoteJids: canonicalizeWhatsAppDirectJids(meta.remoteJids),
+    ts: Date.now(),
+  });
 }
 
 export function lookupInboundMessageMeta(
@@ -48,7 +91,11 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
-  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  const canonicalRemoteJid = canonicalizeSupportedJid(remoteJid);
+  if (!canonicalRemoteJid) {
+    return undefined;
+  }
+  const cacheKey = makeCacheKey(accountId, canonicalRemoteJid, messageId);
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -65,13 +112,8 @@ export function lookupInboundMessageMeta(
   };
 }
 
-function normalizeComparableJid(jid: string | undefined): string | undefined {
-  const normalized = jid?.trim().replace(/:\d+/, "").toLowerCase();
-  return normalized || undefined;
-}
-
 function isGroupJid(jid: string | undefined): boolean {
-  return Boolean(jid && jid.endsWith("@g.us"));
+  return classifyWhatsAppJid(jid).kind === "group";
 }
 
 function areComparableE164sEqual(left: string | undefined, right: string | undefined): boolean {
@@ -83,30 +125,24 @@ function areComparableE164sEqual(left: string | undefined, right: string | undef
   return normalizedLeft === normalizedRight;
 }
 
-function areComparableJidsEqual(left: string | undefined, right: string | undefined): boolean {
-  const normalizedLeft = normalizeComparableJid(left);
-  const normalizedRight = normalizeComparableJid(right);
-  if (!normalizedLeft || !normalizedRight) {
-    return false;
-  }
-  if (normalizedLeft === normalizedRight) {
-    return true;
-  }
-  const leftE164 = jidToE164(normalizedLeft);
-  const rightE164 = jidToE164(normalizedRight);
-  return Boolean(leftE164 && rightE164 && leftE164 === rightE164);
-}
-
-function matchesQuotedConversationTarget(targetJid: string, candidate: QuotedMetaLookup): boolean {
-  if (areComparableJidsEqual(targetJid, candidate.remoteJid)) {
+function matchesQuotedConversationTarget(
+  targetJid: string,
+  candidate: QuotedMetaCandidate,
+): boolean {
+  if (areSameWhatsAppJid(targetJid, candidate.remoteJid)) {
     return true;
   }
   if (isGroupJid(targetJid) || isGroupJid(candidate.remoteJid)) {
     return false;
   }
+  if (candidate.remoteJids?.some((jid) => areSameWhatsAppJid(targetJid, jid))) {
+    return true;
+  }
+  const targetE164 = directPnE164(targetJid);
   return (
-    areComparableJidsEqual(targetJid, candidate.participant) ||
-    areComparableE164sEqual(jidToE164(targetJid) ?? undefined, candidate.participantE164)
+    areSameWhatsAppJid(targetJid, candidate.participant) ||
+    areComparableE164sEqual(targetE164, candidate.remoteE164) ||
+    areComparableE164sEqual(targetE164, candidate.participantE164)
   );
 }
 
@@ -115,13 +151,14 @@ export function lookupInboundMessageMetaForTarget(
   targetJid: string,
   messageId: string,
 ): QuotedMetaLookup | undefined {
-  if (!accountId || !messageId || !targetJid) {
+  const canonicalTargetJid = canonicalizeSupportedJid(targetJid);
+  if (!accountId || !messageId || !canonicalTargetJid) {
     return undefined;
   }
-  const exact = lookupInboundMessageMeta(accountId, targetJid, messageId);
+  const exact = lookupInboundMessageMeta(accountId, canonicalTargetJid, messageId);
   if (exact) {
     return {
-      remoteJid: targetJid,
+      remoteJid: canonicalTargetJid,
       participant: exact.participant,
       participantE164: exact.participantE164,
       body: exact.body,
@@ -130,7 +167,7 @@ export function lookupInboundMessageMetaForTarget(
   }
   const prefix = `${accountId}:`;
   const suffix = `:${messageId}`;
-  let matched: QuotedMetaLookup | undefined;
+  let matched: QuotedMetaCandidate | undefined;
   for (const [cacheKey, entry] of cache.entries()) {
     if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
       continue;
@@ -144,10 +181,12 @@ export function lookupInboundMessageMetaForTarget(
       remoteJid,
       participant: entry.participant,
       participantE164: entry.participantE164,
+      remoteE164: entry.remoteE164,
+      remoteJids: entry.remoteJids,
       body: entry.body,
       fromMe: entry.fromMe,
     };
-    if (!matchesQuotedConversationTarget(targetJid, candidate)) {
+    if (!matchesQuotedConversationTarget(canonicalTargetJid, candidate)) {
       continue;
     }
     if (matched) {
@@ -155,7 +194,15 @@ export function lookupInboundMessageMetaForTarget(
     }
     matched = candidate;
   }
-  return matched;
+  return matched
+    ? {
+        remoteJid: matched.remoteJid,
+        participant: matched.participant,
+        participantE164: matched.participantE164,
+        body: matched.body,
+        fromMe: matched.fromMe,
+      }
+    : undefined;
 }
 
 export function buildQuotedMessageOptions(params: {

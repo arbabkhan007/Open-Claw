@@ -73,6 +73,105 @@ describe("quoted message metadata cache", () => {
     });
   });
 
+  it("canonicalizes device-qualified and c.us cache identities", () => {
+    cacheInboundMessageMeta("account-canonical", "15551230000:2@c.us", "msg-canonical", {
+      participant: "15557654321:3@hosted",
+      body: "canonical",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-canonical",
+        "15551230000@s.whatsapp.net",
+        "msg-canonical",
+      ),
+    ).toEqual({
+      remoteJid: "15551230000@s.whatsapp.net",
+      participant: "15557654321@hosted",
+      participantE164: undefined,
+      body: "canonical",
+      fromMe: undefined,
+    });
+  });
+
+  it("does not match same-digit PN and LID conversations without a mapping", () => {
+    cacheInboundMessageMeta("account-unmapped", "812345678901234@lid", "msg-unmapped", {
+      body: "unmapped lid",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-unmapped",
+        "812345678901234@s.whatsapp.net",
+        "msg-unmapped",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("uses the prepared direct-chat identity for hosted PN/LID quote equivalence", () => {
+    cacheInboundMessageMeta(
+      "account-hosted-map",
+      "277038292303944:2@hosted.lid",
+      "msg-hosted-map",
+      { remoteE164: "+15551230000", body: "mapped hosted lid" },
+    );
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-hosted-map",
+        "15551230000:4@hosted",
+        "msg-hosted-map",
+      ),
+    ).toEqual({
+      remoteJid: "277038292303944@hosted.lid",
+      participant: undefined,
+      participantE164: undefined,
+      body: "mapped hosted lid",
+      fromMe: undefined,
+    });
+  });
+
+  it("uses prepared aliases when a PN-cached message is addressed by LID", () => {
+    cacheInboundMessageMeta("account-reverse-map", "15551230000@hosted", "msg-reverse-map", {
+      remoteE164: "+15551230000",
+      remoteJids: ["15551230000@hosted", "277038292303944@hosted.lid"],
+      body: "mapped hosted PN",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-reverse-map",
+        "277038292303944:7@hosted.lid",
+        "msg-reverse-map",
+      ),
+    ).toEqual({
+      remoteJid: "15551230000@hosted",
+      participant: undefined,
+      participantE164: undefined,
+      body: "mapped hosted PN",
+      fromMe: undefined,
+    });
+  });
+
+  it("rejects ambiguous prepared identity matches", () => {
+    cacheInboundMessageMeta("account-ambiguous", "111111111111111@lid", "msg-ambiguous", {
+      remoteE164: "+15551230000",
+      body: "first",
+    });
+    cacheInboundMessageMeta("account-ambiguous", "222222222222222@lid", "msg-ambiguous", {
+      remoteE164: "+15551230000",
+      body: "second",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-ambiguous",
+        "15551230000@s.whatsapp.net",
+        "msg-ambiguous",
+      ),
+    ).toBeUndefined();
+  });
+
   it("lets Baileys encode the self participant for a cached outbound quote (#91445)", () => {
     const remoteJid = "120363400000000000@g.us";
     const userJid = "15551112222@s.whatsapp.net";

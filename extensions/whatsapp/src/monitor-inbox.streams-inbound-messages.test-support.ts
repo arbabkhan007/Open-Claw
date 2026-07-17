@@ -29,7 +29,7 @@ import {
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
-import { lookupInboundMessageMeta } from "./quoted-message.js";
+import { lookupInboundMessageMeta, lookupInboundMessageMetaForTarget } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -331,6 +331,31 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
+
+  it.each(["status@broadcast", "123@broadcast", "120363401234567890@newsletter"])(
+    "ignores unsupported inbound conversation JID %s",
+    async (remoteJid) => {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("unsupported-conversation"),
+          remoteJid,
+          participant: "999@s.whatsapp.net",
+          text: "status content",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await settleInboundWork();
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+      await listener.close();
+    },
+  );
 
   it("delays read receipts until inbound handlers complete", async () => {
     let finishMessage: (() => void) | undefined;
@@ -1145,6 +1170,32 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it.each([
+    "15551230000:2@s.whatsapp.net",
+    "15551230000:3@c.us",
+    "15551230000:4@hosted",
+    "277038292303944:5@lid",
+    "277038292303944:6@hosted.lid",
+  ])("applies the reachout timelock to canonical direct JID %s", async (target) => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage(target, "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("uses connection.update reachout timelock state before direct sends", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -1802,14 +1853,103 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it.each([
+    ["15551234567:2@c.us", "+15551234567"],
+    ["15557654321:3@hosted", "+15557654321"],
+  ])("normalizes direct inbound JID %s", async (remoteJid, expectedConversationId) => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("direct-domain"),
+      remoteJid,
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(inboundMessage(onMessage).admission?.conversation.id).toBe(expectedConversationId);
+    await listener.close();
+  });
+
+  it("caches Baileys direct-chat aliases without discovering mappings", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const getLIDForPN = vi.spyOn(sock.signalRepository.lidMapping, "getLIDForPN");
+    getLIDForPN.mockRejectedValue(new Error("inbound delivery must not discover aliases"));
+    const messageId = nextMessageId("prepared-direct-alias");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "15551234567:2@s.whatsapp.net",
+        remoteJidAlt: "812345678901234:2@lid",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(getLIDForPN).not.toHaveBeenCalled();
+    expect(
+      lookupInboundMessageMetaForTarget(DEFAULT_ACCOUNT_ID, "812345678901234@lid", messageId),
+    ).toMatchObject({
+      remoteJid: "15551234567@s.whatsapp.net",
+      body: "ping",
+    });
+
+    await listener.close();
+  });
+
+  it("uses Baileys' prepared PN alias for LID-addressed inbound messages", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
+    getPNForLID.mockRejectedValue(new Error("prepared aliases must avoid mapping discovery"));
+    const messageId = nextMessageId("prepared-pn-alias");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "812345678901234:2@lid",
+        remoteJidAlt: "15551234567:2@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(getPNForLID).not.toHaveBeenCalled();
+    expect(inboundMessage(onMessage).admission?.conversation.id).toBe("+15551234567");
+    expect(
+      lookupInboundMessageMetaForTarget(
+        DEFAULT_ACCOUNT_ID,
+        "15551234567@s.whatsapp.net",
+        messageId,
+      ),
+    ).toMatchObject({
+      remoteJid: "812345678901234@lid",
+      body: "ping",
+    });
+
+    await listener.close();
+  });
+
   it("resolves LID JIDs using Baileys LID mapping store", async () => {
     const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("999:0@s.whatsapp.net");
+    const messageId = nextMessageId("lid-store");
     const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("lid-store"),
+      id: messageId,
       remoteJid: "999@lid",
       text: "ping",
       timestamp: 1_700_000_000,
@@ -1824,6 +1964,12 @@ describe("web monitor inbox", () => {
     expect(inbound.payload.body).toBe("ping");
     expect(inbound.admission?.conversation.id).toBe("+999");
     expect(inbound.platform.recipientJid).toBe("+123");
+    expect(
+      lookupInboundMessageMetaForTarget(DEFAULT_ACCOUNT_ID, "999@s.whatsapp.net", messageId),
+    ).toMatchObject({
+      remoteJid: "999@lid",
+      body: "ping",
+    });
 
     await listener.close();
   });
