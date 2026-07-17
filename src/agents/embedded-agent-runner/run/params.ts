@@ -268,6 +268,12 @@ export type RunEmbeddedAgentParams = {
     backend?: string;
   }) => void;
   onSessionIdChanged?: (sessionId: string) => void;
+  onSessionResetCommitted?: (commit: {
+    key: string;
+    sessionId: string;
+    reason: "new" | "reset";
+    agentId?: string;
+  }) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;

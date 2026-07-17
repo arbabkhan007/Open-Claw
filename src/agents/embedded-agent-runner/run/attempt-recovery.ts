@@ -162,6 +162,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     thinkLevel: runtime.thinkLevel,
     authProfileId: runtime.lastProfileId,
     authProfileIdSource: preparedRuntime.lockedProfileId ? ("user" as const) : ("auto" as const),
+    deferEmbeddedHookSessionReset: runInput.deferEmbeddedHookSessionReset,
     resolveContextEnginePluginId: input.resolveContextEnginePluginId,
     buildRuntimeSettings: input.buildRuntimeSettings,
     ...compactionRuntime,

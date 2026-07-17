@@ -178,9 +178,18 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: {
+          tools: {
+            loopDetection: {
+              enabled: true,
+            },
+          },
+        } as never,
+      }),
+    ).rejects.toBeInstanceOf(PostCompactionLoopPersistedError);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
@@ -207,6 +216,15 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           abortSignal?: AbortSignal;
           onToolOutcome?: ToolOutcomeObserver;
         };
+        const markAttemptAborted = () => {
+          attemptAborted = abortSignal?.aborted ?? false;
+          resolveAttemptAborted?.();
+        };
+        if (abortSignal?.aborted) {
+          markAttemptAborted();
+        } else {
+          abortSignal?.addEventListener("abort", markAttemptAborted, { once: true });
+        }
         for (let i = 0; i < 3; i += 1) {
           await executeWrappedToolOutcome(
             "gateway",
@@ -215,8 +233,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
             onToolOutcome,
           );
         }
-        attemptAborted = abortSignal?.aborted ?? false;
-        resolveAttemptAborted?.();
         return await new Promise((resolve) => {
           settleIgnoredAttempt = resolve;
         });
@@ -233,6 +249,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         ...baseParams,
         runId: "run-post-compaction-abort-lane-release",
         timeoutMs: 48 * 60 * 60 * 1000,
+        config: { tools: { loopDetection: { enabled: true } } } as never,
       });
       let settled = false;
       void run
@@ -464,6 +481,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       config: {
         tools: {
           loopDetection: {
+            enabled: true,
             postCompactionGuard: { windowSize: 2 },
           },
         },
@@ -512,6 +530,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       config: {
         tools: {
           loopDetection: {
+            enabled: true,
             postCompactionGuard: { windowSize: 2 },
           },
         },
@@ -635,9 +654,12 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        config: { tools: { loopDetection: { enabled: true } } } as never,
+      }),
+    ).rejects.toBeInstanceOf(PostCompactionLoopPersistedError);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);

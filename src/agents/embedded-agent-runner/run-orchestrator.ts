@@ -6,6 +6,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -34,6 +35,7 @@ import {
 } from "../session-suspension.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
+import { createEmbeddedHookSessionResetQueue } from "./compaction-hook-reset-api.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -237,6 +239,7 @@ async function runEmbeddedAgentInternal(
       });
       const resolvedSessionKey =
         normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
+      const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
@@ -256,53 +259,79 @@ async function runEmbeddedAgentInternal(
           channelContext: params.channelContext,
         }),
       };
-      const hookResult = await runBeforeAgentReplyForTurn({
-        runId: params.runId,
-        trigger: params.trigger,
-        event: { cleanedBody: params.prompt },
-        context: hookCtx,
-        onDispatch: () => notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
-        onDeclined: () => notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
-      });
-      if (hookResult?.handled) {
-        return {
-          payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-          meta: {
-            durationMs: Date.now() - started,
-            agentMeta: {
-              sessionId: params.sessionId,
-              provider,
-              model: modelId,
+      try {
+        const hookResult = await runBeforeAgentReplyForTurn({
+          runId: params.runId,
+          trigger: params.trigger,
+          event: { cleanedBody: params.prompt },
+          context: hookCtx,
+          onDispatch: () =>
+            notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
+          onDeclined: () => notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
+        });
+        if (hookResult?.handled) {
+          return {
+            payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+            meta: {
+              durationMs: Date.now() - started,
+              agentMeta: {
+                sessionId: params.sessionId,
+                provider,
+                model: modelId,
+              },
+              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
             },
-            finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-            finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-          },
-        };
-      }
+          };
+        }
 
-      return executePreparedEmbeddedRun({
-        runParams: params,
-        provider,
-        modelId,
-        agentDir,
-        workspaceResolution,
-        workspaceDir: resolvedWorkspace,
-        isCanonicalWorkspace,
-        globalLane,
-        hookRunner,
-        hookContext: hookCtx,
-        fallbackConfigured,
-        isProbeSession,
-        resolvedSessionKey,
-        resolvedToolResultFormat,
-        startedAtMs: started,
-        startupStages,
-        emitStartupStageSummary,
-        progressController,
-        laneController,
-        lifecycleGeneration,
-        suspendForFailure,
-      });
+        return await executePreparedEmbeddedRun({
+          runParams: params,
+          provider,
+          modelId,
+          agentDir,
+          workspaceResolution,
+          workspaceDir: resolvedWorkspace,
+          isCanonicalWorkspace,
+          globalLane,
+          hookRunner,
+          hookContext: hookCtx,
+          fallbackConfigured,
+          isProbeSession,
+          resolvedSessionKey,
+          resolvedToolResultFormat,
+          startedAtMs: started,
+          startupStages,
+          emitStartupStageSummary,
+          progressController,
+          laneController,
+          lifecycleGeneration,
+          suspendForFailure,
+          deferEmbeddedHookSessionReset: (request) =>
+            hookSessionResetQueue.deferResetSession({
+              ...request,
+              assertCurrent:
+                request.assertCurrent ??
+                (() => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)),
+              onCommitted: (commit) => {
+                request.onCommitted?.(commit);
+                params.onSessionIdChanged?.(commit.sessionId);
+                params.onSessionResetCommitted?.({
+                  key: commit.key,
+                  sessionId: commit.sessionId,
+                  reason: request.reason,
+                  ...(request.agentId
+                    ? { agentId: request.agentId }
+                    : commit.key === "global"
+                      ? { agentId: workspaceResolution.agentId }
+                      : {}),
+                });
+              },
+            }),
+        });
+      } finally {
+        await hookSessionResetQueue.flush();
+      }
     });
   }).finally(() => {
     revokeMessageActionTurnCapability(recoveryMessageActionTurnCapability);

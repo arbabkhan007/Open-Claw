@@ -523,6 +523,41 @@ describe("openclaw agent database", () => {
     ).toEqual({ schema_version: 11 });
   });
 
+  it("opens accidental schema version 12 databases without downgrading metadata", () => {
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(11);
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const accidentalV12 = new DatabaseSync(databasePath);
+    accidentalV12.exec(`
+      PRAGMA user_version = 12;
+      UPDATE schema_meta SET schema_version = 12 WHERE meta_key = 'primary';
+    `);
+    accidentalV12.close();
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(12);
+    expect(
+      reopened.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: 12 });
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.path === databasePath),
+    ).toMatchObject({ agentId: "worker-1", schemaVersion: 12 });
+    expect(() =>
+      assertOpenClawAgentDatabaseForMaintenance(reopened.db, {
+        agentId: "worker-1",
+        pathname: databasePath,
+      }),
+    ).not.toThrow();
+  });
+
   it("upgrades version 10 with agent state intact and adds lease storage", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -1159,7 +1194,7 @@ describe("openclaw agent database", () => {
       databasePath,
       stateDir,
     });
-    const futureVersion = OPENCLAW_AGENT_SCHEMA_VERSION + 1;
+    const futureVersion = OPENCLAW_AGENT_SCHEMA_VERSION + 2;
     try {
       await opener.ready;
       opener.child.stdin.end("go\n");
@@ -2134,7 +2169,8 @@ describe("openclaw agent database", () => {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
-    db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+    const futureVersion = OPENCLAW_AGENT_SCHEMA_VERSION + 2;
+    db.exec(`PRAGMA user_version = ${futureVersion};`);
     db.close();
 
     expect(() =>
@@ -2143,7 +2179,7 @@ describe("openclaw agent database", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toThrow(
-      `OpenClaw agent database ${databasePath} uses newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}; this OpenClaw build supports ${OPENCLAW_AGENT_SCHEMA_VERSION}. Upgrade OpenClaw before opening this database. Do not downgrade OpenClaw or modify the database. To run this older build, use a separate state directory or restore a compatible backup.`,
+      `OpenClaw agent database ${databasePath} uses newer schema version ${futureVersion}; this OpenClaw build supports ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}. Upgrade OpenClaw before opening this database. Do not downgrade OpenClaw or modify the database. To run this older build, use a separate state directory or restore a compatible backup.`,
     );
   });
 

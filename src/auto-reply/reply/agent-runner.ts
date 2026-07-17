@@ -301,7 +301,10 @@ function resolveReplyRunDeliveryContext(params: {
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: {
+    didStream: () => boolean;
+    isAborted: () => boolean;
+  } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -349,7 +352,11 @@ function resolveConfiguredFallbackModel(params: {
     const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
     const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
     if (originProvider && originModel) {
-      return { provider: originProvider, model: originModel, persistedAutoFallback: true };
+      return {
+        provider: originProvider,
+        model: originModel,
+        persistedAutoFallback: true,
+      };
     }
   }
   return {
@@ -717,7 +724,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
   if (userChars > 0) {
     addChars("user_message", userChars);
   }
-  const result = Array.from(segments.entries()).map(([key, chars]) => ({ key, chars }));
+  const result = Array.from(segments.entries()).map(([key, chars]) => ({
+    key,
+    chars,
+  }));
   return result.length > 0 ? result : undefined;
 }
 
@@ -1109,7 +1119,9 @@ function enqueueCommitmentExtractionForTurn(params: {
     userText,
     assistantText,
     ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
+      ? {
+          sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+        }
       : {}),
     sourceRunId: params.runId,
   });
@@ -1420,7 +1432,9 @@ export async function runReplyAgent(params: {
           : {}),
         taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
         ...(followupRun.userTurnTranscriptRecorder
-          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+          ? {
+              userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder,
+            }
           : {}),
       },
     );
@@ -1499,7 +1513,10 @@ export async function runReplyAgent(params: {
 
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
+      replyOperationRunState.admission = {
+        status: "skipped",
+        reason: "active-run",
+      };
     }
     typing.cleanup();
     return undefined;
@@ -1777,6 +1794,34 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  let replyResetCommitted = false;
+  let replyResetPreviousSessionId: string | undefined;
+  const refreshReplySessionState = (previousSessionId: string | undefined): void => {
+    const refreshedEntry =
+      storePath && sessionKey
+        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
+        : activeSessionEntry;
+    if (!refreshedEntry) {
+      return;
+    }
+    activeSessionEntry = refreshedEntry;
+    if (activeSessionStore && sessionKey) {
+      activeSessionStore[sessionKey] = refreshedEntry;
+    }
+    followupRun.run.sessionId = refreshedEntry.sessionId;
+    replyOperation.updateSessionId(refreshedEntry.sessionId);
+    if (refreshedEntry.sessionFile) {
+      followupRun.run.sessionFile = refreshedEntry.sessionFile;
+    }
+    if (previousSessionId) {
+      refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId,
+        nextSessionId: refreshedEntry.sessionId,
+        nextSessionFile: refreshedEntry.sessionFile,
+      });
+    }
+  };
   let preflightCompactionApplied;
 
   try {
@@ -1831,6 +1876,7 @@ export async function runReplyAgent(params: {
           isHeartbeat,
           replyOperation,
           onCompactionNotice: sendDirectCompactionNotice,
+          onSessionMetadataChanges: opts?.onSessionMetadataChanges,
         }),
       );
       preflightCompactionApplied =
@@ -1980,6 +2026,17 @@ export async function runReplyAgent(params: {
             toolProgressDetail,
             replyMediaContext,
             isRestartRecoveryArmed,
+            onSessionResetCommitted: (commit) => {
+              replyResetCommitted = true;
+              replyResetPreviousSessionId = followupRun.run.sessionId;
+              opts?.onSessionMetadataChanges?.([
+                {
+                  sessionKey: commit.key,
+                  ...(commit.agentId ? { agentId: commit.agentId } : {}),
+                  reason: commit.reason,
+                },
+              ]);
+            },
           }),
         ),
     );
@@ -2007,6 +2064,7 @@ export async function runReplyAgent(params: {
 
     if (
       shouldInjectGroupIntro &&
+      !replyResetCommitted &&
       activeSessionEntry &&
       activeSessionStore &&
       sessionKey &&
@@ -2123,7 +2181,12 @@ export async function runReplyAgent(params: {
       state: fallbackStateEntry,
       cfg,
     });
-    if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
+    if (
+      fallbackTransition.stateChanged &&
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      !replyResetCommitted
+    ) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -2176,27 +2239,29 @@ export async function runReplyAgent(params: {
       }) ??
       DEFAULT_CONTEXT_TOKENS;
 
-    await persistRunSessionUsage({
-      storePath,
-      sessionKey,
-      cfg,
-      usage,
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-      promptTokens,
-      usageIsContextSnapshot: usedCliProvider ? true : undefined,
-      isHeartbeat,
-      preserveRuntimeModel: fallbackExhausted,
-      preserveUserFacingSessionModelState: preserveUserFacingSessionState,
-      modelUsed,
-      providerUsed,
-      contextTokensUsed,
-      systemPromptReport: runResult.meta?.systemPromptReport,
-      cliSessionId,
-      cliSessionBinding,
-      clearCliSessionBinding,
-      preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
-    });
+    if (!replyResetCommitted) {
+      await persistRunSessionUsage({
+        storePath,
+        sessionKey,
+        cfg,
+        usage,
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+        promptTokens,
+        usageIsContextSnapshot: usedCliProvider ? true : undefined,
+        isHeartbeat,
+        preserveRuntimeModel: fallbackExhausted,
+        preserveUserFacingSessionModelState: preserveUserFacingSessionState,
+        modelUsed,
+        providerUsed,
+        contextTokensUsed,
+        systemPromptReport: runResult.meta?.systemPromptReport,
+        cliSessionId,
+        cliSessionBinding,
+        clearCliSessionBinding,
+        preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
+      });
+    }
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
@@ -2628,34 +2693,42 @@ export async function runReplyAgent(params: {
     const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+      prefixNotices.push({
+        text: `🧭 New session: ${followupRun.run.sessionId}`,
+      });
     }
 
     if (autoCompactionCount > 0) {
       const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
-      const count = await incrementRunCompactionCount({
-        cfg,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        storePath,
-        amount: autoCompactionCount,
-        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-        contextTokensUsed,
-        newSessionId: runResult.meta?.agentMeta?.sessionId,
-        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
-      });
-      const refreshedSessionEntry =
-        sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
-      if (refreshedSessionEntry) {
-        activeSessionEntry = refreshedSessionEntry;
-        refreshQueuedFollowupSession({
-          key: queueKey,
-          previousSessionId,
-          nextSessionId: refreshedSessionEntry.sessionId,
-          nextSessionFile: refreshedSessionEntry.sessionFile,
+      let count: number | undefined;
+      if (replyResetCommitted) {
+        refreshReplySessionState(replyResetPreviousSessionId ?? previousSessionId);
+        count = activeSessionEntry?.compactionCount;
+      } else {
+        count = await incrementRunCompactionCount({
+          cfg,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+          amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          contextTokensUsed,
+          newSessionId: runResult.meta?.agentMeta?.sessionId,
+          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
+        const refreshedSessionEntry =
+          sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
+        if (refreshedSessionEntry) {
+          activeSessionEntry = refreshedSessionEntry;
+          refreshQueuedFollowupSession({
+            key: queueKey,
+            previousSessionId,
+            nextSessionId: refreshedSessionEntry.sessionId,
+            nextSessionFile: refreshedSessionEntry.sessionFile,
+          });
+        }
       }
 
       // Inject post-compaction workspace context for the next agent turn
@@ -2750,7 +2823,9 @@ export async function runReplyAgent(params: {
         ? { sessionCompactions: activeSessionEntry.compactionCount }
         : {}),
       ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
-        ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
+        ? {
+            lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions,
+          }
         : typeof runResult.meta?.agentMeta?.compactionCount === "number"
           ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
           : {}),

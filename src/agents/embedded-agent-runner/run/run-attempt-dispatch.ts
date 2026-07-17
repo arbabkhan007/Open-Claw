@@ -83,7 +83,10 @@ type AttemptControl = {
   onUserMessagePersistenceInvalidated: NonNullable<
     EmbeddedRunAttemptParams["onUserMessagePersistenceInvalidated"]
   >;
-  getPostCompactionAbortError: () => Error | undefined;
+  deferEmbeddedHookSessionReset: NonNullable<
+    EmbeddedRunAttemptParams["deferEmbeddedHookSessionReset"]
+  >;
+  getToolOutcomeAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
 };
@@ -200,6 +203,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionTarget: runtime.sessionTarget,
     trajectorySessionFile: runtime.trajectorySessionFile,
     trajectoryRecorder: runtime.trajectoryRecorder,
+    deferEmbeddedHookSessionReset: control.deferEmbeddedHookSessionReset,
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,
@@ -362,7 +366,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   })
     .catch((err: unknown): never => {
-      throw control.getPostCompactionAbortError() ?? err;
+      throw control.getToolOutcomeAbortError() ?? err;
     })
     .finally(() => {
       clearAttemptTimeoutRelease();
@@ -371,9 +375,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
       control.clearPostCompactionAbortController(attemptAbortController);
     });
 
-  const postCompactionAbortError = control.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
+  const toolOutcomeAbortError = control.getToolOutcomeAbortError();
+  if (toolOutcomeAbortError) {
+    throw toolOutcomeAbortError;
   }
   return { rawAttempt, cancellationRequested };
 }

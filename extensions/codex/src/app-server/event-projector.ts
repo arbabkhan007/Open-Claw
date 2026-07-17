@@ -82,6 +82,13 @@ type CodexAppServerEventProjectorOptions = {
   upstreamUserText?: string;
 };
 
+type CodexAppServerDeferredHookSessionReset = Parameters<
+  typeof runAgentHarnessAfterCompactionHook
+>[0]["ctx"]["deferEmbeddedHookSessionReset"];
+type CodexAppServerInternalAttemptParams = EmbeddedRunAttemptParams & {
+  deferEmbeddedHookSessionReset?: CodexAppServerDeferredHookSessionReset;
+};
+
 export class CodexAppServerEventProjector {
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
@@ -105,7 +112,7 @@ export class CodexAppServerEventProjector {
   private completedCompactionCount = 0;
 
   constructor(
-    private readonly params: EmbeddedRunAttemptParams,
+    private readonly params: CodexAppServerInternalAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
@@ -484,6 +491,7 @@ export class CodexAppServerEventProjector {
           runId: this.params.runId,
           agentId: this.params.agentId,
           sessionKey: this.params.sessionKey,
+          resetSessionKey: this.params.sessionKey,
           sessionId: this.params.sessionId,
           workspaceDir: this.params.workspaceDir,
           messageProvider: this.params.messageProvider ?? undefined,
@@ -537,11 +545,14 @@ export class CodexAppServerEventProjector {
           runId: this.params.runId,
           agentId: this.params.agentId,
           sessionKey: this.params.sessionKey,
+          resetSessionKey: this.params.sessionKey,
           sessionId: this.params.sessionId,
           workspaceDir: this.params.workspaceDir,
           messageProvider: this.params.messageProvider ?? undefined,
           trigger: this.params.trigger,
           channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+          modelSelectionLocked: this.params.modelSelectionLocked,
+          deferEmbeddedHookSessionReset: this.params.deferEmbeddedHookSessionReset,
         },
       });
       this.emitAgentEvent({

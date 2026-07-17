@@ -18,6 +18,10 @@ import { isStrictAgenticExecutionContractActive } from "../execution-contract.js
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
+import {
+  createLiveToolFailureLoopGuard,
+  LiveToolFailureLoopError,
+} from "./live-tool-failure-loop-guard.js";
 import { log } from "./logger.js";
 import {
   createPostCompactionLoopGuard,
@@ -70,6 +74,7 @@ export async function runPreparedEmbeddedLoop(
     startupStages,
     lifecycleGeneration,
     suspendForFailure,
+    deferEmbeddedHookSessionReset,
   } = input;
   const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
@@ -195,10 +200,16 @@ export async function runPreparedEmbeddedLoop(
   });
   const postCompactionGuard = createPostCompactionLoopGuard(
     resolvedLoopDetectionConfig?.postCompactionGuard,
-    { enabled: resolvedLoopDetectionConfig?.enabled !== false },
+    { enabled: resolvedLoopDetectionConfig?.enabled === true },
   );
+  const liveToolFailureGuard = createLiveToolFailureLoopGuard(resolvedLoopDetectionConfig, {
+    enabled: resolvedLoopDetectionConfig?.enabled === true,
+  });
   let postCompactionAbortController: AbortController | undefined;
-  let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+  let toolOutcomeAbortError:
+    | PostCompactionLoopPersistedError
+    | LiveToolFailureLoopError
+    | undefined;
   const attemptTerminalToolPresentation = {
     ordinal: -1,
     value: undefined as string | undefined,
@@ -217,11 +228,18 @@ export async function runPreparedEmbeddedLoop(
     if (observation.presentationOnly) {
       return;
     }
+    const liveFailureVerdict = liveToolFailureGuard.observe(observation);
+    if (liveFailureVerdict.shouldAbort) {
+      toolOutcomeAbortError ??= LiveToolFailureLoopError.fromVerdict(liveFailureVerdict);
+      laneTaskAbortController.abort(toolOutcomeAbortError);
+      postCompactionAbortController?.abort(toolOutcomeAbortError);
+      return;
+    }
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
-      postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
-      laneTaskAbortController.abort(postCompactionAbortError);
-      postCompactionAbortController?.abort(postCompactionAbortError);
+      toolOutcomeAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+      laneTaskAbortController.abort(toolOutcomeAbortError);
+      postCompactionAbortController?.abort(toolOutcomeAbortError);
     }
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
@@ -267,6 +285,7 @@ export async function runPreparedEmbeddedLoop(
       hookRunner,
       hookContext: hookCtx,
       sessionPromptState,
+      deferEmbeddedHookSessionReset,
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
@@ -332,7 +351,7 @@ export async function runPreparedEmbeddedLoop(
         resolveRuntimeFallbackReason,
         observeToolOutcome,
         allocateToolOutcomeOrdinal,
-        getPostCompactionAbortError: () => postCompactionAbortError,
+        getToolOutcomeAbortError: () => toolOutcomeAbortError,
         setPostCompactionAbortController: (controller) => {
           postCompactionAbortController = controller;
         },
@@ -361,6 +380,9 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason,
       });
       if (normalizedAttempt.action === "complete") {
+        if (toolOutcomeAbortError) {
+          throw toolOutcomeAbortError;
+        }
         return normalizedAttempt.result;
       }
       if (normalizedAttempt.action === "retry") {

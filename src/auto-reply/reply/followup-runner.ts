@@ -437,7 +437,11 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
+    options: {
+      kind?: ReplyDispatchKind;
+      mirror?: boolean;
+      runId?: string;
+    } = {},
   ): Promise<boolean> => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -619,6 +623,46 @@ export function createFollowupRunner(params: {
       let activeSessionEntry =
         (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ??
         (replySessionKey === sessionKey ? sessionEntry : undefined);
+      const loadCurrentFollowupSessionEntry = () => {
+        if (!replySessionKey) {
+          return activeSessionEntry;
+        }
+        if (storePath) {
+          return loadSessionEntry({
+            storePath,
+            sessionKey: replySessionKey,
+            readConsistency: "latest",
+          });
+        }
+        return sessionStore?.[replySessionKey] ?? activeSessionEntry;
+      };
+      const refreshFollowupSessionState = (previousSessionId?: string) => {
+        const updatedEntry = loadCurrentFollowupSessionEntry();
+        if (!updatedEntry) {
+          return;
+        }
+        activeSessionEntry = updatedEntry;
+        if (replySessionKey && sessionStore) {
+          sessionStore[replySessionKey] = updatedEntry;
+        }
+        run = {
+          ...run,
+          sessionId: updatedEntry.sessionId,
+          ...(updatedEntry.sessionFile ? { sessionFile: updatedEntry.sessionFile } : {}),
+          modelSelectionLocked: updatedEntry.modelSelectionLocked === true,
+        };
+        effectiveQueued = { ...effectiveQueued, run };
+        replyOperation?.updateSessionId(updatedEntry.sessionId);
+        const queueKey = run.sessionKey ?? sessionKey;
+        if (queueKey && previousSessionId && previousSessionId !== updatedEntry.sessionId) {
+          refreshQueuedFollowupSession({
+            key: queueKey,
+            previousSessionId,
+            nextSessionId: updatedEntry.sessionId,
+            nextSessionFile: updatedEntry.sessionFile,
+          });
+        }
+      };
       run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
         run,
         entry: activeSessionEntry,
@@ -781,6 +825,8 @@ export function createFollowupRunner(params: {
         }),
       );
       let autoCompactionCount = 0;
+      let followupResetCommitted = false;
+      let followupResetPreviousSessionId: string | undefined;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
@@ -861,6 +907,7 @@ export function createFollowupRunner(params: {
           isHeartbeat: opts?.isHeartbeat === true,
           replyOperation,
           onCompactionNotice: notifyPreflightCompaction,
+          onSessionMetadataChanges: opts?.onSessionMetadataChanges,
         });
         preflightCompactionApplied =
           (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
@@ -1158,7 +1205,11 @@ export function createFollowupRunner(params: {
                     resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                 });
                 let droppedCliSessionReplacement = false;
-                pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
+                pendingLifecycleTerminal = {
+                  provider,
+                  model,
+                  backstop: lifecycleBackstop,
+                };
                 const followupCurrentMessageId = resolveFollowupCurrentMessageId();
                 const cliToolSummaryTracker = createCliToolSummaryTracker({
                   detailMode: toolProgressDetail,
@@ -1221,7 +1272,11 @@ export function createFollowupRunner(params: {
                         const presentationPromise = forwardFollowupProgressEvent({
                           evt: {
                             stream: "tool",
-                            data: { name: payload.name, phase: payload.phase, args: payload.args },
+                            data: {
+                              name: payload.name,
+                              phase: payload.phase,
+                              args: payload.args,
+                            },
                           },
                           opts: progressOpts,
                           detailMode: toolProgressDetail,
@@ -1238,7 +1293,11 @@ export function createFollowupRunner(params: {
                               await forwardFollowupProgressEvent({
                                 evt: {
                                   stream: "item",
-                                  data: { kind: "preamble", progressText: text, itemId },
+                                  data: {
+                                    kind: "preamble",
+                                    progressText: text,
+                                    itemId,
+                                  },
                                 },
                                 opts: progressOpts,
                                 detailMode: toolProgressDetail,
@@ -1384,7 +1443,11 @@ export function createFollowupRunner(params: {
                 resolveTerminationFields: (error) =>
                   resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
               });
-              pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
+              pendingLifecycleTerminal = {
+                provider,
+                model,
+                backstop: lifecycleBackstop,
+              };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
               const runSessionTarget =
                 storePath && run.sessionKey
@@ -1483,6 +1546,17 @@ export function createFollowupRunner(params: {
                     lifecycleGeneration = info.lifecycleGeneration;
                   }
                 },
+                onSessionResetCommitted: (commit) => {
+                  followupResetCommitted = true;
+                  followupResetPreviousSessionId = run.sessionId;
+                  opts?.onSessionMetadataChanges?.([
+                    {
+                      sessionKey: commit.key,
+                      ...(commit.agentId ? { agentId: commit.agentId } : {}),
+                      reason: commit.reason,
+                    },
+                  ]);
+                },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -1511,7 +1585,10 @@ export function createFollowupRunner(params: {
                       notifyUserAboutCompaction: shouldNotifyUserAboutCompaction(runtimeConfig),
                       currentMessageId: compactionNoticeReplyToId,
                       onCompactionNoticePayload: (payload) =>
-                        sendCompactionNoticePayload(payload, { provider, modelId: model }),
+                        sendCompactionNoticePayload(payload, {
+                          provider,
+                          modelId: model,
+                        }),
                     });
                     if (visible && hasFailedFollowupProgressEvent(evt)) {
                       markVisibleToolErrorProgress();
@@ -1537,6 +1614,9 @@ export function createFollowupRunner(params: {
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         fallbackExhausted = fallbackResult.outcome === "exhausted";
+        if (followupResetCommitted) {
+          refreshFollowupSessionState(followupResetPreviousSessionId);
+        }
         const settledLifecycleTerminal =
           pendingLifecycleTerminal?.provider === fallbackProvider &&
           pendingLifecycleTerminal.model === fallbackModel
@@ -1789,7 +1869,7 @@ export function createFollowupRunner(params: {
         }
         return true;
       };
-      if (storePath && replySessionKey) {
+      if (storePath && replySessionKey && !followupResetCommitted) {
         await persistRunSessionUsage({
           storePath,
           sessionKey: replySessionKey,
@@ -1967,30 +2047,36 @@ export function createFollowupRunner(params: {
       }
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
-        const count = await incrementRunCompactionCount({
-          cfg: runtimeConfig,
-          sessionEntry: activeSessionEntry,
-          sessionStore,
-          sessionKey: replySessionKey,
-          storePath,
-          amount: autoCompactionCount,
-          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-          contextTokensUsed,
-          newSessionId: runResult.meta?.agentMeta?.sessionId,
-          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
-        });
-        const refreshedSessionEntry =
-          replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
-        if (refreshedSessionEntry) {
-          const queueKey = run.sessionKey ?? sessionKey;
-          if (queueKey) {
-            refreshQueuedFollowupSession({
-              key: queueKey,
-              previousSessionId,
-              nextSessionId: refreshedSessionEntry.sessionId,
-              nextSessionFile: refreshedSessionEntry.sessionFile,
-            });
+        let count: number | undefined;
+        if (followupResetCommitted) {
+          refreshFollowupSessionState(followupResetPreviousSessionId ?? previousSessionId);
+          count = activeSessionEntry?.compactionCount;
+        } else {
+          count = await incrementRunCompactionCount({
+            cfg: runtimeConfig,
+            sessionEntry: activeSessionEntry,
+            sessionStore,
+            sessionKey: replySessionKey,
+            storePath,
+            amount: autoCompactionCount,
+            compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+            lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+            contextTokensUsed,
+            newSessionId: runResult.meta?.agentMeta?.sessionId,
+            newSessionFile: runResult.meta?.agentMeta?.sessionFile,
+          });
+          const refreshedSessionEntry =
+            replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
+          if (refreshedSessionEntry) {
+            const queueKey = run.sessionKey ?? sessionKey;
+            if (queueKey) {
+              refreshQueuedFollowupSession({
+                key: queueKey,
+                previousSessionId,
+                nextSessionId: refreshedSessionEntry.sessionId,
+                nextSessionFile: refreshedSessionEntry.sessionFile,
+              });
+            }
           }
         }
         if (shouldEmitVerboseProgress()) {

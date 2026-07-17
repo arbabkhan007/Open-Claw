@@ -1,6 +1,7 @@
 // Model-backed compaction request construction.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { DeferEmbeddedHookSessionReset } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
@@ -18,6 +19,7 @@ export async function runGatewaySessionCompaction(params: {
   sessionKey: string;
   sessionStoreKey: string;
   storePath: string;
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
 }): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
   const transcriptTarget = await resolveSessionTranscriptRuntimeTarget({
     agentId: params.agentId,
@@ -71,5 +73,6 @@ export async function runGatewaySessionCompaction(params: {
       defaultLevel: "off",
     },
     trigger: "manual",
+    deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
   });
 }
