@@ -446,4 +446,30 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
     expect(client["request"]).not.toHaveBeenCalled();
   });
+
+  it("cancels a non-OK direct-upload response body before throwing", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    const response = new Response(Buffer.from("error body"), { status: 503 });
+    const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release: vi.fn(async () => {}),
+    });
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    await expect(
+      api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://cdn.example.com/error.png" },
+      ),
+    ).rejects.toThrow("Direct-upload media URL returned HTTP 503");
+
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+  });
 });
