@@ -46,9 +46,9 @@ class ControlledWebSocket implements WebSocketLike {
     this.closeCalls++;
   }
 
-  emitClose(): void {
-    for (const listener of this.listeners.get("close") ?? []) {
-      (listener as () => void)();
+  emitMessage(data: unknown): void {
+    for (const listener of this.listeners.get("message") ?? []) {
+      (listener as (event: { data: unknown }) => void)({ data });
     }
   }
 }
@@ -473,14 +473,15 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(1));
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
 
-    sockets[0]!.emitClose();
+    sockets[0]!.emitMessage("{");
     await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(2));
+    expect(sockets[0]!.closeCalls).toBe(1);
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
 
     abort.abort();
     await running;
 
-    expect(sockets[0]!.closeCalls).toBe(0);
+    expect(sockets[0]!.closeCalls).toBe(1);
     expect(sockets[1]!.closeCalls).toBe(1);
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount);
   });
