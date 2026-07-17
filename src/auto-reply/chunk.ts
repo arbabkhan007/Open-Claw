@@ -197,7 +197,7 @@ export function chunkByNewline(
 export function chunkByParagraph(
   text: string,
   limit: number,
-  opts?: { splitLongParagraphs?: boolean },
+  opts?: { splitLongParagraphs?: boolean; packAdjacent?: boolean },
 ): string[] {
   if (!text) {
     return [];
@@ -206,6 +206,10 @@ export function chunkByParagraph(
     return [text];
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
+  // When false, each blank-line paragraph is its own chunk and `limit` only
+  // splits oversized paragraphs. Outbound newline planning uses this so a
+  // transport ceiling cannot re-join logical reply blocks before delivery.
+  const packAdjacent = opts?.packAdjacent !== false;
 
   // Normalize to \n so blank line detection is consistent.
   const normalized = text.replace(/\r\n?/g, "\n");
@@ -248,6 +252,15 @@ export function chunkByParagraph(
   let currentChunk = "";
 
   const pushParagraph = (paragraph: string, separatorBefore?: string) => {
+    if (!packAdjacent) {
+      if (paragraph.length <= limit || !splitLongParagraphs) {
+        chunks.push(paragraph);
+        return;
+      }
+      chunks.push(...chunkText(paragraph, limit));
+      return;
+    }
+
     if (!currentChunk) {
       if (paragraph.length <= limit) {
         currentChunk = paragraph;
