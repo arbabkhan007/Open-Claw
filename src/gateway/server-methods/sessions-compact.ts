@@ -343,6 +343,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               completed,
               reason,
             });
+          let resetGuardSessionId = sessionId;
           const assertCompactionResetCurrent = () => {
             const currentEntry = loadAccessorSessionEntryForGatewayTarget({
               key,
@@ -351,7 +352,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             }).entry;
             if (
               !currentEntry ||
-              currentEntry.sessionId !== sessionId ||
+              currentEntry.sessionId !== resetGuardSessionId ||
               currentEntry.lifecycleRevision !== lifecycleRevision ||
               resolveSessionWorkStartError(target.canonicalKey, currentEntry)
             ) {
@@ -441,6 +442,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 }),
               );
               return;
+            }
+            if (result.result?.sessionId) {
+              resetGuardSessionId = result.result.sessionId;
             }
             recordSessionCompacted({
               sessionKey: target.canonicalKey,
