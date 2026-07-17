@@ -1,4 +1,4 @@
-// Covers Tailscale whois, Serve, and Funnel helpers.
+// Covers Tailscale whois, Serve, Funnel helpers, and binary discovery.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
