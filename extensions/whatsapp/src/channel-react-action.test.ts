@@ -1,5 +1,6 @@
 // Whatsapp tests cover channel react action plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedWhatsAppAccount } from "./accounts.js";
 import { handleWhatsAppMessageAction } from "./channel-react-action.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
@@ -17,8 +18,15 @@ const hoisted = vi.hoisted(() => ({
       accountId: accountId ?? "default",
     }),
   ),
-  resolveWhatsAppAccount: vi.fn(() => ({ accountId: "default", mediaMaxMb: 50 })),
-  resolveWhatsAppMediaMaxBytes: vi.fn(() => 50 * 1024 * 1024),
+  resolveWhatsAppAccount: vi.fn(
+    (): Pick<ResolvedWhatsAppAccount, "accountId" | "mediaMaxMb"> => ({
+      accountId: "default",
+      mediaMaxMb: 50,
+    }),
+  ),
+  resolveWhatsAppMediaMaxBytes: vi.fn(
+    (_account: Pick<ResolvedWhatsAppAccount, "mediaMaxMb">) => 50 * 1024 * 1024,
+  ),
   sendMessageWhatsApp: vi.fn(async () => ({
     messageId: "msg-media-1",
     toJid: "1555@s.whatsapp.net",
@@ -240,23 +248,113 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it("accepts upload buffers between the generic and WhatsApp default limits", async () => {
+    const { resolveWhatsAppMediaMaxBytes } =
+      await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
+    const encoded = "A".repeat(8 * 1024 * 1024);
+    hoisted.resolveWhatsAppAccount.mockReturnValueOnce({
+      accountId: "default",
+      mediaMaxMb: undefined,
+    });
+    hoisted.resolveWhatsAppMediaMaxBytes.mockImplementationOnce(resolveWhatsAppMediaMaxBytes);
+
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        buffer: encoded,
+        contentType: "application/octet-stream",
+        filename: "six-megabytes.bin",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaPayload: {
+          buffer: expect.objectContaining({ byteLength: 6 * 1024 * 1024 }),
+          contentType: "application/octet-stream",
+          fileName: "six-megabytes.bin",
+        },
+      }),
+    );
+  });
+
+  it.each([
+    { name: "raw base64", buffer: " SGV s\nbG8= \n " },
+    {
+      name: "data URL",
+      buffer: " \n DATA:text/plain;charset=utf-8;BASE64, SGV s\nbG8= \n ",
+    },
+  ])("accepts whitespace-heavy $name payloads", async ({ buffer }) => {
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        buffer,
+        contentType: "text/plain",
+        filename: "hello.txt",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaPayload: {
+          buffer: Buffer.from("Hello"),
+          contentType: "text/plain",
+          fileName: "hello.txt",
+        },
+      }),
+    );
+  });
+
+  it.each(["SGVsbG8=!", "data:text/plain,hello", "data:text/plain;base64"])(
+    "rejects malformed upload-file buffer %s",
+    async (buffer) => {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: { to: "+1555", buffer },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("must be valid base64 or a base64 data URL");
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects upload-file buffers above the WhatsApp media limit", async () => {
     hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValueOnce(4);
+    const encoded = Buffer.from("hello").toString("base64");
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
 
-    await expect(
-      handleWhatsAppMessageAction({
-        action: "upload-file",
-        params: {
-          to: "+1555",
-          buffer: Buffer.from("hello").toString("base64"),
-          contentType: "text/plain",
-          filename: "hello.txt",
-        },
-        cfg: baseCfg,
-        accountId: "default",
-      }),
-    ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
-    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    try {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: {
+            to: "+1555",
+            buffer: encoded,
+            contentType: "text/plain",
+            filename: "hello.txt",
+          },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
+      const bufferFromCalls = bufferFromSpy.mock.calls as unknown[][];
+      expect(bufferFromCalls.some((call) => call[1] === "base64")).toBe(false);
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 
   it("requires upload-file media path input", async () => {
