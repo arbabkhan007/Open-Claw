@@ -24,6 +24,15 @@ type LineWebhookSpoolPayload = {
   destination: string;
 };
 
+/** Shape written by the pre-drain spool worker (#109655 builds, e.g. 2026.7.2-beta.2). */
+type LineWebhookLegacySpoolPayload = {
+  version: number;
+  destination: string;
+  event: webhook.Event;
+};
+
+type LineWebhookStoredSpoolPayload = LineWebhookSpoolPayload | LineWebhookLegacySpoolPayload;
+
 export type LineWebhookTurnAdoptionLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
@@ -36,7 +45,7 @@ type LineWebhookSpoolOptions = {
     destination: string,
     control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
   ) => Promise<void>;
-  queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
+  queue?: ChannelIngressQueue<LineWebhookStoredSpoolPayload>;
 };
 
 class LineWebhookPayloadError extends Error {
@@ -114,7 +123,38 @@ function laneKeyFor(event: unknown, eventId: string): string {
   return eventId;
 }
 
-function parseClaimedEvent(payload: LineWebhookSpoolPayload, claimedId: string): webhook.Event {
+/** Rows spooled by the pre-drain worker store the event object and key rows by the
+ * raw webhookEventId; accept them so an upgrade cannot dead-letter pending events. */
+function parseLegacyClaimedEvent(
+  payload: LineWebhookLegacySpoolPayload,
+  claimedId: string,
+): webhook.Event {
+  const event: unknown = payload.event;
+  if (
+    payload.version !== LINE_WEBHOOK_SPOOL_VERSION ||
+    typeof payload.destination !== "string" ||
+    !event ||
+    typeof event !== "object"
+  ) {
+    throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+  }
+  const webhookEventId = nonEmptyString((event as { webhookEventId?: unknown }).webhookEventId);
+  if (!webhookEventId || webhookEventId !== claimedId) {
+    throw new LineWebhookPayloadError("LINE webhook event id changed after durable admission.");
+  }
+  return payload.event;
+}
+
+function parseClaimedEvent(
+  payload: LineWebhookStoredSpoolPayload,
+  claimedId: string,
+): webhook.Event {
+  if (!payload || typeof payload !== "object") {
+    throw new LineWebhookPayloadError("LINE webhook spool payload is invalid.");
+  }
+  if (!("rawEvent" in payload)) {
+    return parseLegacyClaimedEvent(payload, claimedId);
+  }
   if (
     payload.version !== LINE_WEBHOOK_SPOOL_VERSION ||
     typeof payload.rawEvent !== "string" ||
@@ -150,13 +190,13 @@ function isLineAuthenticationFailure(error: unknown): boolean {
 export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWebhookSpool {
   const queue =
     options.queue ??
-    getLineRuntime().state.openChannelIngressQueue<LineWebhookSpoolPayload>({
+    getLineRuntime().state.openChannelIngressQueue<LineWebhookStoredSpoolPayload>({
       accountId: options.accountId,
     });
   const shutdown = new AbortController();
   // Match the predecessor worker's per-spool cap across repeated drain pumps.
   const activeDeliveries = new Set<Promise<void>>();
-  const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
+  const drain = createChannelIngressDrain<LineWebhookStoredSpoolPayload>({
     queue,
     abortSignal: shutdown.signal,
     adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
