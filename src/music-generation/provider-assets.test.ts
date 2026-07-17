@@ -91,7 +91,9 @@ describe("downloadGeneratedMusicAsset", () => {
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const address = server.address();
-    if (!address || typeof address === "string") throw new Error("expected port");
+    if (!address || typeof address === "string") {
+      throw new Error("expected port");
+    }
 
     await expect(
       downloadGeneratedMusicAsset({
@@ -122,7 +124,9 @@ describe("downloadGeneratedMusicAsset", () => {
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const address = server.address();
-    if (!address || typeof address === "string") throw new Error("expected port");
+    if (!address || typeof address === "string") {
+      throw new Error("expected port");
+    }
 
     const result = await downloadGeneratedMusicAsset({
       candidate: { url: `http://127.0.0.1:${address.port}/track.mp3` },
