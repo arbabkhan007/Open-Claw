@@ -1,3 +1,7 @@
+// The detached watchdog has no parent SSH deadline. Bound and retry its process
+// identity probe so a transient stall cannot leave a quiescence lease frozen forever.
+const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
+
 export const REMOTE_WORKSPACE_SETUP_SCRIPT = String.raw`set -eu
 relative=$1
 root=$HOME/.openclaw-worker
@@ -255,7 +259,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       const watchdogChildProcess = require("node:child_process");
       const identity = (pid) => {
         try {
-          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim() || null;
+          return watchdogChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS} }).trim() || null;
         } catch (error) {
           if (error && error.status === 1) return null;
           throw error;
@@ -273,7 +277,12 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
-      if (!error || error.code !== "ENOENT") process.exitCode = 1;
+      if (error && error.code === "ENOENT") return;
+      if (error && error.code === "ETIMEDOUT") {
+        setTimeout(check, ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS});
+        return;
+      }
+      process.exitCode = 1;
     }
   };
   check();
