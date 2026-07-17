@@ -580,6 +580,58 @@ describe("handleCompactCommand", () => {
     expect(statusEventOrder).toBeLessThan(resetOrder ?? 0);
   });
 
+  it("guards delayed after-compaction resets against replaced sessions", async () => {
+    const sessionStore = {
+      "agent:main:main": {
+        sessionId: "target-session",
+        lifecycleRevision: "target-revision",
+        updatedAt: Date.now(),
+      },
+    };
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:main",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+      sessionStore["agent:main:main"] = {
+        sessionId: "replacement-session",
+        lifecycleRevision: "replacement-revision",
+        updatedAt: Date.now(),
+      };
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 999,
+          tokensAfter: 321,
+        },
+      };
+    });
+    vi.mocked(performGatewaySessionReset).mockImplementationOnce(async (request) => {
+      expect(request.assertCurrent).toEqual(expect.any(Function));
+      expect(() => request.assertCurrent?.()).toThrow("is no longer target-session");
+      return { ok: true } as never;
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: sessionStore["agent:main:main"],
+        sessionStore,
+      } as unknown as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(performGatewaySessionReset)).toHaveBeenCalledOnce();
+  });
+
   it("reports unknown context when terminal compaction omits the post-compaction count", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,

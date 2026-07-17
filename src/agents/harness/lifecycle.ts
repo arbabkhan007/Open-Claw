@@ -65,8 +65,12 @@ function assertAgentHarnessContextEngineSupport(
 }
 
 function stripInternalAttemptLifecycleOwner(
+  harness: AgentHarness,
   params: AgentHarnessAttemptParams,
 ): AgentHarnessAttemptParams {
+  if (harness.id === "copilot") {
+    return params;
+  }
   if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {
     return params;
   }
@@ -274,7 +278,9 @@ export async function runAgentHarnessLifecycleAttempt(
     }
     const runAndClassify = async () => {
       phase = "send";
-      const rawResult = await harness.runAttempt(stripInternalAttemptLifecycleOwner(params));
+      const rawResult = await harness.runAttempt(
+        stripInternalAttemptLifecycleOwner(harness, params),
+      );
       phase = "resolve";
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.

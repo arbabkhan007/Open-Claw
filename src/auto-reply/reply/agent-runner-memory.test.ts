@@ -34,6 +34,15 @@ const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const ensureMemoryFlushTargetFileMock = vi.fn();
 const emitAgentEventMock = vi.fn();
 const TEST_MAX_FLUSH_FAILURES = 3;
+const gatewaySessionResetMocks = vi.hoisted(() => ({
+  performGatewaySessionReset: vi.fn(async (_request: { assertCurrent?: () => void }) => ({
+    ok: true,
+  })),
+}));
+
+vi.mock("../../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: gatewaySessionResetMocks.performGatewaySessionReset,
+}));
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
@@ -148,6 +157,7 @@ type CompactEmbeddedAgentSessionParams = {
     agentId?: string;
     reason: "new" | "reset";
     commandSource: string;
+    assertCurrent?: () => void;
   }) => void;
   modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
@@ -222,6 +232,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     emitAgentEventMock.mockReset();
+    gatewaySessionResetMocks.performGatewaySessionReset.mockReset().mockResolvedValue({ ok: true });
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
       if (!sessionKey || !params.sessionStore?.[sessionKey]) {
@@ -1266,6 +1277,77 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+  });
+
+  it("guards delayed preflight after-compaction resets against replaced sessions", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      lifecycleRevision: "session-revision",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+    };
+    const sessionStore = { "agent:main:main": sessionEntry };
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:main",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+      sessionStore["agent:main:main"] = {
+        ...sessionEntry,
+        sessionId: "replacement-session",
+        lifecycleRevision: "replacement-revision",
+      };
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          tokensAfter: 42,
+        },
+      };
+    });
+    gatewaySessionResetMocks.performGatewaySessionReset.mockImplementationOnce(async (request) => {
+      expect(request.assertCurrent).toEqual(expect.any(Function));
+      expect(() => request.assertCurrent?.()).toThrow("is no longer session");
+      return { ok: true };
+    });
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(gatewaySessionResetMocks.performGatewaySessionReset).toHaveBeenCalledOnce();
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {

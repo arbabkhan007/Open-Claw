@@ -2105,16 +2105,15 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    await runCopilotAttempt(
-      {
-        ...makeParams({
-          sandboxSessionKey: "agent:main:sandbox:policy",
-          sessionKey: "agent:main:discord:channel:123",
-        }),
-        deferEmbeddedHookSessionReset,
-      },
-      { pool: makeFakePool(sdk) },
-    );
+    const paramsWithLifecycleReset = makeParams({
+      sandboxSessionKey: "agent:main:sandbox:policy",
+      sessionKey: "agent:main:discord:channel:123",
+    }) as AgentHarnessAttemptParams & {
+      deferEmbeddedHookSessionReset: typeof deferEmbeddedHookSessionReset;
+    };
+    paramsWithLifecycleReset.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+
+    await runCopilotAttempt(paramsWithLifecycleReset, { pool: makeFakePool(sdk) });
 
     sdk.sessions[0]?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
 

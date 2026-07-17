@@ -427,6 +427,43 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
+  it("preserves the lifecycle-owned reset queue for the bundled Copilot harness", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    let receivedResetQueue: unknown;
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+      receivedResetQueue = (
+        attemptParams as EmbeddedRunAttemptParams & {
+          deferEmbeddedHookSessionReset?: unknown;
+        }
+      ).deferEmbeddedHookSessionReset;
+      return createAttemptResult("copilot");
+    });
+    registerAgentHarness(
+      {
+        id: "copilot",
+        label: "GitHub Copilot agent runtime",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "copilot" },
+    );
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "copilot"),
+    ) as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset?: typeof deferEmbeddedHookSessionReset;
+      systemAgentTool?: SystemAgentToolOptions;
+    };
+    params.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+    params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    params.toolsAllow = ["openclaw"];
+
+    await runAgentHarnessAttempt(params);
+
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    expect(receivedResetQueue).toBe(deferEmbeddedHookSessionReset);
+    expect("systemAgentTool" in (pluginRunAttempt.mock.calls[0]?.[0] ?? {})).toBe(false);
+  });
+
   it.each([
     { name: "missing", toolsAllow: undefined },
     { name: "broad", toolsAllow: ["openclaw", "read"] },

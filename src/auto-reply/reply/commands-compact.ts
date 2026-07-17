@@ -7,7 +7,10 @@ import {
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
+import {
+  createEmbeddedHookSessionResetQueue,
+  withEmbeddedHookSessionResetAssertion,
+} from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -15,6 +18,7 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -84,6 +88,29 @@ function formatCompactionReason(reason?: string): string | undefined {
       return "session was already compacted recently";
     default:
       return text;
+  }
+}
+
+function assertCompactionHookResetTargetCurrent(params: {
+  currentEntry?: SessionEntry;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  sessionKey: string;
+}): void {
+  const currentEntry = params.currentEntry;
+  if (!currentEntry?.sessionId || currentEntry.sessionId !== params.expectedSessionId) {
+    throw new Error(
+      `deferred after_compaction reset skipped: session ${params.sessionKey} is no longer ${params.expectedSessionId}`,
+    );
+  }
+  if (
+    params.expectedLifecycleRevision &&
+    currentEntry.lifecycleRevision &&
+    currentEntry.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
+    throw new Error(
+      `deferred after_compaction reset skipped: session ${params.sessionKey} lifecycle changed`,
+    );
   }
 }
 
@@ -206,6 +233,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
+  let hookResetExpectedSessionId = sessionId;
+  let hookResetExpectedLifecycleRevision = targetSessionEntry.lifecycleRevision;
+  const assertCurrentHookResetSession = () =>
+    assertCompactionHookResetTargetCurrent({
+      sessionKey: params.sessionKey,
+      currentEntry: params.sessionStore?.[params.sessionKey] ?? targetSessionEntry,
+      expectedSessionId: hookResetExpectedSessionId,
+      expectedLifecycleRevision: hookResetExpectedLifecycleRevision,
+    });
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
     const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
@@ -296,7 +332,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     customInstructions,
     trigger: "manual",
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
-    deferEmbeddedHookSessionReset: (request) => hookSessionResetQueue.deferResetSession(request),
+    deferEmbeddedHookSessionReset: (request) =>
+      hookSessionResetQueue.deferResetSession(
+        withEmbeddedHookSessionResetAssertion(request, assertCurrentHookResetSession),
+      ),
   });
 
   const compactLabel =
@@ -321,6 +360,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
     });
+    const postCompactionEntry = params.sessionStore?.[params.sessionKey] ?? targetSessionEntry;
+    hookResetExpectedSessionId = result.result?.sessionId ?? hookResetExpectedSessionId;
+    if (postCompactionEntry.sessionId === hookResetExpectedSessionId) {
+      hookResetExpectedLifecycleRevision = postCompactionEntry.lifecycleRevision;
+    }
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;

@@ -484,6 +484,10 @@ export async function runAgentHarnessAttempt(
       ]
     : [];
   const pluginParams = withoutInternalHarnessAuthority(internalParams);
+  const harnessParams =
+    harness.id === "copilot"
+      ? preserveCopilotLifecycleResetQueue(internalParams, pluginParams)
+      : pluginParams;
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -495,7 +499,7 @@ export async function runAgentHarnessAttempt(
       // Resolve plugin policy after entering the host scope. Ring-zero tools are
       // trusted setup authority and must survive ordinary deny-all policy.
       const attemptParams =
-        harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+        harness.id === "openclaw" ? harnessParams : preparePluginHarnessParams(harnessParams);
       return runAgentHarnessLifecycleAttempt(harness, attemptParams);
     });
   if (harness.id === "openclaw") {
@@ -534,6 +538,19 @@ function withoutInternalHarnessAuthority(
     ...pluginParams
   } = params;
   return pluginParams;
+}
+
+function preserveCopilotLifecycleResetQueue(
+  internalParams: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  pluginParams: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  if (!Object.hasOwn(internalParams, "deferEmbeddedHookSessionReset")) {
+    return pluginParams;
+  }
+  return {
+    ...pluginParams,
+    deferEmbeddedHookSessionReset: internalParams.deferEmbeddedHookSessionReset,
+  } as EmbeddedRunAttemptParams;
 }
 
 function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {

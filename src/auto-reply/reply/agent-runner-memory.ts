@@ -10,7 +10,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { createEmbeddedHookSessionResetQueue } from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
+import {
+  createEmbeddedHookSessionResetQueue,
+  withEmbeddedHookSessionResetAssertion,
+} from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -334,6 +337,29 @@ function followupUsesCodexRuntime(params: {
   runtimePolicySessionKey?: string;
 }): boolean {
   return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
+}
+
+function assertCompactionHookResetTargetCurrent(params: {
+  currentEntry?: SessionEntry;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  sessionKey: string;
+}): void {
+  const currentEntry = params.currentEntry;
+  if (!currentEntry?.sessionId || currentEntry.sessionId !== params.expectedSessionId) {
+    throw new Error(
+      `deferred after_compaction reset skipped: session ${params.sessionKey} is no longer ${params.expectedSessionId}`,
+    );
+  }
+  if (
+    params.expectedLifecycleRevision &&
+    currentEntry.lifecycleRevision &&
+    currentEntry.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
+    throw new Error(
+      `deferred after_compaction reset skipped: session ${params.sessionKey} lifecycle changed`,
+    );
+  }
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -765,10 +791,9 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (!params.sessionKey) {
     return params.sessionEntry;
   }
+  const sessionKey = params.sessionKey;
 
-  let entry =
-    params.sessionEntry ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  let entry = params.sessionEntry ?? (sessionKey ? params.sessionStore?.[sessionKey] : undefined);
   if (!entry?.sessionId) {
     return entry ?? params.sessionEntry;
   }
@@ -967,6 +992,15 @@ export async function runPreflightCompactionIfNeeded(params: {
       return entry ?? params.sessionEntry;
     }
     const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
+    let hookResetExpectedSessionId = entry.sessionId;
+    let hookResetExpectedLifecycleRevision = entry.lifecycleRevision;
+    const assertCurrentHookResetSession = () =>
+      assertCompactionHookResetTargetCurrent({
+        sessionKey,
+        currentEntry: params.sessionStore?.[sessionKey] ?? entry,
+        expectedSessionId: hookResetExpectedSessionId,
+        expectedLifecycleRevision: hookResetExpectedLifecycleRevision,
+      });
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
@@ -1009,7 +1043,10 @@ export async function runPreflightCompactionIfNeeded(params: {
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
-      deferEmbeddedHookSessionReset: (request) => hookSessionResetQueue.deferResetSession(request),
+      deferEmbeddedHookSessionReset: (request) =>
+        hookSessionResetQueue.deferResetSession(
+          withEmbeddedHookSessionResetAssertion(request, assertCurrentHookResetSession),
+        ),
       abortSignal: params.replyOperation.abortSignal,
     });
 
@@ -1047,6 +1084,11 @@ export async function runPreflightCompactionIfNeeded(params: {
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
     });
+    const postCompactionEntry = params.sessionStore?.[params.sessionKey] ?? entry;
+    hookResetExpectedSessionId = result.result?.sessionId ?? hookResetExpectedSessionId;
+    if (postCompactionEntry.sessionId === hookResetExpectedSessionId) {
+      hookResetExpectedLifecycleRevision = postCompactionEntry.lifecycleRevision;
+    }
     await appendPostCompactionRefreshPrompt({
       cfg: params.cfg,
       followupRun: params.followupRun,

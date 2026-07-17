@@ -18,6 +18,19 @@ export type DeferEmbeddedHookSessionReset = (
   request: DeferredEmbeddedHookSessionResetRequest,
 ) => void;
 
+export function withEmbeddedHookSessionResetAssertion(
+  request: DeferredEmbeddedHookSessionResetRequest,
+  assertCurrent: () => void,
+): DeferredEmbeddedHookSessionResetRequest {
+  return {
+    ...request,
+    assertCurrent: () => {
+      request.assertCurrent?.();
+      assertCurrent();
+    },
+  };
+}
+
 export function buildEmbeddedHookApi(params?: {
   agentId?: string;
   sessionKey?: string;
