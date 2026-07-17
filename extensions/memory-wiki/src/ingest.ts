@@ -7,8 +7,10 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   preserveHumanNotesBlock,
+  readWikiPageTitle,
   renderMarkdownFence,
   renderWikiMarkdown,
+  resolveTitleKeyedWikiSlug,
   slugifyWikiPageStem,
   slugifyWikiSegment,
 } from "./markdown.js";
@@ -64,6 +66,25 @@ async function readExistingSourcePage(pagePath: string): Promise<string> {
   throw readError;
 }
 
+function isMissingSourcePageError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+async function readExistingSourcePageTitle(pagePath: string, fallbackName: string) {
+  try {
+    return readWikiPageTitle(await fs.readFile(pagePath, "utf8"), fallbackName);
+  } catch {
+    try {
+      return readWikiPageTitle(await fs.readFile(pagePath, "utf8"), fallbackName);
+    } catch (retryError) {
+      if (isMissingSourcePageError(retryError)) {
+        return undefined;
+      }
+      throw retryError;
+    }
+  }
+}
+
 export async function ingestMemoryWikiSource(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
@@ -75,9 +96,17 @@ export async function ingestMemoryWikiSource(params: {
   const buffer = await fs.readFile(sourcePath);
   const content = assertUtf8Text(buffer, sourcePath);
   const title = resolveSourceTitle(sourcePath, params.title);
-  const slug = slugifyWikiSegment(title);
-  const pageStem = slugifyWikiPageStem(title);
-  const pageId = `source.${slug}`;
+  const { slug: pageStem, suffix } = await resolveTitleKeyedWikiSlug({
+    title,
+    baseSlug: slugifyWikiPageStem(title),
+    readExistingTitleBySlug: async (candidate) =>
+      readExistingSourcePageTitle(
+        path.join(params.config.vault.path, "sources", `${candidate}.md`),
+        candidate,
+      ),
+  });
+  const idSlug = suffix ? `${slugifyWikiSegment(title)}-${suffix}` : slugifyWikiSegment(title);
+  const pageId = `source.${idSlug}`;
   const pageRelativePath = path.join("sources", `${pageStem}.md`);
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
