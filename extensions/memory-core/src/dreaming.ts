@@ -37,6 +37,13 @@ const STARTUP_CRON_RETRY_MAX_ATTEMPTS = 12;
 const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
+let dreamingNarrativeModulePromise:
+  | Promise<typeof import("./dreaming-narrative.js")>
+  | undefined;
+
+function loadDreamingNarrativeModule(): Promise<typeof import("./dreaming-narrative.js")> {
+  return (dreamingNarrativeModulePromise ??= import("./dreaming-narrative.js"));
+}
 
 type CronSchedule = { kind: "cron"; expr: string; tz?: string };
 type CronPayload =
@@ -563,7 +570,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     },
   ] = await Promise.all([
     import("./dreaming-markdown.js"),
-    import("./dreaming-narrative.js"),
+    loadDreamingNarrativeModule(),
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
   ]);
@@ -918,6 +925,17 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     runtimeCronReconcileTimer.unref?.();
   };
 
+  const scheduleStartupDreamingArtifactsScrub = (): void => {
+    // Startup cleanup can scan session stores, so run it out-of-band.
+    void loadDreamingNarrativeModule()
+      .then(({ scrubDreamingNarrativeArtifacts }) => scrubDreamingNarrativeArtifacts(api.logger))
+      .catch((err: unknown) => {
+        api.logger.warn(
+          `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(err)}`,
+        );
+      });
+  };
+
   api.on("gateway_start", async (_event, ctx) => {
     disposed = false;
     // Store the gateway context for runtime cron resolution retries.
@@ -930,6 +948,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       });
       startRuntimeCronReconcileTimer();
       scheduleStartupCronRetry();
+      scheduleStartupDreamingArtifactsScrub();
     } catch (err) {
       api.logger.error(
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
