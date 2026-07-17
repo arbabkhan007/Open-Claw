@@ -1,4 +1,6 @@
 // Admin Http Rpc tests cover handler plugin behavior.
+import { createServer, type Server } from "node:http";
+import { connect, type Socket } from "node:net";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
@@ -22,6 +24,22 @@ function createRequest(body: unknown, method = "POST") {
   const req = Readable.from([typeof body === "string" ? body : JSON.stringify(body)]);
   Object.assign(req, {
     method,
+    url: "/api/v1/admin/rpc",
+    headers: {
+      "content-type": "application/json",
+    },
+  });
+  return req as import("node:http").IncomingMessage;
+}
+
+function createHangingRequest() {
+  const req = new Readable({
+    read() {
+      // Keep the body open so the handler's request-body timeout owns settlement.
+    },
+  });
+  Object.assign(req, {
+    method: "POST",
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
@@ -54,13 +72,46 @@ function createResponse() {
 }
 
 async function invoke(body: unknown, method = "POST") {
+  return invokeRequest(createRequest(body, method));
+}
+
+async function invokeRequest(req: import("node:http").IncomingMessage, bodyTimeoutMs?: number) {
   const { res, captured } = createResponse();
-  const handled = await handleAdminHttpRpcRequest(createRequest(body, method), res);
+  const handled = await handleAdminHttpRpcRequest(req, res, { bodyTimeoutMs });
   return {
     handled,
     captured,
     json: captured.body ? (JSON.parse(captured.body) as unknown) : undefined,
   };
+}
+
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP server address");
+  }
+  return address.port;
+}
+
+async function readSocketResponse(socket: Socket): Promise<string> {
+  const chunks: Buffer[] = [];
+  return await new Promise((resolve, reject) => {
+    let done = false;
+    const finish = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    socket.on("data", (chunk) => chunks.push(chunk));
+    socket.on("end", finish);
+    socket.on("close", finish);
+    socket.on("error", reject);
+  });
 }
 
 describe("admin-http-rpc plugin handler", () => {
@@ -205,5 +256,63 @@ describe("admin-http-rpc plugin handler", () => {
     expect(result.captured.statusCode).toBe(405);
     expect(result.captured.headers.allow).toBe("POST");
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("times out incomplete request bodies before dispatch", async () => {
+    const result = await invokeRequest(createHangingRequest(), 1);
+
+    expect(result.handled).toBe(true);
+    expect(result.captured.statusCode).toBe(408);
+    expect(result.json).toEqual({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: "Request body timeout",
+      },
+    });
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("delivers a real HTTP 408 response before closing timed-out partial bodies", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res, { bodyTimeoutMs: 10 });
+    });
+    let socket: Socket | undefined;
+    try {
+      const port = await listen(server);
+      socket = connect({ host: "127.0.0.1", port });
+      await new Promise<void>((resolve) => socket?.once("connect", resolve));
+
+      socket.write(
+        [
+          "POST /api/v1/admin/rpc HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/json",
+          "Content-Length: 64",
+          "Connection: close",
+          "",
+          "{",
+        ].join("\r\n"),
+      );
+
+      const response = await readSocketResponse(socket);
+      const [, rawBody = ""] = response.split("\r\n\r\n", 2);
+
+      expect(response).toContain("HTTP/1.1 408");
+      expect(response).toContain("Connection: close");
+      expect(JSON.parse(rawBody) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Request body timeout",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      socket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });
