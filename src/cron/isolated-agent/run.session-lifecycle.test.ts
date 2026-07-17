@@ -55,7 +55,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
   it("rejects a session that rotates during async setup", async () => {
     const sessionKey = "agent:main:main";
-    const initialSessionEntry = makeCronSessionEntry({ sessionId: "session-before-setup" });
+    const initialSessionEntry = makeCronSessionEntry({
+      sessionId: "session-before-setup",
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: inMemoryStorePath,
@@ -147,7 +149,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         if (abortSignal?.aborted) {
           lifecycleInterrupted.resolve();
         } else {
-          abortSignal?.addEventListener("abort", lifecycleInterrupted.resolve, { once: true });
+          abortSignal?.addEventListener("abort", lifecycleInterrupted.resolve, {
+            once: true,
+          });
         }
         await releaseRunner.promise;
         return {
@@ -273,7 +277,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
   it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
     const sessionKey = "agent:main:main";
-    const initialSessionEntry = makeCronSessionEntry({ sessionId: "persistent-session" });
+    const initialSessionEntry = makeCronSessionEntry({
+      sessionId: "persistent-session",
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: inMemoryStorePath,
@@ -420,6 +426,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       sessionFile: "/tmp/session-after-reset.jsonl",
       compactionCount: 0,
     });
+    expect(cronSession.sessionEntry.inputTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.outputTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokensFresh).toBeUndefined();
   });
 
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {

@@ -52,6 +52,7 @@ describe("compaction hook wiring", () => {
     sessionId?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
+    deferEmbeddedHookSessionReset?: (request: unknown) => void;
   }) {
     return {
       params: {
@@ -63,6 +64,11 @@ describe("compaction hook wiring", () => {
           messages: params.messages ?? [],
           sessionFile: params.sessionFile,
         },
+        ...(params.deferEmbeddedHookSessionReset
+          ? {
+              deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
+            }
+          : {}),
       },
       state: { compactionInFlight: true },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -98,12 +104,18 @@ describe("compaction hook wiring", () => {
     >;
     return {
       event: afterCalls[0]?.[0] as
-        | { messageCount?: number; compactedCount?: number; sessionFile?: string }
+        | {
+            messageCount?: number;
+            compactedCount?: number;
+            sessionFile?: string;
+          }
         | undefined,
       hookCtx: afterCalls[0]?.[1] as
         | {
             sessionKey?: string;
-            api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+            api?: {
+              resetSession?: (reason?: "new" | "reset") => Promise<unknown>;
+            };
           }
         | undefined,
     };
@@ -158,7 +170,10 @@ describe("compaction hook wiring", () => {
       ensureCompactionPromise: vi.fn(),
     };
 
-    handleCompactionStart(ctx as never, { type: "compaction_start", reason: "threshold" });
+    handleCompactionStart(ctx as never, {
+      type: "compaction_start",
+      reason: "threshold",
+    });
 
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({
@@ -193,7 +208,10 @@ describe("compaction hook wiring", () => {
       compactionCount: 1,
     });
 
-    await runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
 
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({
@@ -217,10 +235,14 @@ describe("compaction hook wiring", () => {
 
   it("provides a deferred reset API to final after-compaction hooks", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
+    const deferredReset = vi.fn();
     (hookMocks.runner.runAfterCompaction as Mock).mockImplementationOnce(
       async (_event: unknown, hookCtx: unknown) => {
-        const api = (hookCtx as { api?: { resetSession?: (reason?: "new" | "reset") => unknown } })
-          .api;
+        const api = (
+          hookCtx as {
+            api?: { resetSession?: (reason?: "new" | "reset") => unknown };
+          }
+        ).api;
         expect(api?.resetSession).toEqual(expect.any(Function));
         await api?.resetSession?.("reset");
       },
@@ -234,17 +256,48 @@ describe("compaction hook wiring", () => {
       agentId: "discord-public",
       sessionId: "session-heartbeat",
       compactionCount: 1,
+      deferEmbeddedHookSessionReset: deferredReset,
     });
 
-    await runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
 
-    await expect.poll(() => hookMocks.performGatewaySessionReset.mock.calls.length).toBe(1);
-    expect(hookMocks.performGatewaySessionReset).toHaveBeenCalledWith({
+    expect(deferredReset).toHaveBeenCalledWith({
       key: "agent:discord-public:cron:heartbeat",
       agentId: "discord-public",
       reason: "reset",
       commandSource: "embedded-agent:hook",
     });
+    expect(hookMocks.performGatewaySessionReset).not.toHaveBeenCalled();
+  });
+
+  it("withholds the reset API without a run-owned after-compaction reset queue", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    (hookMocks.runner.runAfterCompaction as Mock).mockImplementationOnce(
+      async (_event: unknown, hookCtx: unknown) => {
+        expect((hookCtx as { api?: unknown }).api).toBeUndefined();
+      },
+    );
+
+    const ctx = createCompactionEndCtx({
+      runId: "r2-no-reset-queue",
+      messages: [1, 2],
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:discord-public:cron:heartbeat",
+      agentId: "discord-public",
+      sessionId: "session-heartbeat",
+      compactionCount: 1,
+    });
+
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
+
+    expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(hookMocks.performGatewaySessionReset).not.toHaveBeenCalled();
   });
 
   it("does not call runAfterCompaction when willRetry is true but still increments counter", async () => {
@@ -256,7 +309,10 @@ describe("compaction hook wiring", () => {
       withRetryHooks: true,
     });
 
-    await runCompactionEnd(ctx, { willRetry: true, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: true,
+      result: { summary: "compacted" },
+    });
 
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
     // Counter is incremented even with willRetry — compaction succeeded (#38905)
@@ -310,7 +366,10 @@ describe("compaction hook wiring", () => {
       getLastCompactionTokensAfter: vi.fn(() => undefined),
     };
 
-    await runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+    await runCompactionEnd(ctx, {
+      willRetry: false,
+      result: { summary: "compacted" },
+    });
 
     const assistantOne = messages[1] as { usage?: unknown };
     const assistantTwo = messages[2] as { usage?: unknown };
@@ -339,6 +398,10 @@ describe("compaction hook wiring", () => {
     await runCompactionEnd(ctx, { willRetry: true });
 
     const assistant = messages[0] as { usage?: unknown };
-    expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+    expect(assistant.usage).toEqual({
+      totalTokens: 184_297,
+      input: 130_000,
+      output: 2_000,
+    });
   });
 });

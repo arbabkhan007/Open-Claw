@@ -68,7 +68,7 @@ function stripInternalAttemptLifecycleOwner(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
 ): AgentHarnessAttemptParams {
-  if (harness.id === "copilot") {
+  if (harness.id === "openclaw" || harness.id === "copilot") {
     return params;
   }
   if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {

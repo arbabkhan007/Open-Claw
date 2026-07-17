@@ -106,7 +106,7 @@ function stripInternalHarnessCompactionLifecycleOwner(
   harness: AgentHarness,
   params: CompactEmbeddedAgentSessionInternalParams,
 ): AgentHarnessCompactParams {
-  if (harness.id === "copilot") {
+  if (harness.id === "openclaw" || harness.id === "copilot") {
     return params;
   }
   if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {

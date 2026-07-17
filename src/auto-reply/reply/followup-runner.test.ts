@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -63,6 +64,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
 const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -4571,10 +4573,7 @@ describe("createFollowupRunner compaction", () => {
   });
 
   it("keeps hook-reset sessions after followup auto-compaction returns stale metadata", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-reset-")),
-      "sessions.json",
-    );
+    const storePath = path.join(tempDirs.make("openclaw-compaction-reset-"), "sessions.json");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       sessionFile: path.join(path.dirname(storePath), "session.jsonl"),

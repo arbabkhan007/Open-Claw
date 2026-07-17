@@ -7,7 +7,7 @@ import { log } from "./logger.js";
 
 export type EmbeddedHookApi = NonNullable<PluginHookAgentContext["api"]>;
 type EmbeddedHookSessionResetReason = "new" | "reset";
-export type DeferredEmbeddedHookSessionResetRequest = {
+type DeferredEmbeddedHookSessionResetRequest = {
   key: string;
   agentId?: string;
   reason: EmbeddedHookSessionResetReason;

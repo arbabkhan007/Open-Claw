@@ -464,6 +464,28 @@ describe("runAgentHarnessAttempt", () => {
     expect("systemAgentTool" in (pluginRunAttempt.mock.calls[0]?.[0] ?? {})).toBe(false);
   });
 
+  it("preserves the lifecycle-owned reset queue for the built-in OpenClaw harness", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "openclaw"),
+    ) as EmbeddedRunAttemptParams & {
+      deferEmbeddedHookSessionReset?: typeof deferEmbeddedHookSessionReset;
+      systemAgentTool?: SystemAgentToolOptions;
+    };
+    params.deferEmbeddedHookSessionReset = deferEmbeddedHookSessionReset;
+    params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    params.toolsAllow = ["openclaw"];
+
+    await runAgentHarnessAttempt(params);
+
+    expect(agentRunAttempt).toHaveBeenCalledTimes(1);
+    expect(agentRunAttempt.mock.calls[0]?.[0]).toHaveProperty(
+      "deferEmbeddedHookSessionReset",
+      deferEmbeddedHookSessionReset,
+    );
+    expect("systemAgentTool" in (agentRunAttempt.mock.calls[0]?.[0] ?? {})).toBe(false);
+  });
+
   it.each([
     { name: "missing", toolsAllow: undefined },
     { name: "broad", toolsAllow: ["openclaw", "read"] },

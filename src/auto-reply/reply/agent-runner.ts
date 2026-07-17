@@ -301,7 +301,10 @@ function resolveReplyRunDeliveryContext(params: {
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: {
+    didStream: () => boolean;
+    isAborted: () => boolean;
+  } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -349,7 +352,11 @@ function resolveConfiguredFallbackModel(params: {
     const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
     const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
     if (originProvider && originModel) {
-      return { provider: originProvider, model: originModel, persistedAutoFallback: true };
+      return {
+        provider: originProvider,
+        model: originModel,
+        persistedAutoFallback: true,
+      };
     }
   }
   return {
@@ -717,7 +724,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
   if (userChars > 0) {
     addChars("user_message", userChars);
   }
-  const result = Array.from(segments.entries()).map(([key, chars]) => ({ key, chars }));
+  const result = Array.from(segments.entries()).map(([key, chars]) => ({
+    key,
+    chars,
+  }));
   return result.length > 0 ? result : undefined;
 }
 
@@ -1109,7 +1119,9 @@ function enqueueCommitmentExtractionForTurn(params: {
     userText,
     assistantText,
     ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
-      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
+      ? {
+          sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+        }
       : {}),
     sourceRunId: params.runId,
   });
@@ -1420,7 +1432,9 @@ export async function runReplyAgent(params: {
           : {}),
         taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
         ...(followupRun.userTurnTranscriptRecorder
-          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+          ? {
+              userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder,
+            }
           : {}),
       },
     );
@@ -1499,7 +1513,10 @@ export async function runReplyAgent(params: {
 
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
+      replyOperationRunState.admission = {
+        status: "skipped",
+        reason: "active-run",
+      };
     }
     typing.cleanup();
     return undefined;
@@ -2215,27 +2232,29 @@ export async function runReplyAgent(params: {
       }) ??
       DEFAULT_CONTEXT_TOKENS;
 
-    await persistRunSessionUsage({
-      storePath,
-      sessionKey,
-      cfg,
-      usage,
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-      promptTokens,
-      usageIsContextSnapshot: usedCliProvider ? true : undefined,
-      isHeartbeat,
-      preserveRuntimeModel: fallbackExhausted,
-      preserveUserFacingSessionModelState: preserveUserFacingSessionState,
-      modelUsed,
-      providerUsed,
-      contextTokensUsed,
-      systemPromptReport: runResult.meta?.systemPromptReport,
-      cliSessionId,
-      cliSessionBinding,
-      clearCliSessionBinding,
-      preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
-    });
+    if (!replyResetCommitted) {
+      await persistRunSessionUsage({
+        storePath,
+        sessionKey,
+        cfg,
+        usage,
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+        promptTokens,
+        usageIsContextSnapshot: usedCliProvider ? true : undefined,
+        isHeartbeat,
+        preserveRuntimeModel: fallbackExhausted,
+        preserveUserFacingSessionModelState: preserveUserFacingSessionState,
+        modelUsed,
+        providerUsed,
+        contextTokensUsed,
+        systemPromptReport: runResult.meta?.systemPromptReport,
+        cliSessionId,
+        cliSessionBinding,
+        clearCliSessionBinding,
+        preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
+      });
+    }
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
@@ -2667,7 +2686,9 @@ export async function runReplyAgent(params: {
     const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+      prefixNotices.push({
+        text: `🧭 New session: ${followupRun.run.sessionId}`,
+      });
     }
 
     if (autoCompactionCount > 0) {
@@ -2795,7 +2816,9 @@ export async function runReplyAgent(params: {
         ? { sessionCompactions: activeSessionEntry.compactionCount }
         : {}),
       ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
-        ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
+        ? {
+            lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions,
+          }
         : typeof runResult.meta?.agentMeta?.compactionCount === "number"
           ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
           : {}),

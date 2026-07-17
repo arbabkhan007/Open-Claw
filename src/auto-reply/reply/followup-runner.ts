@@ -437,7 +437,11 @@ export function createFollowupRunner(params: {
     payloads: ReplyPayload[],
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
-    options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
+    options: {
+      kind?: ReplyDispatchKind;
+      mirror?: boolean;
+      runId?: string;
+    } = {},
   ): Promise<boolean> => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
@@ -1200,7 +1204,11 @@ export function createFollowupRunner(params: {
                     resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                 });
                 let droppedCliSessionReplacement = false;
-                pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
+                pendingLifecycleTerminal = {
+                  provider,
+                  model,
+                  backstop: lifecycleBackstop,
+                };
                 const followupCurrentMessageId = resolveFollowupCurrentMessageId();
                 const cliToolSummaryTracker = createCliToolSummaryTracker({
                   detailMode: toolProgressDetail,
@@ -1263,7 +1271,11 @@ export function createFollowupRunner(params: {
                         const presentationPromise = forwardFollowupProgressEvent({
                           evt: {
                             stream: "tool",
-                            data: { name: payload.name, phase: payload.phase, args: payload.args },
+                            data: {
+                              name: payload.name,
+                              phase: payload.phase,
+                              args: payload.args,
+                            },
                           },
                           opts: progressOpts,
                           detailMode: toolProgressDetail,
@@ -1280,7 +1292,11 @@ export function createFollowupRunner(params: {
                               await forwardFollowupProgressEvent({
                                 evt: {
                                   stream: "item",
-                                  data: { kind: "preamble", progressText: text, itemId },
+                                  data: {
+                                    kind: "preamble",
+                                    progressText: text,
+                                    itemId,
+                                  },
                                 },
                                 opts: progressOpts,
                                 detailMode: toolProgressDetail,
@@ -1426,7 +1442,11 @@ export function createFollowupRunner(params: {
                 resolveTerminationFields: (error) =>
                   resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
               });
-              pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
+              pendingLifecycleTerminal = {
+                provider,
+                model,
+                backstop: lifecycleBackstop,
+              };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
               const runSessionTarget =
                 storePath && run.sessionKey
@@ -1564,7 +1584,10 @@ export function createFollowupRunner(params: {
                       notifyUserAboutCompaction: shouldNotifyUserAboutCompaction(runtimeConfig),
                       currentMessageId: compactionNoticeReplyToId,
                       onCompactionNoticePayload: (payload) =>
-                        sendCompactionNoticePayload(payload, { provider, modelId: model }),
+                        sendCompactionNoticePayload(payload, {
+                          provider,
+                          modelId: model,
+                        }),
                     });
                     if (visible && hasFailedFollowupProgressEvent(evt)) {
                       markVisibleToolErrorProgress();
@@ -1845,7 +1868,7 @@ export function createFollowupRunner(params: {
         }
         return true;
       };
-      if (storePath && replySessionKey) {
+      if (storePath && replySessionKey && !followupResetCommitted) {
         await persistRunSessionUsage({
           storePath,
           sessionKey: replySessionKey,

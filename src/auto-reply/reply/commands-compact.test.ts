@@ -1,6 +1,7 @@
 // Tests compact command behavior for session compaction and reply status.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
@@ -537,6 +538,13 @@ describe("handleCompactCommand", () => {
   });
 
   it("flushes after-compaction reset requests after recording the terminal status event", async () => {
+    vi.mocked(performGatewaySessionReset).mockImplementationOnce(async (request) => {
+      request.onCommitted?.({
+        key: request.key,
+        sessionId: "reset-session",
+      });
+      return { ok: true } as never;
+    });
     vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
       input.deferEmbeddedHookSessionReset?.({
         key: "agent:main:whatsapp:direct:12345",
@@ -556,19 +564,18 @@ describe("handleCompactCommand", () => {
       };
     });
 
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "target-session",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const params = {
+      ...buildCompactParams("/compact", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      sessionEntry: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    } as HandleCommandsParams;
+
+    await handleCompactCommand(params, true);
 
     expect(vi.mocked(enqueueSystemEvent)).toHaveBeenCalledWith(
       "Compacted (999 → 321) • Context 12.1k",
@@ -578,6 +585,13 @@ describe("handleCompactCommand", () => {
     const statusEventOrder = vi.mocked(enqueueSystemEvent).mock.invocationCallOrder.at(-1);
     const resetOrder = vi.mocked(performGatewaySessionReset).mock.invocationCallOrder.at(-1);
     expect(statusEventOrder).toBeLessThan(resetOrder ?? 0);
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      {
+        sessionKey: "agent:main:whatsapp:direct:12345",
+        agentId: "main",
+        reason: "new",
+      },
+    ]);
   });
 
   it("guards delayed after-compaction resets against replaced sessions", async () => {

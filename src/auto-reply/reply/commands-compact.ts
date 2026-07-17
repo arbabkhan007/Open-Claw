@@ -22,6 +22,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { markCommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -264,7 +265,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     }
   }
   const sessionAgentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+      })
     : (params.agentId ?? "main");
   const currentAgentId = params.agentId ?? "main";
   const sessionAgentDir =
@@ -342,7 +346,22 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
     deferEmbeddedHookSessionReset: (request) =>
       hookSessionResetQueue.deferResetSession(
-        withEmbeddedHookSessionResetAssertion(request, assertCurrentHookResetSession),
+        withEmbeddedHookSessionResetAssertion(
+          {
+            ...request,
+            onCommitted: (commit) => {
+              request.onCommitted?.(commit);
+              markCommandSessionMetadataChange({
+                ctx: params.ctx,
+                rootCtx: params.rootCtx,
+                sessionKey: commit.key,
+                ...(request.agentId ? { agentId: request.agentId } : {}),
+                reason: request.reason,
+              });
+            },
+          },
+          assertCurrentHookResetSession,
+        ),
       ),
   });
 

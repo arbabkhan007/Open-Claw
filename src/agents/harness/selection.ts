@@ -484,10 +484,9 @@ export async function runAgentHarnessAttempt(
       ]
     : [];
   const pluginParams = withoutInternalHarnessAuthority(internalParams);
-  const harnessParams =
-    harness.id === "copilot"
-      ? preserveCopilotLifecycleResetQueue(internalParams, pluginParams)
-      : pluginParams;
+  const harnessParams = shouldPreserveLifecycleResetQueue(harness)
+    ? preserveLifecycleResetQueue(internalParams, pluginParams)
+    : pluginParams;
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -540,7 +539,11 @@ function withoutInternalHarnessAuthority(
   return pluginParams;
 }
 
-function preserveCopilotLifecycleResetQueue(
+function shouldPreserveLifecycleResetQueue(harness: AgentHarness): boolean {
+  return harness.id === "openclaw" || harness.id === "copilot";
+}
+
+function preserveLifecycleResetQueue(
   internalParams: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
   pluginParams: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {

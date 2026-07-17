@@ -13,7 +13,6 @@ import type { AgentMessage } from "../runtime/index.js";
 import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
-  type DeferredEmbeddedHookSessionResetRequest,
   type DeferEmbeddedHookSessionReset,
   type EmbeddedHookApi,
 } from "./compaction-hook-reset-api.js";
@@ -149,7 +148,11 @@ export async function runPostCompactionSideEffects(params: {
 type CompactionHookRunner = {
   hasHooks?: (hookName?: string) => boolean;
   runBeforeCompaction?: (
-    metrics: { messageCount: number; tokenCount?: number; sessionFile?: string },
+    metrics: {
+      messageCount: number;
+      tokenCount?: number;
+      sessionFile?: string;
+    },
     context: CompactionHookContext,
   ) => Promise<void> | void;
   runAfterCompaction?: (
@@ -327,12 +330,12 @@ export async function runAfterCompactionHooks(params: {
   }) => void | Promise<void>;
   deferResetSession?: DeferEmbeddedHookSessionReset;
 }) {
-  const resetQueue = params.deferResetSession ? null : createEmbeddedHookSessionResetQueue();
-  const deferResetSession =
-    params.deferResetSession ??
-    (resetQueue
-      ? (request: DeferredEmbeddedHookSessionResetRequest) => resetQueue.deferResetSession(request)
-      : undefined);
+  const deferResetSession = params.deferResetSession;
+  const localResetQueue =
+    params.modelSelectionLocked === true || params.missingSessionKey || deferResetSession
+      ? undefined
+      : createEmbeddedHookSessionResetQueue();
+  const effectiveDeferResetSession = deferResetSession ?? localResetQueue?.deferResetSession;
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
       sessionId: params.sessionId,
@@ -368,13 +371,15 @@ export async function runAfterCompactionHooks(params: {
         sessionKey: params.hookSessionKey,
         workspaceDir: params.workspaceDir,
         messageProvider: params.messageProvider,
-        ...(params.modelSelectionLocked === true || params.missingSessionKey
+        ...(params.modelSelectionLocked === true ||
+        params.missingSessionKey ||
+        !effectiveDeferResetSession
           ? {}
           : {
               api: buildEmbeddedHookApi({
                 agentId: params.sessionAgentId,
                 sessionKey: params.hookSessionKey,
-                ...(deferResetSession ? { deferResetSession } : {}),
+                deferResetSession: effectiveDeferResetSession,
               }),
             }),
       };
@@ -393,7 +398,8 @@ export async function runAfterCompactionHooks(params: {
         errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
+    } finally {
+      await localResetQueue?.flush();
     }
   }
-  await resetQueue?.flush();
 }

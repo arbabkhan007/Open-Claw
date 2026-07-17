@@ -73,6 +73,9 @@ export function refreshCronSessionAfterResetCommit(params: {
   if (params.commit.key === params.agentSessionKey || params.commit.key === params.runSessionKey) {
     params.cronSession.sessionEntry = refreshed;
   }
+  if (params.commit.key === params.agentSessionKey || params.commit.key === params.runSessionKey) {
+    params.cronSession.initialSessionEntry = structuredClone(refreshed);
+  }
 }
 
 export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
