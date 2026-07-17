@@ -106,10 +106,12 @@ async function discoverEmbeddingModels(params: {
   try {
     if (!response.ok) {
       // Copilot requests carry a bearer token and target a configurable base
-      // URL, so redact credential-shaped upstream/proxy text before it enters
-      // error diagnostics.
+      // URL. This is a credential-safety boundary, so force `tools` mode: the
+      // reflected body must stay masked even when `logging.redactSensitive` is
+      // `off`, which would otherwise return the raw upstream/proxy text.
       const detail = redactSensitiveText(
         await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+        { mode: "tools" },
       );
       throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
     }
@@ -252,10 +254,12 @@ async function createGitHubCopilotEmbeddingProvider(
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          // Sibling of the discovery path: redact credential-shaped upstream or
-          // proxy text before it enters embeddings error diagnostics.
+          // Sibling of the discovery path and the same credential-safety
+          // boundary: force `tools` mode so the reflected body stays masked
+          // even when `logging.redactSensitive` is `off`.
           const detail = redactSensitiveText(
             await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+            { mode: "tools" },
           );
           throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }
