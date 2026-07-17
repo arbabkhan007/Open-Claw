@@ -1,5 +1,8 @@
 // Imessage plugin module implements sanitize outbound behavior.
-import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-chunking";
+import {
+  sanitizeAssistantVisibleText,
+  stripAssistantInternalScaffolding,
+} from "openclaw/plugin-sdk/text-chunking";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.
@@ -21,7 +24,7 @@ export function sanitizeOutboundText(text: string): string {
     return text;
   }
 
-  let cleaned = stripAssistantInternalScaffolding(text);
+  let cleaned = stripAssistantInternalScaffolding(sanitizeAssistantVisibleText(text));
 
   cleaned = cleaned.replace(INTERNAL_SEPARATOR_RE, "");
   cleaned = cleaned.replace(ASSISTANT_ROLE_MARKER_RE, "");
