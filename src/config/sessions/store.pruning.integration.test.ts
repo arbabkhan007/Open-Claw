@@ -15,6 +15,7 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
 } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
@@ -879,6 +880,51 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(oldOrphanTranscript);
   });
 
+  it("sessions cleanup dry-run reports archive cleanup before disk budget", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+          maxDiskBytes: 1000,
+          highWaterBytes: 900,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    await seedSqliteSessionStore(storePath, store);
+    await fs.writeFile(oldArchived, "x".repeat(2000), "utf-8");
+    const oldDate = new Date(now - 10 * DAY_MS);
+    await fs.utimes(oldArchived, oldDate, oldDate);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const diskBudgetSummary = dryRun.previewResults[0]?.summary.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected disk budget cleanup summary");
+    }
+    expect(diskBudgetSummary.removedFiles).toBe(0);
+    expect(dryRun.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 1,
+      removedFiles: 1,
+    });
+    await expectPathExists(oldArchived);
+  });
+
   it("sessions cleanup dry-run reports SQLite transcript row bytes for disk budget", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
@@ -1194,7 +1240,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       session: {
         maintenance: {
           mode: "enforce",
-          pruneAfter: "7d",
+          pruneAfter: "3d",
           resetArchiveRetention: "7d",
           maxEntries: 500,
         },
@@ -1213,18 +1259,24 @@ describe("Integration: saveSessionStore with pruning", () => {
       testDir,
       `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
     );
+    const archiveYoungerThanRetention = path.join(
+      testDir,
+      `retained-session.jsonl.deleted.${archiveTimestamp(now - 5 * DAY_MS)}`,
+    );
     const bakArchived = path.join(
       testDir,
       `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
     );
     await fs.writeFile(oldArchived, "old", "utf-8");
     await fs.writeFile(recentArchived, "recent", "utf-8");
+    await fs.writeFile(archiveYoungerThanRetention, "retained", "utf-8");
     await fs.writeFile(bakArchived, "bak", "utf-8");
 
     await saveSessionStore(storePath, store);
 
     await expectPathMissing(oldArchived);
     await expectPathExists(recentArchived);
+    await expectPathExists(archiveYoungerThanRetention);
     await expectPathExists(bakArchived);
   });
 
@@ -1259,6 +1311,291 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await expectPathMissing(oldReset);
     await expectPathExists(freshReset);
+  });
+
+  it("sessions cleanup previews and applies deleted/reset archive cleanup", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "3d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    const oldDeleted = path.join(
+      testDir,
+      `old-deleted.jsonl.deleted.${archiveTimestamp(now - 40 * DAY_MS)}`,
+    );
+    const freshDeleted = path.join(
+      testDir,
+      `fresh-deleted.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
+    );
+    const oldReset = path.join(
+      testDir,
+      `old-reset.jsonl.reset.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    const freshReset = path.join(
+      testDir,
+      `fresh-reset.jsonl.reset.${archiveTimestamp(now - DAY_MS)}`,
+    );
+    await fs.writeFile(oldDeleted, "old-deleted", "utf-8");
+    await fs.writeFile(freshDeleted, "fresh-deleted", "utf-8");
+    await fs.writeFile(oldReset, "old-reset", "utf-8");
+    await fs.writeFile(freshReset, "fresh-reset", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 4,
+      removedFiles: 2,
+    });
+    await expectPathExists(oldDeleted);
+    await expectPathExists(oldReset);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.archiveCleanup).toEqual({
+      scannedFiles: 4,
+      removedFiles: 2,
+    });
+    await expectPathMissing(oldDeleted);
+    await expectPathMissing(oldReset);
+    await expectPathExists(freshDeleted);
+    await expectPathExists(freshReset);
+  });
+
+  it("sessions cleanup scans the sibling archive directory for a direct SQLite target", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const agentDir = path.join(testDir, "agents", "main");
+    const archiveDir = path.join(agentDir, "sessions");
+    const sqlitePath = path.join(agentDir, "agent", "custom.sqlite");
+    await fs.mkdir(archiveDir, { recursive: true });
+    await seedSqliteSessionStore(sqlitePath, {
+      fresh: { sessionId: "fresh-session", updatedAt: Date.now() },
+    });
+    const staleArchive = path.join(
+      archiveDir,
+      `stale.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "stale", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: sqlitePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath: sqlitePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 1,
+      removedFiles: 1,
+    });
+    await expectPathExists(staleArchive);
+  });
+
+  it("deduplicates archive previews for all agents sharing one store directory", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const sharedStorePath = path.join(testDir, "shared-sessions.json");
+    const staleArchive = path.join(
+      testDir,
+      `stale.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "stale", "utf-8");
+
+    const cfg = {
+      session: { store: sharedStorePath },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const dryRun = await runSessionsCleanup({
+      cfg,
+      opts: { allAgents: true, dryRun: true, enforce: true },
+    });
+
+    expect(dryRun.previewResults).toHaveLength(2);
+    expect(dryRun.previewResults.map((result) => result.summary.archiveCleanup)).toEqual([
+      { scannedFiles: 1, removedFiles: 1 },
+      { scannedFiles: 0, removedFiles: 0 },
+    ]);
+    expect(
+      dryRun.previewResults.reduce(
+        (total, result) => total + result.summary.unreferencedArtifacts.removedFiles,
+        0,
+      ),
+    ).toBe(0);
+    await expectPathExists(staleArchive);
+
+    const applied = await runSessionsCleanup({
+      cfg,
+      opts: { allAgents: true, enforce: true },
+    });
+
+    expect(applied.appliedSummaries.map((summary) => summary.agentId)).toEqual(["main", "work"]);
+    expect(
+      applied.appliedSummaries.reduce(
+        (total, summary) => total + summary.archiveCleanup.removedFiles,
+        0,
+      ),
+    ).toBe(1);
+    await expectPathMissing(staleArchive);
+  });
+
+  it("does not clean a shared archive directory when only one agent is selected", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const sharedStorePath = path.join(testDir, "shared-sessions.json");
+    const staleArchive = path.join(
+      testDir,
+      `work-session.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "work", "utf-8");
+
+    const cfg = {
+      session: { store: sharedStorePath },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const result = await runSessionsCleanup({
+      cfg,
+      opts: { agent: "main", enforce: true },
+    });
+
+    expect(result.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+    });
+    expect(result.appliedSummaries).toHaveLength(1);
+    expect(result.appliedSummaries[0]?.archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+    });
+    await expectPathExists(staleArchive);
+  });
+
+  it("cleans a shared archive directory selected explicitly with --store", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const sharedStorePath = path.join(testDir, "shared-sessions.json");
+    const staleArchive = path.join(
+      testDir,
+      `stale.jsonl.deleted.${archiveTimestamp(Date.now() - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(staleArchive, "stale", "utf-8");
+
+    const cfg = {
+      session: { store: sharedStorePath },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } satisfies OpenClawConfig;
+    const result = await runSessionsCleanup({
+      cfg,
+      opts: { store: sharedStorePath, enforce: true },
+    });
+
+    expect(result.appliedSummaries[0]?.archiveCleanup).toEqual({
+      scannedFiles: 1,
+      removedFiles: 1,
+    });
+    await expectPathMissing(staleArchive);
+  });
+
+  it("sessions cleanup keeps deleted and reset archives when retention is disabled", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: false,
+          maxEntries: 500,
+        },
+      },
+    });
+
+    const now = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ fresh: { sessionId: "fresh-session", updatedAt: now } }),
+      "utf-8",
+    );
+    const oldDeleted = path.join(
+      testDir,
+      `old-deleted.jsonl.deleted.${archiveTimestamp(now - 40 * DAY_MS)}`,
+    );
+    const oldReset = path.join(
+      testDir,
+      `old-reset.jsonl.reset.${archiveTimestamp(now - 40 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldDeleted, "old-deleted", "utf-8");
+    await fs.writeFile(oldReset, "old-reset", "utf-8");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+    });
+    await expectPathExists(oldDeleted);
+    await expectPathExists(oldReset);
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
