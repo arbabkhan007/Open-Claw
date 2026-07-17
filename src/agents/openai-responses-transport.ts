@@ -1054,9 +1054,14 @@ function convertResponsesMessages(
             // as thinkingSignature rather than a JSON-encoded reasoning item.
             // Replaying those values would corrupt the next request payload
             // (OpenRouter returns HTTP 500), so skip non-JSON signatures.
-            const reasoningItem = JSON.parse(
-              block.thinkingSignature,
-            ) as ReplayableResponseReasoningItem;
+            let reasoningItem: ReplayableResponseReasoningItem;
+            try {
+              reasoningItem = JSON.parse(
+                block.thinkingSignature,
+              ) as ReplayableResponseReasoningItem;
+            } catch {
+              continue;
+            }
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
               reasoningItem,
               replayContext,
