@@ -419,6 +419,13 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, open '${key}'`);
     }),
+    readdir: vi.fn(async (p: string) => {
+      const prefix = `${p}/`;
+      return Array.from(state.files.keys())
+        .filter((filePath) => filePath.startsWith(prefix))
+        .map((filePath) => filePath.slice(prefix.length))
+        .filter((entry) => !entry.includes("/"));
+    }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
@@ -1295,6 +1302,31 @@ describe("launchd install", () => {
 
       expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
+
+  it("finds an unloaded same-label system LaunchDaemon by plist Label", async () => {
+    await withProcessPlatform("darwin", async () => {
+      const env = createDefaultLaunchdEnv();
+      const plistPath = "/Library/LaunchDaemons/custom-gateway-name.plist";
+      state.files.set(
+        plistPath,
+        createTestLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: defaultProgramArguments,
+        }),
+      );
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow(plistPath);
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
       expectNoLaunchAgentActivationCalls();
     });
   });

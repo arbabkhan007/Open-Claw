@@ -26,6 +26,7 @@ import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  parseLaunchdPlistLabel,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
@@ -165,6 +166,41 @@ function resolveLaunchAgentPlistPathForLabel(
 
 function resolveSystemLaunchDaemonPlistPathForLabel(label: string): string {
   return path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, `${label}.plist`);
+}
+
+async function findSystemLaunchDaemonPlistPathForLabel(label: string): Promise<string | null> {
+  const canonicalPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
+  try {
+    await fs.access(canonicalPath);
+    return canonicalPath;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(LAUNCH_DAEMON_SYSTEM_DIR);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith(".plist") || entry === `${label}.plist`) {
+      continue;
+    }
+    const plistPath = path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, entry);
+    // launchd keys jobs by the plist Label, not its filename. Every candidate
+    // must be readable before activating a gui job with the same identity.
+    const contents = await fs.readFile(plistPath, "utf8");
+    if (parseLaunchdPlistLabel(contents) === label) {
+      return plistPath;
+    }
+  }
+  return null;
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
@@ -399,7 +435,6 @@ async function resolveSystemLaunchDaemonConflict(
   if (process.platform !== "darwin") {
     return null;
   }
-  const plistPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
   const serviceTarget = `system/${label}`;
   const printed = await execLaunchctl(["print", serviceTarget]);
   if (printed.code === 0) {
@@ -411,17 +446,11 @@ async function resolveSystemLaunchDaemonConflict(
       `Could not verify whether system LaunchDaemon ${serviceTarget} is loaded: ${detail}`,
     );
   }
-  try {
-    await fs.access(plistPath);
-    return { detectedBy: "plist", serviceTarget, plistPath };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      // This guard must fail closed: an unreadable system plist location does
-      // not prove that activating a competing gui LaunchAgent is safe.
-      throw err;
-    }
+  const plistPath = await findSystemLaunchDaemonPlistPathForLabel(label);
+  if (!plistPath) {
     return null;
   }
+  return { detectedBy: "plist", serviceTarget, plistPath };
 }
 
 function formatSystemLaunchDaemonConflict(conflict: SystemLaunchDaemonConflict): string {
