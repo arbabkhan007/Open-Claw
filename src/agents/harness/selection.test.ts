@@ -2,7 +2,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
@@ -60,15 +59,17 @@ it("identifies harnesses that expose OpenClaw tools", () => {
   expect(agentHarnessExposesOpenClawTools("custom")).toBe(false);
 });
 
-vi.mock("./builtin-openclaw.js", () => ({
-  createOpenClawAgentHarness: (): AgentHarness => ({
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: agentRunAttempt,
-  }),
-}));
+vi.mock("./builtin-openclaw.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./builtin-openclaw.js")>();
+  return {
+    ...original,
+    createOpenClawAgentHarness: (): AgentHarness => {
+      const harness = original.createOpenClawAgentHarness();
+      harness.runAttempt = agentRunAttempt;
+      return harness;
+    },
+  };
+});
 vi.mock("../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,

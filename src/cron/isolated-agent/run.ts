@@ -1337,10 +1337,8 @@ async function finalizeCronRun(params: {
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
-  if (!sessionResetCommitted) {
-    await prepared.persistSessionEntry();
-    await prepared.runContinuationSession?.seal({ basePersisted: true });
-  }
+  await prepared.persistSessionEntry();
+  await prepared.runContinuationSession?.seal({ basePersisted: true });
 
   if (params.isAborted()) {
     return prepared.withRunSession({

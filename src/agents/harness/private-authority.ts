@@ -1,3 +1,4 @@
+import { isBuiltinOpenClawAgentHarness } from "./builtin-openclaw-identity.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarness } from "./types.js";
 
@@ -6,7 +7,7 @@ const BUNDLED_LIFECYCLE_RESET_HARNESS_OWNERS: ReadonlyMap<string, string> = new 
 ]);
 
 export function harnessOwnsPrivateLifecycleResetAuthority(harness: AgentHarness): boolean {
-  if (harness.id === "openclaw") {
+  if (isBuiltinOpenClawAgentHarness(harness)) {
     return true;
   }
   const expectedOwner = BUNDLED_LIFECYCLE_RESET_HARNESS_OWNERS.get(harness.id);

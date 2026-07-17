@@ -354,7 +354,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     });
     const resetEntry = makeCronSessionEntry({
       sessionId: "session-after-reset",
-      sessionFile: "/tmp/session-after-reset.jsonl",
+      sessionFile: "sqlite:main:session-after-reset:/tmp/store.json",
       compactionCount: 0,
     });
     const latestRows = new Map<string, SessionEntry>();
@@ -423,13 +423,28 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     expect(sessionEntryAfterResetCallback).toBe("session-after-reset");
     expect(cronSession.sessionEntry).toMatchObject({
       sessionId: "session-after-reset",
-      sessionFile: "/tmp/session-after-reset.jsonl",
+      sessionFile: "sqlite:main:session-after-reset:/tmp/store.json",
       compactionCount: 0,
     });
     expect(cronSession.sessionEntry.inputTokens).toBeUndefined();
     expect(cronSession.sessionEntry.outputTokens).toBeUndefined();
     expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
     expect(cronSession.sessionEntry.totalTokensFresh).toBeUndefined();
+    const stableSessionWrites = patchSessionEntryMock.mock.calls.filter(
+      (call) => (call[0] as { sessionKey: string }).sessionKey === stableSessionKey,
+    );
+    const finalStableWriteOptions = stableSessionWrites.at(-1)?.[2] as
+      | { fallbackEntry?: SessionEntry }
+      | undefined;
+    expect(finalStableWriteOptions?.fallbackEntry).toMatchObject({
+      sessionId: "session-after-reset",
+      sessionFile: "sqlite:main:session-after-reset:/tmp/store.json",
+      compactionCount: 0,
+    });
+    expect(finalStableWriteOptions?.fallbackEntry?.inputTokens).toBeUndefined();
+    expect(finalStableWriteOptions?.fallbackEntry?.outputTokens).toBeUndefined();
+    expect(finalStableWriteOptions?.fallbackEntry?.totalTokens).toBeUndefined();
+    expect(finalStableWriteOptions?.fallbackEntry?.totalTokensFresh).toBeUndefined();
   });
 
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {

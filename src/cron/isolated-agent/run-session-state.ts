@@ -18,6 +18,10 @@ type MutableCronSessionEntry = SessionEntry;
 export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
   store: MutableSessionStore;
   sessionEntry: MutableCronSessionEntry;
+  hookResetPersistBaseline?: {
+    sessionId: string;
+    entry: SessionEntry;
+  };
 };
 /** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
@@ -65,7 +69,13 @@ export function refreshCronSessionAfterResetCommit(params: {
   commit: CronSessionResetCommit;
   latestEntry: SessionEntry;
 }): void {
+  const resetBaselineEntry =
+    params.cronSession.initialSessionEntry ?? params.cronSession.sessionEntry;
   const refreshed = structuredClone(params.latestEntry);
+  params.cronSession.hookResetPersistBaseline = {
+    sessionId: params.commit.sessionId,
+    entry: structuredClone(resetBaselineEntry),
+  };
   params.cronSession.store[params.commit.key] = structuredClone(refreshed);
   if (params.commit.key !== params.agentSessionKey) {
     params.cronSession.store[params.agentSessionKey] = structuredClone(refreshed);
@@ -155,10 +165,25 @@ export function createPersistCronSessionEntry(params: {
         const canClaimInitialRevision = params.cronSession.initialSessionEntry
           ? !currentRevisionActive && initialEntryMatchesOwnershipFields
           : currentEntry === undefined;
+        const resetBaselineMatchesOwnershipFields =
+          currentEntry !== undefined &&
+          params.cronSession.hookResetPersistBaseline !== undefined &&
+          isDeepStrictEqual(
+            projectCronOwnershipFields(currentEntry),
+            projectCronOwnershipFields(params.cronSession.hookResetPersistBaseline.entry),
+          );
+        const ownsHookResetCommit =
+          params.cronSession.hookResetPersistBaseline?.sessionId === persistedEntry.sessionId &&
+          (ownsCurrentRevision || (!currentRevisionActive && resetBaselineMatchesOwnershipFields));
         // Concurrent persistent runs can resolve the same initial row. Once one
         // revision claims it, older owners must not reclaim it and delete newer state.
-        if (!ownsCurrentRevision && !canClaimInitialRevision) {
+        if (!ownsCurrentRevision && !canClaimInitialRevision && !ownsHookResetCommit) {
           throw new CronSessionLifecycleClaimError(params.agentSessionKey);
+        }
+        if (ownsHookResetCommit) {
+          committedEntry = persistedEntry;
+          mergedLiveEntry = liveEntry;
+          return committedEntry;
         }
         if (
           (ownsCurrentRevision || canClaimInitialRevision) &&
