@@ -162,8 +162,18 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
   });
 
   it("preserves explicit markdown links even when href looks like a file ref", () => {
-    const result = markdownToTelegramHtml("[docs](http://README.md)");
-    expect(result).toContain('<a href="http://README.md">docs</a>');
+    expect(markdownToTelegramHtml("[docs](http://README.md)")).toContain(
+      '<a href="http://README.md">docs</a>',
+    );
+    expect(markdownToTelegramHtml("[README.md](https://README.md)")).toContain(
+      '<a href="https://README.md">README.md</a>',
+    );
+  });
+
+  it("keeps plain and authored file-style links distinct in the same message", () => {
+    expect(markdownToTelegramHtml("README.md [README.md](https://README.md)")).toBe(
+      '<code>README.md</code> <a href="https://README.md">README.md</a>',
+    );
   });
 
   it("wraps file ref after real URL in same message", () => {
@@ -180,6 +190,15 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
       {
         html: "Check <code>README.md</code> and <code>backup.sh</code>",
         text: "Check README.md and backup.sh",
+      },
+    ]);
+  });
+
+  it("preserves authored file-style links in chunked output", () => {
+    expect(markdownToTelegramChunks("README.md [README.md](https://README.md)", 4096)).toEqual([
+      {
+        html: '<code>README.md</code> <a href="https://README.md">README.md</a>',
+        text: "README.md README.md",
       },
     ]);
   });
