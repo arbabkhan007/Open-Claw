@@ -34,6 +34,9 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
     }),
   ),
 );
+const repairNestedOpenClawHomeStateDir = vi.hoisted(() =>
+  vi.fn(async () => ({ changes: ["nested-home-recovered"], warnings: [] })),
+);
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(
     async (): Promise<StateMigrationResult> => ({
@@ -140,6 +143,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  repairNestedOpenClawHomeStateDir,
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
@@ -365,6 +369,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
+    expect(repairNestedOpenClawHomeStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
@@ -664,6 +669,11 @@ describe("runDoctorConfigPreflight state migration", () => {
       env: process.env,
       recoverCorruptTargetStore: true,
     });
+    expect(repairNestedOpenClawHomeStateDir).toHaveBeenCalledWith({ env: process.env });
+    expect(repairNestedOpenClawHomeStateDir.mock.invocationCallOrder[0]).toBeLessThan(
+      autoMigrateLegacyStateDir.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(note).toHaveBeenCalledWith("- nested-home-recovered", "Doctor changes");
   });
 
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
