@@ -76,7 +76,7 @@ class InvalidTokenRateLimiter {
       return false;
     }
     const existing = this.normalizeState(key, nowMs);
-    return (existing?.count ?? 0) > this.limit;
+    return (existing?.count ?? 0) >= this.limit;
   }
 
   recordFailure(key: string, nowMs = Date.now()): boolean {
@@ -87,7 +87,7 @@ class InvalidTokenRateLimiter {
     const nextCount = (existing?.count ?? 0) + 1;
     const windowStartMs = existing?.windowStartMs ?? nowMs;
     this.touch(key, { count: nextCount, windowStartMs });
-    return nextCount > this.limit;
+    return nextCount >= this.limit;
   }
 
   clear(): void {
@@ -110,7 +110,7 @@ function getRateLimiter(account: ResolvedSynologyChatAccount): RateLimiter {
 }
 
 function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): InvalidTokenRateLimiter {
-  const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
+  const limit = Math.max(1, Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE));
   let rl = invalidTokenRateLimiters.get(account.accountId);
   if (!rl || rl.maxRequests() !== limit) {
     rl?.clear();
