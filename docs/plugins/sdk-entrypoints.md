@@ -92,7 +92,7 @@ export default defineToolPlugin({
   wraps it as a text tool result with `details` set to the original
   (unstringified) return value.
 - For custom tool results, `openclaw/plugin-sdk/tool-results` exports
-  `textResult` and `jsonResult`.
+  `textResult`, `jsonResult`, and `yieldToolResult`.
 - Tool names are static, so `openclaw plugins build` derives
   `contracts.tools` from the declared tools without hand-duplicated names.
 - Runtime loading stays strict: installed plugins still need
