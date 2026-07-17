@@ -142,6 +142,57 @@ describe("downloadGeneratedMusicAsset", () => {
     expect(result.mimeType).toBe("audio/mpeg");
   });
 
+  it("skips diagnostic body read on retryable status so deadline survives for retry", async () => {
+    // A dripping 503 body would consume the wall-clock deadline if read for
+    // diagnostics. The fix cancels the body immediately for retryable 5xx
+    // statuses so the retry gets a usable budget.
+    let requestCount = 0;
+
+    server = http.createServer((_req, res) => {
+      res.on("error", () => {});
+      requestCount += 1;
+      if (requestCount === 1) {
+        res.writeHead(503, {
+          "Content-Type": "text/plain",
+          "Transfer-Encoding": "chunked",
+        });
+        // Drip bytes forever so a body read would consume the full deadline.
+        const drip = () => {
+          if (res.writableEnded || res.destroyed) return;
+          res.write("e");
+          dripTimers.add(setTimeout(drip, 15));
+        };
+        drip();
+      } else {
+        res.writeHead(200, { "Content-Type": "audio/mpeg" });
+        res.end(Buffer.alloc(1024, 0x00));
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected port");
+    }
+
+    const startedAt = performance.now();
+    const result = await downloadGeneratedMusicAsset({
+      candidate: { url: `http://127.0.0.1:${address.port}/track.mp3` },
+      timeoutMs: 5000,
+      fetchFn: fetch,
+      provider: "test-provider",
+      requestFailedMessage: "test music download failed",
+      maxBytes: 1024 * 1024,
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    // The 503 body was cancelled immediately (not read), so the retry
+    // happens quickly — well within the timeout budget.
+    expect(requestCount).toBe(2);
+    expect(result.buffer.length).toBe(1024);
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {
     // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
     server = http.createServer((_req, res) => {

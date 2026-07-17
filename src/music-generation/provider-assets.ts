@@ -142,9 +142,15 @@ export async function downloadGeneratedMusicAsset(params: {
         params.fetchFn,
       );
       if (!res.ok) {
-        // Shared assertOkOrThrowHttpError has no wall-clock read deadline, so
-        // inline a bounded error-body read with the same timed reader contract
-        // as the success path.
+        // Retryable statuses skip diagnostic body reads so the shared
+        // wall-clock deadline is preserved for the retry attempt. A
+        // dripping 5xx body would otherwise consume the full deadline
+        // before the retry wrapper could start another attempt.
+        if (res.status === 500 || res.status === 502 || res.status === 503 || res.status === 504) {
+          await res.body?.cancel().catch(() => undefined);
+          throw new Error(`${params.requestFailedMessage} (HTTP ${res.status})`);
+        }
+        // Non-retryable statuses keep a bounded diagnostic read.
         const prefix = await readResponseTextPrefix(
           res,
           GENERATED_MUSIC_ERROR_BODY_MAX_BYTES,
