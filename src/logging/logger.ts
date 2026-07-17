@@ -591,6 +591,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
   let currentFileBytes = getCurrentLogFileBytes(activeFile);
   let warnedAboutRotationFailure = false;
+  let warnedAboutWriteFailure = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
@@ -633,6 +634,12 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       }
       if (appendLogLine(activeFile, payload)) {
         currentFileBytes += payloadBytes;
+        warnedAboutWriteFailure = false;
+      } else if (!warnedAboutWriteFailure) {
+        warnedAboutWriteFailure = true;
+        process.stderr.write(
+          `[openclaw] log file write failed; continuing without file log file=${activeFile} (will retry silently; check path/permissions)\n`,
+        );
       }
     } catch {
       // never block on logging failures
