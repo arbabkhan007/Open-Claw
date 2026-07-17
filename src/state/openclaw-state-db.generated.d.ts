@@ -193,6 +193,11 @@ export interface CaptureSessions {
   started_at: number;
 }
 
+export interface ChannelHealthEscalations {
+  escalated_at_ms: number;
+  escalation_key: string;
+}
+
 export interface ChannelIngressEvents {
   account_id: string;
   attempts: Generated<number>;
@@ -1300,6 +1305,7 @@ export interface DB {
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
   capture_sessions: CaptureSessions;
+  channel_health_escalations: ChannelHealthEscalations;
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;

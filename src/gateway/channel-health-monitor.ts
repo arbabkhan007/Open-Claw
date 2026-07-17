@@ -1,6 +1,12 @@
 // Gateway channel health monitor.
 // Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  takeChannelHealthEscalationBudgetSync,
+  type ChannelHealthEscalationBudget,
+} from "../infra/channel-health-escalations.js";
+import { scheduleGatewaySigusr1Restart } from "../infra/restart.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
@@ -40,6 +46,14 @@ type ChannelHealthMonitorDeps = {
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
   abortSignal?: AbortSignal;
+  scheduleProcessRestart?: (opts: { reason: string }) => { ok: boolean };
+  takeEscalationBudget?: (opts: {
+    escalationKey: string;
+    windowMs: number;
+    maxPerWindow: number;
+    nowMs: number;
+  }) => ChannelHealthEscalationBudget;
+  hasSupervisedRestart?: () => boolean;
 };
 
 export type ChannelHealthMonitor = {
@@ -71,6 +85,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
     abortSignal,
+    scheduleProcessRestart = (opts: { reason: string }) =>
+      scheduleGatewaySigusr1Restart({ reason: opts.reason }),
+    takeEscalationBudget = takeChannelHealthEscalationBudgetSync,
+    hasSupervisedRestart = () => detectRespawnSupervisor() !== null,
   } = deps;
   const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
   const timing = resolveTimingPolicy(deps);
@@ -147,6 +165,63 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             log.info?.(
               `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
             );
+            continue;
+          }
+          if (health.reason === "process-restart-required") {
+            // Channel stop/start cannot recover an in-process wedge, so this
+            // escalation must not fall through to the channel-restart path.
+            const escalationRecord = restartRecords.get(key) ?? {
+              lastRestartAt: 0,
+              restartsThisHour: [],
+            };
+            if (now - escalationRecord.lastRestartAt <= cooldownMs) {
+              continue;
+            }
+            // Without a supervisor the restart falls back to in-process, which
+            // cannot clear a process-scoped wedge: it would interrupt other
+            // channels without recovering this lane. Ask the operator instead.
+            if (!hasSupervisedRestart()) {
+              log.error?.(
+                `[${channelId}:${accountId}] health-monitor: channel needs a gateway process restart to clear an in-process wedge, but no supervisor is available to replace the process; restart the gateway manually (for example via your service manager or \`openclaw gateway restart\`)`,
+              );
+              escalationRecord.lastRestartAt = now;
+              restartRecords.set(key, escalationRecord);
+              continue;
+            }
+            // The requested restart replaces this process (and its in-memory
+            // records), so the hourly budget lives in the state database — a
+            // wedge that re-forms after every restart stays bounded.
+            const budget = takeEscalationBudget({
+              escalationKey: key,
+              windowMs: ONE_HOUR_MS,
+              maxPerWindow: maxRestartsPerHour,
+              nowMs: now,
+            });
+            if (!budget.allowed) {
+              if (budget.unavailable) {
+                log.error?.(
+                  `[${channelId}:${accountId}] health-monitor: escalation budget state is unavailable, refusing an unarbitrated gateway restart; restart the gateway manually and check the state database`,
+                );
+              } else {
+                log.warn?.(
+                  `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit (persisted), skipping gateway restart escalation`,
+                );
+              }
+              continue;
+            }
+            log.warn?.(
+              `[${channelId}:${accountId}] health-monitor: channel reports an in-process wedge a channel restart cannot recover; requesting gateway process restart (${budget.usedInWindow}/${maxRestartsPerHour} this hour)`,
+            );
+            escalationRecord.lastRestartAt = now;
+            restartRecords.set(key, escalationRecord);
+            const scheduled = scheduleProcessRestart({
+              reason: `channel-health:${channelId}:${accountId}`,
+            });
+            if (!scheduled.ok) {
+              log.error?.(
+                `[${channelId}:${accountId}] health-monitor: gateway process restart request failed; lane stays guarded until a manual gateway restart`,
+              );
+            }
             continue;
           }
 
