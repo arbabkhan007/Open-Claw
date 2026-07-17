@@ -57,6 +57,84 @@ function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
   }
 }
 
+describe("reconcileChatRunLifecycle yielded parent", () => {
+  it("clears the completed model run without publishing terminal task state", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "Waiting for child completion.",
+      chatRunStatus: {
+        phase: "done",
+        runId: "older-run",
+        sessionKey: "s1",
+        occurredAt: 1,
+      },
+      planStatus: {
+        steps: [{ step: "Wait for child completion", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      yielded: true,
+      runId: "r1",
+      sessionKey: "s1",
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.chatRunStatus).toBeNull();
+    expect(host.planStatus).toBeNull();
+    expect(host.lastLocalTerminalReconcile).toBeNull();
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "running",
+    });
+  });
+});
+
+describe("reconcileChatRunLifecycle indicators", () => {
+  it("clears plan status on terminal run end", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      planStatus: {
+        steps: [{ step: "Finish the run", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r1",
+      clearLocalRun: true,
+    });
+
+    expect(host.planStatus).toBeNull();
+  });
+
+  it("preserves an owned plan when another run terminates", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      planStatus: {
+        runId: "r1",
+        steps: [{ step: "Finish the run", status: "in_progress" }],
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r2",
+      clearIndicators: true,
+      clearLocalRun: false,
+    });
+
+    expect(host.planStatus).toEqual({
+      runId: "r1",
+      steps: [{ step: "Finish the run", status: "in_progress" }],
+    });
+  });
+});
+
 describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875)", () => {
   it("keeps a local run active when the gateway registry overrides a terminal snapshot", () => {
     const host = makeHost({
@@ -75,6 +153,57 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     ).toBe(false);
     expect(host.chatRunId).toBe("run-before-finalize");
     expect(host.chatStream).toBe("final answer");
+  });
+
+  it("honors an explicit inactive run when the status is stale", () => {
+    const host = makeHost({
+      chatRunId: "run-before-terminal-event",
+      chatStream: "final answer",
+      sessionsResult: makeSessionsResult([
+        {
+          key: "s1",
+          hasActiveRun: true,
+          activeRunIds: ["run-before-terminal-event"],
+          status: "running",
+        },
+      ]),
+    });
+
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "s1",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: false,
+        status: "running",
+      }),
+    ).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(rowActive(host)).toBe(false);
+  });
+
+  it("suppresses a stale completed run published under an equivalent alias", () => {
+    const host = makeHost({
+      sessionKey: "main",
+      sessionsResult: makeSessionsResult([
+        {
+          key: "agent:main:main",
+          hasActiveRun: true,
+          activeRunIds: ["r1"],
+          status: "running",
+        },
+      ]),
+      lastLocalTerminalReconcile: {
+        sessionKey: "main",
+        runId: "r1",
+        phase: "done",
+        sessionStatus: "done",
+      },
+    });
+
+    expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(true);
+    expect(isSessionRunActive(host.sessionsResult?.sessions[0] ?? {})).toBe(false);
   });
 
   it("suppresses a stale active row after a recent local completion", () => {
@@ -153,7 +282,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(rowActive(host)).toBe(true);
   });
 
-  it("clears the flag once the server poll reports a non-active row", () => {
+  it("retains completed run identity across a terminal row projection", () => {
     const host = makeHost({
       sessionsResult: makeSessionsResult([{ key: "s1", hasActiveRun: false, status: "done" }]),
       lastLocalTerminalReconcile: {
@@ -164,7 +293,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       },
     });
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
-    expect(host.lastLocalTerminalReconcile).toBeNull();
+    expect(host.lastLocalTerminalReconcile?.runId).toBe("r1");
   });
 
   it("does not arm stale-row suppression from generic lifecycle cleanup", () => {
@@ -186,6 +315,22 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       { key: "s1", hasActiveRun: true, activeRunIds: ["r1"], status: "running" },
     ]);
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
+    expect(rowActive(host)).toBe(true);
+  });
+
+  it("does not clear an unidentified active row from an unowned terminal event", () => {
+    const host = makeHost({
+      sessionsResult: makeSessionsResult([{ key: "s1", hasActiveRun: true, status: "running" }]),
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      sessionStatus: "done",
+      runId: null,
+      sessionKey: "s1",
+      publishRunStatus: false,
+    });
+
     expect(rowActive(host)).toBe(true);
   });
 
@@ -292,6 +437,78 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatStream).toBeNull();
   });
 
+  it("publishes the canonical global row key for a selected agent alias", () => {
+    const reconcileRunTerminal = vi.fn();
+    const host = makeHost({
+      sessionKey: "agent:work:main",
+      chatRunId: "run-global",
+      chatStream: "streaming",
+      sessionsResult: makeSessionsResult([
+        {
+          key: "global",
+          hasActiveRun: true,
+          activeRunIds: ["run-global"],
+          status: "running",
+        },
+      ]),
+      sessions: {
+        reconcileRunTerminal,
+        setModelOverride: vi.fn(),
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      sessionStatus: "done",
+      runId: "run-global",
+      sessionKey: "agent:work:main",
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      key: "global",
+      hasActiveRun: false,
+      status: "done",
+    });
+    expect(reconcileRunTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-global",
+        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
+      }),
+    );
+  });
+
+  it("publishes the canonical global key before the local session list loads", () => {
+    const reconcileRunTerminal = vi.fn();
+    const host = makeHost({
+      sessionKey: "agent:work:main",
+      chatRunId: "run-global",
+      chatStream: "streaming",
+      sessionsResult: null,
+      sessions: {
+        reconcileRunTerminal,
+        setModelOverride: vi.fn(),
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      sessionStatus: "done",
+      runId: "run-global",
+      sessionKey: "agent:work:main",
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+
+    expect(reconcileRunTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-global",
+        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
+      }),
+    );
+  });
+
   it("arms suppression on a completed turn, then suppresses the racing refresh", () => {
     const host = makeHost({
       chatRunId: "r1",
@@ -373,7 +590,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     }
   });
 
-  it("waits for terminal status to expire before reconciling session publications", () => {
+  it("reconciles stale session publications while terminal status is visible", () => {
     const completedAt = Date.now();
     const host = makeHost({
       chatRunStatus: {
@@ -390,10 +607,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       },
     });
 
-    expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(false);
-    expect(rowActive(host)).toBe(true);
-
-    host.chatRunStatus = null;
     expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(rowActive(host)).toBe(false);
   });

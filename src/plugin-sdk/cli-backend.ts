@@ -19,6 +19,7 @@ export type {
   CliBackendThinkingLevel,
   CliBackendJsonlUsage,
 } from "../plugins/types.js";
+export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
