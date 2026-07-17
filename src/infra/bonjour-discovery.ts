@@ -621,3 +621,13 @@ export async function discoverGatewayBeacons(
   }
   return [];
 }
+
+const testing = {
+  parseTailscaleStatusIPv4s,
+};
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bonjourDiscoveryTestApi")] = {
+    testing,
+  };
+}

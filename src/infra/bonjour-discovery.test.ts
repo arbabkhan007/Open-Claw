@@ -381,3 +381,53 @@ describe("bonjour-discovery", () => {
     expect(calls.find((c) => c[1] === "-B")?.[3]).toBe("local.");
   });
 });
+
+function getBonjourTestApi() {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.bonjourDiscoveryTestApi")
+  ] as
+    | {
+        testing: {
+          parseTailscaleStatusIPv4s: (stdout: string) => string[];
+        };
+      }
+    | undefined;
+  if (!api) {
+    throw new Error("Bonjour test API not found — did the module initialize?");
+  }
+  return api.testing;
+}
+
+describe("parseTailscaleStatusIPv4s", () => {
+  it("returns an empty array when stdout is malformed JSON", async () => {
+    await import("./bonjour-discovery.js");
+    const { parseTailscaleStatusIPv4s } = getBonjourTestApi();
+    const result = parseTailscaleStatusIPv4s("connection refused");
+    expect(result).toEqual([]);
+  });
+
+  it("returns an empty array when stdout is non-JSON text", async () => {
+    await import("./bonjour-discovery.js");
+    const { parseTailscaleStatusIPv4s } = getBonjourTestApi();
+    const result = parseTailscaleStatusIPv4s("tailscaled is not running");
+    expect(result).toEqual([]);
+  });
+
+  it("parses valid tailscale status JSON with TailscaleIPs", async () => {
+    await import("./bonjour-discovery.js");
+    const { parseTailscaleStatusIPv4s } = getBonjourTestApi();
+    const result = parseTailscaleStatusIPv4s(
+      JSON.stringify({
+        Self: { TailscaleIPs: ["100.64.0.1", "fd7a:115c:a1e0::1"] },
+      }),
+    );
+    expect(result).toEqual(["100.64.0.1"]);
+  });
+
+  it("returns empty array for empty stdout", async () => {
+    await import("./bonjour-discovery.js");
+    const { parseTailscaleStatusIPv4s } = getBonjourTestApi();
+    const result = parseTailscaleStatusIPv4s("");
+    expect(result).toEqual([]);
+  });
+});
