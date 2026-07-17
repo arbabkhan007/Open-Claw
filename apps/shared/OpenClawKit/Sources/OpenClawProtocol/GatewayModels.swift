@@ -1156,6 +1156,260 @@ public struct AgentEvent: Codable, Sendable {
     }
 }
 
+public struct ConversationSendParams: Codable, Sendable {
+    public let agentid: String
+    public let sourcesessionkey: String?
+    public let operationid: String
+    public let conversationref: String
+    public let message: String
+
+    public init(
+        agentid: String,
+        sourcesessionkey: String? = nil,
+        operationid: String,
+        conversationref: String,
+        message: String)
+    {
+        self.agentid = agentid
+        self.sourcesessionkey = sourcesessionkey
+        self.operationid = operationid
+        self.conversationref = conversationref
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sourcesessionkey = "sourceSessionKey"
+        case operationid = "operationId"
+        case conversationref = "conversationRef"
+        case message
+    }
+}
+
+public struct ConversationSendResult: Codable, Sendable {
+    public let status: AnyCodable
+    public let conversationref: String
+    public let channel: String
+    public let messageid: String?
+    public let queueid: String?
+
+    public init(
+        status: AnyCodable,
+        conversationref: String,
+        channel: String,
+        messageid: String? = nil,
+        queueid: String? = nil)
+    {
+        self.status = status
+        self.conversationref = conversationref
+        self.channel = channel
+        self.messageid = messageid
+        self.queueid = queueid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case conversationref = "conversationRef"
+        case channel
+        case messageid = "messageId"
+        case queueid = "queueId"
+    }
+}
+
+public struct ConversationListItem: Codable, Sendable {
+    public let conversationref: String
+    public let channel: String
+    public let accountid: String
+    public let kind: AnyCodable
+    public let target: String
+    public let threadid: String?
+    public let label: String?
+    public let firstseenat: Int
+    public let lastseenat: Int
+
+    public init(
+        conversationref: String,
+        channel: String,
+        accountid: String,
+        kind: AnyCodable,
+        target: String,
+        threadid: String? = nil,
+        label: String? = nil,
+        firstseenat: Int,
+        lastseenat: Int)
+    {
+        self.conversationref = conversationref
+        self.channel = channel
+        self.accountid = accountid
+        self.kind = kind
+        self.target = target
+        self.threadid = threadid
+        self.label = label
+        self.firstseenat = firstseenat
+        self.lastseenat = lastseenat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationref = "conversationRef"
+        case channel
+        case accountid = "accountId"
+        case kind
+        case target
+        case threadid = "threadId"
+        case label
+        case firstseenat = "firstSeenAt"
+        case lastseenat = "lastSeenAt"
+    }
+}
+
+public struct ConversationListParams: Codable, Sendable {
+    public let agentid: String
+    public let channel: String?
+    public let query: String?
+    public let limit: Int?
+
+    public init(
+        agentid: String,
+        channel: String? = nil,
+        query: String? = nil,
+        limit: Int? = nil)
+    {
+        self.agentid = agentid
+        self.channel = channel
+        self.query = query
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case channel
+        case query
+        case limit
+    }
+}
+
+public struct ConversationListResult: Codable, Sendable {
+    public let conversations: [ConversationListItem]
+
+    public init(
+        conversations: [ConversationListItem])
+    {
+        self.conversations = conversations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversations
+    }
+}
+
+public struct ConversationTurnCancelParams: Codable, Sendable {
+    public let agentid: String
+    public let turnid: String
+
+    public init(
+        agentid: String,
+        turnid: String)
+    {
+        self.agentid = agentid
+        self.turnid = turnid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case turnid = "turnId"
+    }
+}
+
+public struct ConversationTurnCancelResult: Codable, Sendable {
+    public let cancelled: Bool
+
+    public init(
+        cancelled: Bool)
+    {
+        self.cancelled = cancelled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cancelled
+    }
+}
+
+public struct ConversationTurnParams: Codable, Sendable {
+    public let agentid: String
+    public let sourcesessionkey: String?
+    public let turnid: String
+    public let conversationref: String
+    public let message: String
+    public let timeoutms: Int
+
+    public init(
+        agentid: String,
+        sourcesessionkey: String? = nil,
+        turnid: String,
+        conversationref: String,
+        message: String,
+        timeoutms: Int)
+    {
+        self.agentid = agentid
+        self.sourcesessionkey = sourcesessionkey
+        self.turnid = turnid
+        self.conversationref = conversationref
+        self.message = message
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sourcesessionkey = "sourceSessionKey"
+        case turnid = "turnId"
+        case conversationref = "conversationRef"
+        case message
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct ConversationTurnReply: Codable, Sendable {
+    public let conversationref: String
+    public let messageid: String
+    public let replytoid: String?
+    public let threadid: String?
+    public let text: String
+    public let timestamp: Int
+    public let transcriptartifactid: String?
+    public let transcriptmessageid: String?
+
+    public init(
+        conversationref: String,
+        messageid: String,
+        replytoid: String? = nil,
+        threadid: String? = nil,
+        text: String,
+        timestamp: Int,
+        transcriptartifactid: String? = nil,
+        transcriptmessageid: String? = nil)
+    {
+        self.conversationref = conversationref
+        self.messageid = messageid
+        self.replytoid = replytoid
+        self.threadid = threadid
+        self.text = text
+        self.timestamp = timestamp
+        self.transcriptartifactid = transcriptartifactid
+        self.transcriptmessageid = transcriptmessageid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationref = "conversationRef"
+        case messageid = "messageId"
+        case replytoid = "replyToId"
+        case threadid = "threadId"
+        case text
+        case timestamp
+        case transcriptartifactid = "transcriptArtifactId"
+        case transcriptmessageid = "transcriptMessageId"
+    }
+}
+
 public struct MessageActionParams: Codable, Sendable {
     public let channel: String
     public let action: String
@@ -6675,6 +6929,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let unavailablecandidates: [[String: AnyCodable]]?
     public let manualproviders: [[String: AnyCodable]]
     public let authoptions: [[String: AnyCodable]]?
+    public let recommendedinstalls: [[String: AnyCodable]]?
     public let workspace: String
     public let codexappserverdetected: Bool?
     public let configuredmodel: String?
@@ -6685,6 +6940,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         unavailablecandidates: [[String: AnyCodable]]? = nil,
         manualproviders: [[String: AnyCodable]],
         authoptions: [[String: AnyCodable]]? = nil,
+        recommendedinstalls: [[String: AnyCodable]]? = nil,
         workspace: String,
         codexappserverdetected: Bool? = nil,
         configuredmodel: String? = nil,
@@ -6694,6 +6950,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         self.unavailablecandidates = unavailablecandidates
         self.manualproviders = manualproviders
         self.authoptions = authoptions
+        self.recommendedinstalls = recommendedinstalls
         self.workspace = workspace
         self.codexappserverdetected = codexappserverdetected
         self.configuredmodel = configuredmodel
@@ -6705,6 +6962,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         case unavailablecandidates = "unavailableCandidates"
         case manualproviders = "manualProviders"
         case authoptions = "authOptions"
+        case recommendedinstalls = "recommendedInstalls"
         case workspace
         case codexappserverdetected = "codexAppServerDetected"
         case configuredmodel = "configuredModel"
@@ -7506,6 +7764,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     public let provider: String?
     public let model: String?
     public let voice: String?
+    public let language: String?
     public let vadthreshold: Double?
     public let silencedurationms: Int?
     public let prefixpaddingms: Int?
@@ -7521,6 +7780,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         provider: String? = nil,
         model: String? = nil,
         voice: String? = nil,
+        language: String? = nil,
         vadthreshold: Double? = nil,
         silencedurationms: Int? = nil,
         prefixpaddingms: Int? = nil,
@@ -7535,6 +7795,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         self.provider = provider
         self.model = model
         self.voice = voice
+        self.language = language
         self.vadthreshold = vadthreshold
         self.silencedurationms = silencedurationms
         self.prefixpaddingms = prefixpaddingms
@@ -7551,6 +7812,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         case provider
         case model
         case voice
+        case language
         case vadthreshold = "vadThreshold"
         case silencedurationms = "silenceDurationMs"
         case prefixpaddingms = "prefixPaddingMs"

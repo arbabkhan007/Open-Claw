@@ -42,6 +42,45 @@ function expectWarning(
 }
 
 describe("secrets runtime snapshot", () => {
+  it("isolates only the skill whose API key cannot resolve", async () => {
+    const missingRef = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_SKILL_KEY",
+    } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        skills: {
+          entries: {
+            cold: { apiKey: missingRef },
+            healthy: {
+              apiKey: { source: "env", provider: "default", id: "HEALTHY_SKILL_KEY" },
+            },
+          },
+        },
+      }),
+      env: { HEALTHY_SKILL_KEY: "healthy" },
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.skills?.entries?.cold?.apiKey).toEqual(missingRef);
+    expect(snapshot.config.skills?.entries?.healthy?.apiKey).toBe("healthy");
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold",
+        state: "unavailable",
+        paths: ["skills.entries.cold.apiKey"],
+      },
+    ]);
+    expectWarning(snapshot, {
+      code: "SECRETS_OWNER_UNAVAILABLE",
+      path: "skills.entries.cold.apiKey",
+    });
+  });
+
   it("isolates one webhooks route while resolving its sibling snapshot", async () => {
     const missingRef = {
       source: "env",
@@ -677,20 +716,27 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
-  it("refuses cold-start isolation when an assignment owner is unknown", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          cron: {
-            webhookToken: { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+  it("isolates cron webhook delivery when its token cannot resolve", async () => {
+    const ref = { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        cron: { webhookToken: ref },
       }),
-    ).rejects.toThrow('Environment variable "MISSING_WEBHOOK_TOKEN" is missing or empty.');
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.cron?.webhookToken).toEqual(ref);
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "cron-webhook",
+        state: "unavailable",
+        paths: ["cron.webhookToken"],
+      },
+    ]);
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {
