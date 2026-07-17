@@ -1515,6 +1515,7 @@
                   "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
+                  "providers/llmrouter",
                   "providers/lmstudio",
                   "providers/longcat",
                   "providers/meta",
