@@ -383,13 +383,13 @@ function buildOpenClawCodingToolsOptions(
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,
+    goalOwnerSessionKey: liveSessionKey,
     sessionId: input.sessionId,
     runId: a.runId,
     agentDir,
     workspaceDir,
     cwd,
-    // Sandbox parity with PI
-    // (`src/agents/pi-embedded-runner/run/attempt.ts:1238-1262`):
+    // Sandbox parity with PI (`src/agents/pi-embedded-runner/run/attempt.ts:1238-1262`):
     // forwarded from the caller (attempt.ts derives it via
     // `resolveSandboxContext`).
     sandbox,

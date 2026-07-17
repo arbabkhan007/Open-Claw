@@ -20,6 +20,12 @@ Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
 footer.
 
+The owning session is the user-facing thread. Internal execution lanes such as
+completion wakes, recovered runs, and sandboxed harness turns may have a
+different run-session key; goal reads and updates continue to resolve against
+the owning thread. This prevents an interruption or completion wake from
+making a durable goal appear missing.
+
 ## Quick start
 
 ```text
@@ -53,6 +59,15 @@ A goal is not a task queue. Use [Task Flow](/automation/taskflow),
 [tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
 [standing orders](/automation/standing-orders) when work should run detached,
 repeat on a schedule, fan out into managed sub-work, or persist as a policy.
+
+For a multi-phase workflow, the goal preserves the overall objective and gives
+every wake turn the same durable context, but phase scheduling still belongs to
+a durable task or flow controller. A Markdown checklist is operator-facing
+state, not a launch ledger. Controllers must persist a phase identity before
+launch, treat duplicate completion events idempotently, and record the
+next-phase launch before acknowledging the completion event. Existing session
+goals need no migration: after upgrade, scoped goals created by older versions
+are read from the same session-store field.
 
 ## Command reference
 

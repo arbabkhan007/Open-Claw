@@ -23,6 +23,7 @@ import {
 } from "./common.js";
 
 type GoalToolOptions = {
+  goalOwnerSessionKey?: string;
   agentSessionKey?: string;
   runSessionKey?: string;
   sessionAgentId?: string;
@@ -55,13 +56,18 @@ const UpdateGoalToolSchema = Type.Object({
 });
 
 function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
-  const sessionKey = options.runSessionKey?.trim() || options.agentSessionKey?.trim();
+  const ownerSessionKey = options.goalOwnerSessionKey?.trim();
+  const runSessionKey = options.runSessionKey?.trim();
+  // Goal ownership is independent from sandbox/runtime-policy scope. Completion wakes
+  // carry the durable owner explicitly so neither transient execution keys nor policy
+  // keys can redirect persistent goal reads and writes.
+  const sessionKey = ownerSessionKey || runSessionKey || options.agentSessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("session key required");
   }
   const parsedSessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const parsedAgentSessionAgentId = parseAgentSessionKey(options.agentSessionKey)?.agentId;
-  // Prefer the run session's agent id; fall back to the agent session for legacy tool contexts.
+  // Prefer the selected owner session's agent id; fall back for legacy tool contexts.
   const agentId = normalizeAgentId(
     parsedSessionAgentId ?? parsedAgentSessionAgentId ?? options.sessionAgentId,
   );

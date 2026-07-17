@@ -1357,7 +1357,7 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifyKey = normalizeOptionalString(defaults?.notifySessionKey ?? defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
     to: defaults?.currentChannelId,
@@ -1904,7 +1904,7 @@ export function createExecTool(
             approvalRunningNoticeMs,
             warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
-            notifySessionKey,
+            notifySessionKey: notifyKey,
             notifyOnExit,
             trustedSafeBinDirs,
           });
@@ -1949,7 +1949,7 @@ export function createExecTool(
             approvalFollowup: defaults?.approvalFollowup,
             approvalFollowupMode: defaults?.approvalFollowupMode,
             warnings,
-            notifySessionKey,
+            notifySessionKey: notifyKey,
             approvalRunningNoticeMs,
             maxOutput,
             pendingMaxOutput,
@@ -2003,7 +2003,7 @@ export function createExecTool(
           notifyOnExit,
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
-          sessionKey: notifySessionKey,
+          sessionKey: notifyKey,
           mainKey: defaults?.mainKey,
           sessionScope: defaults?.sessionScope,
           eventRouting: defaults?.eventRouting,

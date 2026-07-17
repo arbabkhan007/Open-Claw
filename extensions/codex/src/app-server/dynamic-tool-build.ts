@@ -109,15 +109,15 @@ type DynamicToolBuildParams = {
     frameImageIdentity?: string;
   };
 };
-/** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 function resolveOpenClawCodingToolsSessionKeys(
   params: EmbeddedRunAttemptParams,
   sandboxSessionKey: string,
-): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
+): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey" | "goalOwnerSessionKey"> {
   return {
     sessionKey: sandboxSessionKey,
     runSessionKey:
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
+    goalOwnerSessionKey: params.sessionKey, // Durable owner remains independent of policy scope.
   };
 }
 /** Returns the canonical channel used for Codex message routing and receipts. */

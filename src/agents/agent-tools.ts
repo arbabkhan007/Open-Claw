@@ -294,12 +294,10 @@ type OpenClawCodingToolsOptions = {
   messageActionTurnCapability?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
-  /**
-   * The actual live run session key. When the tool set is constructed with a
-   * sandbox/policy session key, this allows `session_status({sessionKey:"current"})`
-   * to resolve to the live run session instead of the stale sandbox key.
-   */
+  /** Live run session used when the policy-scoped session differs. */
   runSessionKey?: string;
+  /** Durable goal owner and detached-wake target; does not change process scope. */
+  goalOwnerSessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /**
@@ -740,13 +738,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         allowBackground,
         scopeKey,
         sessionKey: options?.sessionKey,
+        notifySessionKey: options?.goalOwnerSessionKey ?? options?.sessionKey,
         sessionId: options?.sessionId,
         sessionStore: options?.config?.session?.store,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
         eventRouting: resolveEventSessionRoutingPolicy({
           cfg: options?.config,
-          sessionKey: options?.sessionKey,
+          sessionKey: options?.goalOwnerSessionKey ?? options?.sessionKey,
           channel: options?.messageProvider,
           accountId: options?.agentAccountId,
         }),
@@ -938,6 +937,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
             runSessionKey: options?.runSessionKey,
+            goalOwnerSessionKey: options?.goalOwnerSessionKey,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
             ),

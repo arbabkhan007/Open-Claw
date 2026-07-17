@@ -163,4 +163,91 @@ describe("goal tools", () => {
       getSessionEntry({ storePath: researchStorePath, sessionKey: "agent:ops:main" })?.goal,
     ).toBeUndefined();
   });
+
+  it("keeps a scoped thread goal visible during a transient completion wake", async () => {
+    const { config, template } = await createStoreConfig();
+    const ownerSessionKey = "agent:main:telegram:group:finance:topic:25";
+    const transientRunKey = "agent:main:main";
+    const mainStorePath = resolveStorePath(template, { agentId: "main" });
+    await upsertSessionEntry({
+      storePath: mainStorePath,
+      sessionKey: ownerSessionKey,
+      entry: {
+        sessionId: "sess-finance",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-finance",
+          objective: "finish every phase",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+    await upsertSessionEntry({
+      storePath: mainStorePath,
+      sessionKey: transientRunKey,
+      entry: { sessionId: "sess-wake", updatedAt: 2 },
+    });
+
+    const result = await createGetGoalTool({
+      goalOwnerSessionKey: ownerSessionKey,
+      agentSessionKey: "agent:main:runtime-policy",
+      runSessionKey: transientRunKey,
+      sessionAgentId: "main",
+      config,
+    }).execute("call-wake", {});
+
+    expect((result.details as { goal?: { id?: string } }).goal?.id).toBe("goal-finance");
+  });
+
+  it("does not use a runtime-policy session as the goal owner", async () => {
+    const { config, template } = await createStoreConfig();
+    const ownerSessionKey = "agent:main:telegram:group:finance:topic:25";
+    const policySessionKey = "agent:main:runtime-policy";
+    const mainStorePath = resolveStorePath(template, { agentId: "main" });
+    await upsertSessionEntry({
+      storePath: mainStorePath,
+      sessionKey: ownerSessionKey,
+      entry: {
+        sessionId: "sess-finance",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-finance",
+          objective: "finish every phase",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+    await upsertSessionEntry({
+      storePath: mainStorePath,
+      sessionKey: policySessionKey,
+      entry: { sessionId: "sess-policy", updatedAt: 2 },
+    });
+
+    const result = await createGetGoalTool({
+      goalOwnerSessionKey: ownerSessionKey,
+      agentSessionKey: policySessionKey,
+      runSessionKey: ownerSessionKey,
+      sessionAgentId: "main",
+      config,
+    }).execute("call-policy", {});
+
+    expect((result.details as { goal?: { id?: string } }).goal?.id).toBe("goal-finance");
+    expect(
+      getSessionEntry({ storePath: mainStorePath, sessionKey: policySessionKey })?.goal,
+    ).toBeUndefined();
+  });
 });
