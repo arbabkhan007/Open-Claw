@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
+import { resolveAgentThinkingDefaultOverride } from "./agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -93,6 +94,22 @@ describe("resolveAgentConfig", () => {
       },
     };
     expect(resolveAgentConfig(cfg, "main")?.verboseDefault).toBe("on");
+  });
+
+  it("merges the global thinking default while preserving the explicit override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "high",
+        },
+        list: [{ id: "inherited" }, { id: "explicit", thinkingDefault: "off" }],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "inherited")?.thinkingDefault).toBe("high");
+    expect(resolveAgentThinkingDefaultOverride(cfg, "inherited")).toBeUndefined();
+    expect(resolveAgentConfig(cfg, "explicit")?.thinkingDefault).toBe("off");
+    expect(resolveAgentThinkingDefaultOverride(cfg, "explicit")).toBe("off");
   });
 
   it("merges contextLimits from defaults with per-agent overrides", () => {
