@@ -45,6 +45,8 @@ export interface QueuedMessage {
   refMsgIdx?: string;
   msgIdx?: string;
   msgType?: number;
+  /** Gateway frame seq; commits to the RESUME watermark when the message settles. */
+  gatewaySeq?: number;
   msgElements?: Array<{
     msg_idx?: string;
     content?: string;
@@ -79,6 +81,13 @@ interface MessageQueueContext {
     debug?: (msg: string, meta?: Record<string, unknown>) => void;
   };
   isAborted: () => boolean;
+  /**
+   * Fired when a message reaches a terminal state: handled successfully or
+   * intentionally dropped (queue-full eviction, urgent queue clear). Handler
+   * failures do NOT settle, so the reconnect RESUME watermark stays behind
+   * the failed message and the gateway replays it.
+   */
+  onMessageSettled?: (msg: QueuedMessage) => void;
   groupQueueSize?: number;
   peerQueueSize?: number;
   globalQueueSize?: number;
@@ -229,7 +238,10 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const processOne = async (msg: QueuedMessage, peerId: string, label: string): Promise<void> => {
     try {
       await handleMessageFnRef!(msg);
+      ctx.onMessageSettled?.(msg);
     } catch (err) {
+      // No settle on failure: the RESUME watermark holds so the gateway
+      // replays this message after reconnect instead of losing it.
       log?.error(`${label} error for ${peerId}: ${formatErrorMessage(err)}`);
     }
   };
@@ -323,6 +335,11 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     if (queue.length >= maxSize) {
       const dropped = evictOne(queue, isGroup);
       totalEnqueued = Math.max(0, totalEnqueued - 1);
+      if (dropped) {
+        // Intentional drop is a terminal state; settle so the RESUME
+        // watermark does not wedge behind a message we chose to discard.
+        ctx.onMessageSettled?.(dropped);
+      }
       if (isGroup && dropped?.senderIsBot) {
         log?.info(`Queue full for ${peerId}, dropping bot message ${dropped.messageId}`, {
           accountId: ctx.accountId,
@@ -383,6 +400,11 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
       return 0;
     }
     const droppedCount = queue.length;
+    // Cleared messages are intentionally discarded; settle each one so the
+    // RESUME watermark advances past them.
+    for (const dropped of queue) {
+      ctx.onMessageSettled?.(dropped);
+    }
     queue.length = 0;
     totalEnqueued = Math.max(0, totalEnqueued - droppedCount);
     return droppedCount;
@@ -390,9 +412,11 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
   const executeImmediate = (msg: QueuedMessage): void => {
     if (handleMessageFnRef) {
-      handleMessageFnRef(msg).catch((err: unknown) => {
-        log?.error(`Immediate execution error: ${formatErrorMessage(err)}`);
-      });
+      handleMessageFnRef(msg)
+        .then(() => ctx.onMessageSettled?.(msg))
+        .catch((err: unknown) => {
+          log?.error(`Immediate execution error: ${formatErrorMessage(err)}`);
+        });
     }
   };
 
