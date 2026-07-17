@@ -286,11 +286,17 @@ export class ReefInboxConnection {
       // invocation settles, so late events from an abandoned socket cannot
       // overwrite the lifecycle state of its replacement (or of a stopped channel).
       let settled = false;
-      const settle = (error?: Error) => {
+      const settle = (error?: Error, closeSocket = false) => {
         if (settled) {
           return;
         }
         settled = true;
+        if (closeSocket) {
+          socket.close();
+        }
+        // The channel signal outlives each reconnect generation. Release this
+        // generation before replacement so abort only closes the active socket.
+        signal?.removeEventListener("abort", onAbort);
         this.onState?.("disconnected");
         if (error) {
           reject(error);
@@ -298,14 +304,10 @@ export class ReefInboxConnection {
           resolve();
         }
       };
-      signal?.addEventListener(
-        "abort",
-        () => {
-          socket.close();
-          settle();
-        },
-        { once: true },
-      );
+      const onAbort = () => {
+        settle(undefined, true);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       socket.addEventListener("open", () => {
         if (!settled) {
           this.onState?.("connected");
@@ -319,14 +321,14 @@ export class ReefInboxConnection {
           }
           this.cursor = Math.max(this.cursor, frame.entry.seq);
           void this.onEntries([frame.entry]).catch((error: unknown) =>
-            settle(error instanceof Error ? error : new Error(String(error))),
+            settle(error instanceof Error ? error : new Error(String(error)), true),
           );
         } catch (error) {
-          settle(error instanceof Error ? error : new Error(String(error)));
+          settle(error instanceof Error ? error : new Error(String(error)), true);
         }
       });
       socket.addEventListener("close", () => settle());
-      socket.addEventListener("error", () => settle(new Error("reef inbox socket error")));
+      socket.addEventListener("error", () => settle(new Error("reef inbox socket error"), true));
     });
   }
 }
