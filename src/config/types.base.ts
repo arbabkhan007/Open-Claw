@@ -303,7 +303,7 @@ export type DiagnosticsOtelConfig = {
   tracesEndpoint?: string;
   metricsEndpoint?: string;
   logsEndpoint?: string;
-  protocol?: "http/protobuf" | "grpc";
+  protocol?: "http/protobuf";
   headers?: Record<string, string>;
   serviceName?: string;
   traces?: boolean;

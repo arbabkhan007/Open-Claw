@@ -214,6 +214,7 @@ const ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = process.env.OTEL_EXPORTER_OT
 const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
+const ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
 const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
 const OTEL_CERT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
@@ -246,9 +247,11 @@ type OtelContextFlags = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
-  protocol?: NonNullable<
-    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
-  >["protocol"];
+  protocol?:
+    | NonNullable<
+        NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
+      >["protocol"]
+    | null;
   logsExporter?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["logsExporter"];
@@ -274,7 +277,7 @@ function createOtelContext(
         otel: {
           enabled: true,
           endpoint,
-          protocol,
+          ...(protocol === null ? {} : { protocol }),
           traces,
           metrics,
           logs,
@@ -589,6 +592,7 @@ describe("diagnostics-otel service", () => {
     for (const key of OTEL_CERT_ENV_KEYS) {
       delete process.env[key];
     }
+    delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
   });
 
   afterEach(() => {
@@ -626,6 +630,11 @@ describe("diagnostics-otel service", () => {
       } else {
         process.env[key] = value;
       }
+    }
+    if (ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_PROTOCOL = ORIGINAL_OTEL_EXPORTER_OTLP_PROTOCOL;
     }
   });
 
@@ -1078,6 +1087,46 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("rejects unsupported protocol env override before exporter startup", async () => {
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+      protocol: null,
+    });
+
+    await service.start(ctx);
+
+    const exporterEvents = events.filter((event) => event.type === "telemetry.exporter");
+    expect(
+      exporterEvents.map((event) => ({
+        signal: event.signal,
+        status: event.status,
+        reason: event.reason,
+      })),
+    ).toEqual([
+      { signal: "traces", status: "failure", reason: "unsupported_protocol" },
+      { signal: "metrics", status: "failure", reason: "unsupported_protocol" },
+      { signal: "logs", status: "failure", reason: "unsupported_protocol" },
+    ]);
+    expect(ctx.logger.warn).toHaveBeenCalledWith("diagnostics-otel: unsupported protocol grpc");
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(sdkStart).not.toHaveBeenCalled();
+
+    unsubscribe();
+    await service.stop?.(ctx);
+  });
+
   test("exports trusted security events as bounded OTLP logs", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
@@ -1191,13 +1240,14 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("starts stdout-only logs when OTLP protocol is unsupported", async () => {
+  test("starts stdout-only logs when OTLP protocol env override is unsupported", async () => {
     const service = createDiagnosticsOtelService();
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
       traces: false,
       metrics: false,
       logs: true,
-      protocol: "grpc",
+      protocol: null,
       logsExporter: "stdout",
     });
     const capture = captureStdoutWrites();
