@@ -6,6 +6,7 @@ import type { EngineAdapters } from "../adapter/index.js";
 import { saveSession } from "../session/session-store.js";
 import { MAX_RECONNECT_ATTEMPTS } from "./constants.js";
 import { GatewayConnection } from "./gateway-connection.js";
+import type { QueuedMessage } from "./message-queue.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const createQQWSClientMock = vi.hoisted(() => vi.fn());
@@ -276,7 +277,7 @@ describe("GatewayConnection resume watermark", () => {
     vi.clearAllMocks();
   });
 
-  async function startWatermarkConnection(handleMessage: (msg: unknown) => Promise<void>) {
+  async function startWatermarkConnection(handleMessage: (msg: QueuedMessage) => Promise<void>) {
     const ws = new FakeWebSocket();
     createQQWSClientMock.mockResolvedValue(ws);
     const controller = new AbortController();
@@ -286,7 +287,7 @@ describe("GatewayConnection resume watermark", () => {
       cfg: {},
       runtime: {} as GatewayPluginRuntime,
       adapters: {} as EngineAdapters,
-      handleMessage: handleMessage as (msg: never) => Promise<void>,
+      handleMessage,
     });
     const started = connection.start();
     await vi.waitFor(() => {
@@ -407,20 +408,59 @@ describe("GatewayConnection resume watermark", () => {
     await started;
   });
 
-  it("keeps the watermark behind a message whose handler failed", async () => {
-    const { ws, controller, started } = await startWatermarkConnection(async () => {
-      throw new Error("handler blew up");
+  // A logged handler failure is a terminal drop (existing contract) and must
+  // settle: the watermark is connection-wide, so a poison message that held
+  // it would make every later reconnect replay already-successful traffic.
+  it("settles a failed handler so it cannot pin the connection-wide watermark", async () => {
+    const failed = new Set<string>();
+    const staleWs = new FakeWebSocket();
+    const replacementWs = new FakeWebSocket();
+    createQQWSClientMock.mockResolvedValueOnce(staleWs).mockResolvedValueOnce(replacementWs);
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async (msg: QueuedMessage) => {
+        if (msg.messageId === "m-poison") {
+          failed.add(msg.messageId);
+          throw new Error("handler blew up");
+        }
+      },
     });
-
-    emitReady(ws, 1);
-    emitC2CMessage(ws, 2, "m-failed");
+    const started = connection.start();
     await vi.waitFor(() => {
-      expect(vi.mocked(saveSession).mock.calls.length).toBeGreaterThan(0);
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(1);
     });
-    // Give the failed handler's rejection time to propagate.
-    await vi.advanceTimersByTimeAsync(10);
+    staleWs.emit("open");
 
-    expect(lastSavedSeq()).toBe(1);
+    emitReady(staleWs, 1);
+    // Failure-then-later-success: seq 2 fails terminally, seq 3 succeeds.
+    emitC2CMessage(staleWs, 2, "m-poison");
+    await vi.waitFor(() => {
+      expect(failed.has("m-poison")).toBe(true);
+    });
+    emitC2CMessage(staleWs, 3, "m-after-failure");
+    await vi.waitFor(() => {
+      expect(lastSavedSeq()).toBe(3);
+    });
+
+    // Reconnect: RESUME resumes past both the failed and the succeeded
+    // message — neither is replayed to any peer.
+    staleWs.emit("message", JSON.stringify({ op: 7 }));
+    await vi.advanceTimersByTimeAsync(1_100);
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(2);
+    });
+    replacementWs.emit("open");
+    replacementWs.emit("message", JSON.stringify({ op: 10, d: { heartbeat_interval: 41_250 } }));
+
+    const resumeFrame = replacementWs.send.mock.calls
+      .map((call) => JSON.parse(String(call[0])) as { op: number; d?: { seq?: number } })
+      .find((frame) => frame.op === 6);
+    expect(resumeFrame?.d?.seq).toBe(3);
 
     controller.abort();
     await started;
@@ -434,9 +474,7 @@ describe("GatewayConnection resume watermark", () => {
     // Only the first message ever completes; later drained messages hang so
     // the terminal watermark isolates the eviction-settle behavior.
     const { ws, controller, started } = await startWatermarkConnection((msg) =>
-      (msg as { messageId?: string }).messageId === "m-0"
-        ? handlerGate
-        : new Promise<void>(() => {}),
+      msg.messageId === "m-0" ? handlerGate : new Promise<void>(() => {}),
     );
 
     emitReady(ws, 1);

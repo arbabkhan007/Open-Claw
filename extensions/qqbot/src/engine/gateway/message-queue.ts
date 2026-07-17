@@ -82,10 +82,11 @@ interface MessageQueueContext {
   };
   isAborted: () => boolean;
   /**
-   * Fired when a message reaches a terminal state: handled successfully or
-   * intentionally dropped (queue-full eviction, urgent queue clear). Handler
-   * failures do NOT settle, so the reconnect RESUME watermark stays behind
-   * the failed message and the gateway replays it.
+   * Fired when a message reaches a terminal state: handled, dropped after a
+   * logged handler failure (the existing failure contract), or intentionally
+   * discarded (queue-full eviction, urgent queue clear). Every terminal state
+   * settles so the connection-wide RESUME watermark only stays behind
+   * messages that are genuinely still queued or in flight.
    */
   onMessageSettled?: (msg: QueuedMessage) => void;
   groupQueueSize?: number;
@@ -238,11 +239,14 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const processOne = async (msg: QueuedMessage, peerId: string, label: string): Promise<void> => {
     try {
       await handleMessageFnRef!(msg);
-      ctx.onMessageSettled?.(msg);
     } catch (err) {
-      // No settle on failure: the RESUME watermark holds so the gateway
-      // replays this message after reconnect instead of losing it.
+      // A logged handler failure is a terminal drop (existing contract). It
+      // must settle too: the watermark is connection-wide, so holding it here
+      // would make every later reconnect replay already-successful traffic
+      // for unrelated peers behind one poison message.
       log?.error(`${label} error for ${peerId}: ${formatErrorMessage(err)}`);
+    } finally {
+      ctx.onMessageSettled?.(msg);
     }
   };
 
@@ -413,10 +417,10 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const executeImmediate = (msg: QueuedMessage): void => {
     if (handleMessageFnRef) {
       handleMessageFnRef(msg)
-        .then(() => ctx.onMessageSettled?.(msg))
         .catch((err: unknown) => {
           log?.error(`Immediate execution error: ${formatErrorMessage(err)}`);
-        });
+        })
+        .finally(() => ctx.onMessageSettled?.(msg));
     }
   };
 
