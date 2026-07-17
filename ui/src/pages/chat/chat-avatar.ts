@@ -262,6 +262,8 @@ function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
   return avatarUrl.startsWith("/");
 }
 
+const CHAT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+
 export async function refreshChatAvatar(host: ChatAvatarHost) {
   if (!host.connected) {
     clearChatAvatarState(host);
@@ -280,8 +282,14 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
   const url = buildAvatarMetaUrl(host.basePath, agentId);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_AVATAR_FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
+    const res = await fetch(url, {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+      signal: controller.signal,
+    });
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
@@ -311,6 +319,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
       ...(headers ? { headers } : {}),
+      signal: controller.signal,
     });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
@@ -328,5 +337,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
+  } finally {
+    clearTimeout(timeout);
   }
 }
