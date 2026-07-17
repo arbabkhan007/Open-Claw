@@ -1,5 +1,5 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
-import { once } from "node:events";
+import { getEventListeners, once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   ReefRelayError,
   ReefTransportClient,
   createReefWebSocket,
+  type WebSocketLike,
 } from "./transport.js";
 import type { ReefKeys, RelayFriend } from "./types.js";
 
@@ -28,6 +29,29 @@ const keys: ReefKeys = {
   replayKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   keyEpoch: 1,
 };
+
+class ControlledWebSocket implements WebSocketLike {
+  closeCalls = 0;
+  private readonly listeners = new Map<string, unknown[]>();
+
+  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+  addEventListener(type: "open" | "close" | "error", listener: () => void): void;
+  addEventListener(type: "message" | "open" | "close" | "error", listener: unknown): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  close(): void {
+    this.closeCalls++;
+  }
+
+  emitClose(): void {
+    for (const listener of this.listeners.get("close") ?? []) {
+      (listener as () => void)();
+    }
+  }
+}
 
 function verifyRelaySignature(
   signature: string,
@@ -426,6 +450,39 @@ describe("createReefWebSocket handshake deadline", () => {
         server.close(() => resolve());
       });
     }
+  });
+});
+
+describe("ReefInboxConnection reconnect lifecycle", () => {
+  it("keeps only the active generation subscribed to channel abort", async () => {
+    const abort = new AbortController();
+    const initialListenerCount = getEventListeners(abort.signal, "abort").length;
+    const sockets = [new ControlledWebSocket(), new ControlledWebSocket()];
+    let socketIndex = 0;
+    const webSocketFactory = vi.fn(() => sockets[socketIndex++]!);
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [], cursor: 0 }),
+      () => ts,
+    );
+    const inbox = new ReefInboxConnection(client, async () => {}, webSocketFactory);
+
+    const running = inbox.start(abort.signal);
+    await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(1));
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
+
+    sockets[0]!.emitClose();
+    await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(2));
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
+
+    abort.abort();
+    await running;
+
+    expect(sockets[0]!.closeCalls).toBe(0);
+    expect(sockets[1]!.closeCalls).toBe(1);
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount);
   });
 });
 

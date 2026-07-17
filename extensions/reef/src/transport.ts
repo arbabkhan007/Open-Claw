@@ -291,6 +291,9 @@ export class ReefInboxConnection {
           return;
         }
         settled = true;
+        // The channel signal outlives each reconnect generation. Release this
+        // generation before replacement so abort only closes the active socket.
+        signal?.removeEventListener("abort", onAbort);
         this.onState?.("disconnected");
         if (error) {
           reject(error);
@@ -298,14 +301,11 @@ export class ReefInboxConnection {
           resolve();
         }
       };
-      signal?.addEventListener(
-        "abort",
-        () => {
-          socket.close();
-          settle();
-        },
-        { once: true },
-      );
+      const onAbort = () => {
+        socket.close();
+        settle();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
       socket.addEventListener("open", () => {
         if (!settled) {
           this.onState?.("connected");
