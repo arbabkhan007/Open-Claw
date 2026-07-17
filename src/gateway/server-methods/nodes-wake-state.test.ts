@@ -4,9 +4,13 @@ import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_POLL_MS,
+  captureNodeWakeLifecycle,
   clearNodeWakeState,
+  invalidateNodeWakeState,
+  isNodeWakeLifecycleCurrent,
   nodeWakeById,
   nodeWakeNudgeById,
+  releaseNodeWakeLifecycle,
 } from "./nodes-wake-state.js";
 
 beforeEach(() => {
@@ -85,6 +89,35 @@ describe("clearNodeWakeState", () => {
     clearNodeWakeState("node-1");
     expect(nodeWakeById.has("node-1")).toBe(false);
     expect(nodeWakeNudgeById.has("node-1")).toBe(false);
+  });
+
+  it("preserves an active lifecycle while clearing disconnect throttle state", () => {
+    const activeLifecycle = captureNodeWakeLifecycle("node-1");
+    nodeWakeById.get("node-1")!.lastWakeAtMs = 100;
+    nodeWakeNudgeById.set("node-1", 200);
+
+    clearNodeWakeState("node-1");
+
+    expect(nodeWakeById.has("node-1")).toBe(false);
+    expect(nodeWakeNudgeById.has("node-1")).toBe(false);
+    expect(activeLifecycle.aborted).toBe(false);
+    expect(isNodeWakeLifecycleCurrent("node-1", activeLifecycle)).toBe(true);
+
+    releaseNodeWakeLifecycle("node-1", activeLifecycle);
+    expect(isNodeWakeLifecycleCurrent("node-1", activeLifecycle)).toBe(false);
+  });
+
+  it("invalidates a removed node lifecycle before the node id can be reused", () => {
+    const removedLifecycle = captureNodeWakeLifecycle("node-1");
+
+    invalidateNodeWakeState("node-1");
+
+    expect(removedLifecycle.aborted).toBe(true);
+    expect(isNodeWakeLifecycleCurrent("node-1", removedLifecycle)).toBe(false);
+    const replacementLifecycle = captureNodeWakeLifecycle("node-1");
+    expect(replacementLifecycle).not.toBe(removedLifecycle);
+    expect(isNodeWakeLifecycleCurrent("node-1", replacementLifecycle)).toBe(true);
+    releaseNodeWakeLifecycle("node-1", replacementLifecycle);
   });
 
   it("is a no-op when the node id does not exist", () => {

@@ -6,6 +6,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
+import { invalidateNodeWakeState, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -105,6 +106,7 @@ type MockCallSource = {
 
 type TestNodeSession = {
   nodeId: string;
+  connId?: string;
   commands: string[];
   declaredCommands?: string[];
   platform?: string;
@@ -649,6 +651,8 @@ describe("plugin surface refresh", () => {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
+    nodeWakeById.clear();
+    nodeWakeNudgeById.clear();
     mocks.getRuntimeConfig.mockClear();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
@@ -916,6 +920,32 @@ describe("node.invoke APNs wake path", () => {
     expect(call[2]?.message).toBe("node not connected");
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("releases idle wake state when an unregistered node reconnects during invoke", async () => {
+    const nodeId = "ios-node-reconnect-without-registration";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const session: TestNodeSession = { nodeId, commands: ["camera.capture"] };
+    let lookupCount = 0;
+    const nodeRegistry = {
+      get: vi.fn(() => {
+        lookupCount += 1;
+        return lookupCount === 1 ? undefined : session;
+      }),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payload: { ok: true },
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-reconnect-without-registration" },
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expect(nodeWakeById.has(nodeId)).toBe(false);
   });
 
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
@@ -1289,6 +1319,131 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate wake state after removal invalidates an in-flight invoke", async () => {
+    vi.useFakeTimers();
+    const nodeId = "ios-node-remove-during-wake";
+    mockDirectWakeConfig(nodeId);
+    mocks.sendApnsAlert.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+    const nodeRegistry = createMissingNodeRegistry();
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-remove-during-wake" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+
+    invalidateNodeWakeState(nodeId);
+    await vi.advanceTimersByTimeAsync(20_000);
+    const respond = await invokePromise;
+
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+    expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
+    expect(nodeWakeById.has(nodeId)).toBe(false);
+    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe("node not connected");
+  });
+
+  it("does not dispatch an invalidated invoke to a replacement pairing", async () => {
+    vi.useFakeTimers();
+    const nodeId = "ios-node-replacement-after-remove";
+    mockDirectWakeConfig(nodeId);
+    const replacementSession: TestNodeSession = {
+      nodeId,
+      connId: "replacement-conn",
+      commands: ["camera.capture"],
+      platform: "iOS 26.4.0",
+    };
+    let replacementConnected = false;
+    const nodeRegistry = {
+      get: vi.fn(() => (replacementConnected ? replacementSession : undefined)),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { replacement: true } }),
+    };
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-replacement-after-remove" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+
+    invalidateNodeWakeState(nodeId);
+    replacementConnected = true;
+    await vi.advanceTimersByTimeAsync(20_000);
+    const respond = await invokePromise;
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe("node not connected");
+  });
+
+  it("keeps a foreground-recovery wake alive across an ordinary disconnect cleanup", async () => {
+    const nodeId = "ios-node-disconnect-during-foreground-wake";
+    const registration = directRegistration(nodeId);
+    let resolveRegistration!: (value: typeof registration) => void;
+    mocks.loadApnsRegistration.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRegistration = resolve;
+      }),
+    );
+    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+    mocks.sendApnsBackgroundWake.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        params: { url: "http://example.com/" },
+        idempotencyKey: "idem-disconnect-during-foreground-wake",
+      },
+    });
+    await vi.waitFor(() => expect(mocks.loadApnsRegistration).toHaveBeenCalledTimes(1));
+
+    clearNodeWakeState(nodeId);
+    resolveRegistration(registration);
+    const respond = await invokePromise;
+
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+    const call = firstRespondCall(respond);
+    const details = requireRecord(call[2]?.details, "queued foreground details");
+    expectRecordFields(details.wake, "queued foreground wake", {
+      path: "sent",
+      available: true,
+      throttled: false,
+    });
   });
 
   it("queues iOS foreground-only command failures and keeps them until acked", async () => {

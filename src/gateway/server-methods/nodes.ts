@@ -52,11 +52,7 @@ import {
 } from "../../infra/push-apns.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
-import {
-  recordRemoteNodeInfo,
-  refreshRemoteNodeBins,
-  removeRemoteNodeInfo,
-} from "../../skills/runtime/remote.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -85,14 +81,23 @@ import {
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import { isForbiddenBrowserProxyMutation } from "./node-browser-proxy.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
+import {
+  clearRemovedNodeRuntimeState,
+  pendingNodeActionsById,
+  type PendingNodeAction,
+} from "./node-runtime-state.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
+  captureNodeWakeLifecycle,
+  isNodeWakeLifecycleCurrent,
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
   nodeWakeById,
   nodeWakeNudgeById,
+  releaseNodeWakeLifecycle,
   type NodeWakeAttempt,
+  type NodeWakeLifecycle,
 } from "./nodes-wake-state.js";
 import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
@@ -106,9 +111,11 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-t
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 export {
+  captureNodeWakeLifecycle,
   clearNodeWakeState,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
+  releaseNodeWakeLifecycle,
 } from "./nodes-wake-state.js";
 
 const TALK_PTT_COMMANDS = new Set([
@@ -123,23 +130,18 @@ const talkPttEventSeqBySessionId = new Map<string, number>();
 type NodeWakeNudgeAttempt = {
   sent: boolean;
   throttled: boolean;
-  reason: "throttled" | "no-registration" | "no-auth" | "send-error" | "apns-not-ok" | "sent";
+  reason:
+    | "throttled"
+    | "no-registration"
+    | "no-auth"
+    | "send-error"
+    | "apns-not-ok"
+    | "sent"
+    | "invalidated";
   durationMs: number;
   apnsStatus?: number;
   apnsReason?: string;
 };
-
-type PendingNodeAction = {
-  id: string;
-  nodeId: string;
-  command: string;
-  paramsJSON?: string;
-  idempotencyKey: string;
-
-  enqueuedAtMs: number;
-};
-
-const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
 function safeNodeReadProjection(
   node: NodeListNode,
@@ -366,19 +368,6 @@ function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeActi
   }
   pendingNodeActionsById.set(nodeId, live);
   return live;
-}
-
-function clearRemovedNodeRuntimeState(params: {
-  nodeId: string;
-  context: Pick<GatewayRequestContext, "nodeRegistry">;
-}) {
-  pendingNodeActionsById.delete(params.nodeId);
-  params.context.nodeRegistry.updateSurface(params.nodeId, {
-    caps: [],
-    commands: [],
-    permissions: undefined,
-  });
-  removeRemoteNodeInfo(params.nodeId);
 }
 
 function broadcastRemovedNodePairing(params: {
@@ -738,127 +727,158 @@ function emitTalkPttNodeEvent(params: {
 
 export async function maybeWakeNodeWithApns(
   nodeId: string,
-  opts?: { force?: boolean; wakeReason?: string; cfg?: OpenClawConfig },
+  opts?: {
+    force?: boolean;
+    wakeReason?: string;
+    cfg?: OpenClawConfig;
+    lifecycle?: NodeWakeLifecycle;
+  },
 ): Promise<NodeWakeAttempt> {
-  const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
-  nodeWakeById.set(nodeId, state);
+  const lifecycleProvided = opts?.lifecycle !== undefined;
+  const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId);
+  try {
+    if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+      return { available: false, throttled: false, path: "invalidated", durationMs: 0 };
+    }
+    const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
+    nodeWakeById.set(nodeId, state);
 
-  if (state.inFlight) {
-    return await state.inFlight;
-  }
+    if (state.inFlight) {
+      const attempt = await state.inFlight;
+      return isNodeWakeLifecycleCurrent(nodeId, lifecycle)
+        ? attempt
+        : { available: false, throttled: false, path: "invalidated", durationMs: 0 };
+    }
 
-  const now = Date.now();
-  const force = opts?.force === true;
-  if (
-    !force &&
-    state.lastWakeAtMs > 0 &&
-    now - state.lastWakeAtMs < nodeInvokePolicy.wakeThrottleMs
-  ) {
-    return { available: true, throttled: true, path: "throttled", durationMs: 0 };
-  }
+    const now = Date.now();
+    const force = opts?.force === true;
+    if (
+      !force &&
+      state.lastWakeAtMs > 0 &&
+      now - state.lastWakeAtMs < nodeInvokePolicy.wakeThrottleMs
+    ) {
+      return { available: true, throttled: true, path: "throttled", durationMs: 0 };
+    }
 
-  state.inFlight = (async () => {
-    const startedAtMs = Date.now();
-    const withDuration = (attempt: Omit<NodeWakeAttempt, "durationMs">): NodeWakeAttempt => ({
-      ...attempt,
-      durationMs: Math.max(0, Date.now() - startedAtMs),
-    });
+    state.inFlight = (async () => {
+      const startedAtMs = Date.now();
+      const withDuration = (attempt: Omit<NodeWakeAttempt, "durationMs">): NodeWakeAttempt => ({
+        ...attempt,
+        durationMs: Math.max(0, Date.now() - startedAtMs),
+      });
 
-    try {
-      const registration = await loadApnsRegistration(nodeId);
-      if (!registration) {
-        // Avoid leaking the state entry we speculatively set at the top of
-        // maybeWakeNodeWithApns: this nodeId has no APNs registration, so the
-        // throttle bookkeeping we just created will never be touched by the
-        // WS-close cleanup path (clearNodeWakeState is only called for
-        // registered nodes in ws-connection.ts).
-        nodeWakeById.delete(nodeId);
-        return withDuration({ available: false, throttled: false, path: "no-registration" });
-      }
+      try {
+        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          return withDuration({ available: false, throttled: false, path: "invalidated" });
+        }
+        const registration = await loadApnsRegistration(nodeId);
+        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          return withDuration({ available: false, throttled: false, path: "invalidated" });
+        }
+        if (!registration) {
+          return withDuration({ available: false, throttled: false, path: "no-registration" });
+        }
 
-      let wakeResult;
-      if (registration.transport === "relay") {
-        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
-        if (!relay.ok) {
-          return withDuration({
-            available: false,
-            throttled: false,
-            path: "no-auth",
-            apnsReason: relay.error,
+        let wakeResult;
+        if (registration.transport === "relay") {
+          const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
+          if (!relay.ok) {
+            return withDuration({
+              available: false,
+              throttled: false,
+              path: "no-auth",
+              apnsReason: relay.error,
+            });
+          }
+          if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+            return withDuration({ available: false, throttled: false, path: "invalidated" });
+          }
+          state.lastWakeAtMs = Date.now();
+          wakeResult = await sendApnsBackgroundWake({
+            registration,
+            nodeId,
+            wakeReason: opts?.wakeReason ?? "node.invoke",
+            relayConfig: relay.relayConfig,
+          });
+        } else {
+          const auth = await resolveDirectNodePushConfig();
+          if (!auth.ok) {
+            return withDuration({
+              available: false,
+              throttled: false,
+              path: "no-auth",
+              apnsReason: auth.error,
+            });
+          }
+          if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+            return withDuration({ available: false, throttled: false, path: "invalidated" });
+          }
+          state.lastWakeAtMs = Date.now();
+          wakeResult = await sendApnsBackgroundWake({
+            registration,
+            nodeId,
+            wakeReason: opts?.wakeReason ?? "node.invoke",
+            auth: auth.auth,
           });
         }
-        state.lastWakeAtMs = Date.now();
-        wakeResult = await sendApnsBackgroundWake({
-          registration,
-          nodeId,
-          wakeReason: opts?.wakeReason ?? "node.invoke",
-          relayConfig: relay.relayConfig,
-        });
-      } else {
-        const auth = await resolveDirectNodePushConfig();
-        if (!auth.ok) {
+        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          return withDuration({ available: false, throttled: false, path: "invalidated" });
+        }
+        await clearStaleApnsRegistrationIfNeeded(registration, nodeId, wakeResult);
+        if (!wakeResult.ok) {
           return withDuration({
-            available: false,
+            available: true,
             throttled: false,
-            path: "no-auth",
-            apnsReason: auth.error,
+            path: "send-error",
+            apnsStatus: wakeResult.status,
+            apnsReason: wakeResult.reason,
           });
         }
-        state.lastWakeAtMs = Date.now();
-        wakeResult = await sendApnsBackgroundWake({
-          registration,
-          nodeId,
-          wakeReason: opts?.wakeReason ?? "node.invoke",
-          auth: auth.auth,
-        });
-      }
-      await clearStaleApnsRegistrationIfNeeded(registration, nodeId, wakeResult);
-      if (!wakeResult.ok) {
         return withDuration({
           available: true,
           throttled: false,
-          path: "send-error",
+          path: "sent",
           apnsStatus: wakeResult.status,
           apnsReason: wakeResult.reason,
         });
-      }
-      return withDuration({
-        available: true,
-        throttled: false,
-        path: "sent",
-        apnsStatus: wakeResult.status,
-        apnsReason: wakeResult.reason,
-      });
-    } catch (err) {
-      // Best-effort wake only.
-      const message = formatErrorMessage(err);
-      if (state.lastWakeAtMs === 0) {
+      } catch (err) {
+        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          return withDuration({ available: false, throttled: false, path: "invalidated" });
+        }
+        // Best-effort wake only.
+        const message = formatErrorMessage(err);
+        if (state.lastWakeAtMs === 0) {
+          return withDuration({
+            available: false,
+            throttled: false,
+            path: "send-error",
+            apnsReason: message,
+          });
+        }
         return withDuration({
-          available: false,
+          available: true,
           throttled: false,
           path: "send-error",
           apnsReason: message,
         });
       }
-      return withDuration({
-        available: true,
-        throttled: false,
-        path: "send-error",
-        apnsReason: message,
-      });
-    }
-  })();
+    })();
 
-  try {
-    return await state.inFlight;
+    try {
+      return await state.inFlight;
+    } finally {
+      state.inFlight = undefined;
+    }
   } finally {
-    state.inFlight = undefined;
+    if (!lifecycleProvided) {
+      releaseNodeWakeLifecycle(nodeId, lifecycle);
+    }
   }
 }
 
 export async function maybeSendNodeWakeNudge(
   nodeId: string,
-  opts?: { cfg?: OpenClawConfig },
+  opts?: { cfg?: OpenClawConfig; lifecycle?: NodeWakeLifecycle },
 ): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
@@ -867,79 +887,108 @@ export async function maybeSendNodeWakeNudge(
     ...attempt,
     durationMs: Math.max(0, Date.now() - startedAtMs),
   });
-
-  const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
-  if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < nodeInvokePolicy.wakeNudgeThrottleMs) {
-    return withDuration({ sent: false, throttled: true, reason: "throttled" });
-  }
-
-  const registration = await loadApnsRegistration(nodeId);
-  if (!registration) {
-    return withDuration({ sent: false, throttled: false, reason: "no-registration" });
-  }
+  const lifecycleProvided = opts?.lifecycle !== undefined;
+  const lifecycle = opts?.lifecycle ?? captureNodeWakeLifecycle(nodeId);
   try {
-    let result;
-    if (registration.transport === "relay") {
-      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
-      if (!relay.ok) {
-        return withDuration({
-          sent: false,
-          throttled: false,
-          reason: "no-auth",
-          apnsReason: relay.error,
-        });
-      }
-      result = await sendApnsAlert({
-        registration,
-        nodeId,
-        title: "OpenClaw needs a quick reopen",
-        body: "Tap to reopen OpenClaw and restore the node connection.",
-        relayConfig: relay.relayConfig,
-      });
-    } else {
-      const auth = await resolveDirectNodePushConfig();
-      if (!auth.ok) {
-        return withDuration({
-          sent: false,
-          throttled: false,
-          reason: "no-auth",
-          apnsReason: auth.error,
-        });
-      }
-      result = await sendApnsAlert({
-        registration,
-        nodeId,
-        title: "OpenClaw needs a quick reopen",
-        body: "Tap to reopen OpenClaw and restore the node connection.",
-        auth: auth.auth,
-      });
+    if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+      return withDuration({ sent: false, throttled: false, reason: "invalidated" });
     }
-    await clearStaleApnsRegistrationIfNeeded(registration, nodeId, result);
-    if (!result.ok) {
+
+    const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
+    if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < nodeInvokePolicy.wakeNudgeThrottleMs) {
+      return withDuration({ sent: false, throttled: true, reason: "throttled" });
+    }
+
+    const registration = await loadApnsRegistration(nodeId);
+    if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+      return withDuration({ sent: false, throttled: false, reason: "invalidated" });
+    }
+    if (!registration) {
+      return withDuration({ sent: false, throttled: false, reason: "no-registration" });
+    }
+    try {
+      let result;
+      if (registration.transport === "relay") {
+        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
+        if (!relay.ok) {
+          return withDuration({
+            sent: false,
+            throttled: false,
+            reason: "no-auth",
+            apnsReason: relay.error,
+          });
+        }
+        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          return withDuration({ sent: false, throttled: false, reason: "invalidated" });
+        }
+        result = await sendApnsAlert({
+          registration,
+          nodeId,
+          title: "OpenClaw needs a quick reopen",
+          body: "Tap to reopen OpenClaw and restore the node connection.",
+          relayConfig: relay.relayConfig,
+        });
+      } else {
+        const auth = await resolveDirectNodePushConfig();
+        if (!auth.ok) {
+          return withDuration({
+            sent: false,
+            throttled: false,
+            reason: "no-auth",
+            apnsReason: auth.error,
+          });
+        }
+        if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+          return withDuration({ sent: false, throttled: false, reason: "invalidated" });
+        }
+        result = await sendApnsAlert({
+          registration,
+          nodeId,
+          title: "OpenClaw needs a quick reopen",
+          body: "Tap to reopen OpenClaw and restore the node connection.",
+          auth: auth.auth,
+        });
+      }
+      if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        return withDuration({ sent: result.ok, throttled: false, reason: "invalidated" });
+      }
+      await clearStaleApnsRegistrationIfNeeded(registration, nodeId, result);
+      if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        return withDuration({ sent: result.ok, throttled: false, reason: "invalidated" });
+      }
+      if (!result.ok) {
+        return withDuration({
+          sent: false,
+          throttled: false,
+          reason: "apns-not-ok",
+          apnsStatus: result.status,
+          apnsReason: result.reason,
+        });
+      }
+      nodeWakeNudgeById.set(nodeId, Date.now());
       return withDuration({
-        sent: false,
+        sent: true,
         throttled: false,
-        reason: "apns-not-ok",
+        reason: "sent",
         apnsStatus: result.status,
         apnsReason: result.reason,
       });
+    } catch (err) {
+      if (!isNodeWakeLifecycleCurrent(nodeId, lifecycle)) {
+        return withDuration({ sent: false, throttled: false, reason: "invalidated" });
+      }
+      const message = formatErrorMessage(err);
+      return withDuration({
+        sent: false,
+        throttled: false,
+        reason: "send-error",
+        apnsReason: message,
+      });
     }
-    nodeWakeNudgeById.set(nodeId, Date.now());
-    return withDuration({
-      sent: true,
-      throttled: false,
-      reason: "sent",
-      apnsStatus: result.status,
-      apnsReason: result.reason,
-    });
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    return withDuration({
-      sent: false,
-      throttled: false,
-      reason: "send-error",
-      apnsReason: message,
-    });
+  } finally {
+    if (!lifecycleProvided) {
+      releaseNodeWakeLifecycle(nodeId, lifecycle);
+    }
   }
 }
 
@@ -948,16 +997,23 @@ export async function waitForNodeReconnect(params: {
   context: { nodeRegistry: { get: (nodeId: string) => unknown } };
   timeoutMs?: number;
   pollMs?: number;
+  lifecycle?: NodeWakeLifecycle;
 }): Promise<boolean> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 250);
   const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
+      return false;
+    }
     if (params.context.nodeRegistry.get(params.nodeId)) {
       return true;
     }
     await delayMs(pollMs);
+  }
+  if (params.lifecycle && !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle)) {
+    return false;
   }
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
@@ -1458,84 +1514,102 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       let nodeSession = context.nodeRegistry.get(nodeId);
       if (!nodeSession) {
-        const wakeReqId = req.id;
-        const wakeFlowStartedAtMs = Date.now();
-        context.logGateway.info(
-          `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
-        );
+        const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+        const getCurrentWakeSession = () =>
+          isNodeWakeLifecycleCurrent(nodeId, wakeLifecycle)
+            ? context.nodeRegistry.get(nodeId)
+            : undefined;
+        try {
+          const wakeReqId = req.id;
+          const wakeFlowStartedAtMs = Date.now();
+          context.logGateway.info(
+            `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
+          );
 
-        const wake = await maybeWakeNodeWithApns(nodeId, { cfg });
-        context.logGateway.info(
-          `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
-            `available=${wake.available} throttled=${wake.throttled} ` +
-            `path=${wake.path} durationMs=${wake.durationMs} ` +
-            `apnsStatus=${wake.apnsStatus ?? -1} apnsReason=${wake.apnsReason ?? "-"}`,
-        );
-        if (wake.available) {
-          const waitStartedAtMs = Date.now();
-          const waitTimeoutMs = NODE_WAKE_RECONNECT_WAIT_MS;
-          const reconnected = await waitForNodeReconnect({
-            nodeId,
-            context,
-            timeoutMs: waitTimeoutMs,
-          });
-          const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
+          const wake = await maybeWakeNodeWithApns(nodeId, { cfg, lifecycle: wakeLifecycle });
           context.logGateway.info(
-            `node wake stage=wait1 node=${nodeId} req=${wakeReqId} ` +
-              `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
+            `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
+              `available=${wake.available} throttled=${wake.throttled} ` +
+              `path=${wake.path} durationMs=${wake.durationMs} ` +
+              `apnsStatus=${wake.apnsStatus ?? -1} apnsReason=${wake.apnsReason ?? "-"}`,
           );
-        }
-        nodeSession = context.nodeRegistry.get(nodeId);
-        if (!nodeSession && wake.available) {
-          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true, cfg });
-          context.logGateway.info(
-            `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
-              `available=${retryWake.available} throttled=${retryWake.throttled} ` +
-              `path=${retryWake.path} durationMs=${retryWake.durationMs} ` +
-              `apnsStatus=${retryWake.apnsStatus ?? -1} apnsReason=${retryWake.apnsReason ?? "-"}`,
-          );
-          if (retryWake.available) {
+          if (wake.available) {
             const waitStartedAtMs = Date.now();
-            const waitTimeoutMs = NODE_WAKE_RECONNECT_RETRY_WAIT_MS;
+            const waitTimeoutMs = NODE_WAKE_RECONNECT_WAIT_MS;
             const reconnected = await waitForNodeReconnect({
               nodeId,
               context,
               timeoutMs: waitTimeoutMs,
+              lifecycle: wakeLifecycle,
             });
             const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
             context.logGateway.info(
-              `node wake stage=wait2 node=${nodeId} req=${wakeReqId} ` +
+              `node wake stage=wait1 node=${nodeId} req=${wakeReqId} ` +
                 `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
             );
           }
-          nodeSession = context.nodeRegistry.get(nodeId);
-        }
-        if (!nodeSession) {
-          const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-          const nudge = await maybeSendNodeWakeNudge(nodeId, { cfg });
-          context.logGateway.info(
-            `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
-              `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
-              `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
-          );
-          context.logGateway.warn(
-            `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
-              `reason=not_connected totalMs=${totalDurationMs}`,
-          );
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-              details: { code: "NOT_CONNECTED" },
-            }),
-          );
-          return;
-        }
+          nodeSession = getCurrentWakeSession();
+          if (!nodeSession && wake.available) {
+            const retryWake = await maybeWakeNodeWithApns(nodeId, {
+              force: true,
+              cfg,
+              lifecycle: wakeLifecycle,
+            });
+            context.logGateway.info(
+              `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
+                `available=${retryWake.available} throttled=${retryWake.throttled} ` +
+                `path=${retryWake.path} durationMs=${retryWake.durationMs} ` +
+                `apnsStatus=${retryWake.apnsStatus ?? -1} apnsReason=${retryWake.apnsReason ?? "-"}`,
+            );
+            if (retryWake.available) {
+              const waitStartedAtMs = Date.now();
+              const waitTimeoutMs = NODE_WAKE_RECONNECT_RETRY_WAIT_MS;
+              const reconnected = await waitForNodeReconnect({
+                nodeId,
+                context,
+                timeoutMs: waitTimeoutMs,
+                lifecycle: wakeLifecycle,
+              });
+              const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
+              context.logGateway.info(
+                `node wake stage=wait2 node=${nodeId} req=${wakeReqId} ` +
+                  `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
+              );
+            }
+            nodeSession = getCurrentWakeSession();
+          }
+          if (!nodeSession) {
+            const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
+            const nudge = await maybeSendNodeWakeNudge(nodeId, {
+              cfg,
+              lifecycle: wakeLifecycle,
+            });
+            context.logGateway.info(
+              `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
+                `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
+                `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
+            );
+            context.logGateway.warn(
+              `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
+                `reason=not_connected totalMs=${totalDurationMs}`,
+            );
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
+                details: { code: "NOT_CONNECTED" },
+              }),
+            );
+            return;
+          }
 
-        const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-        context.logGateway.info(
-          `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
-        );
+          const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
+          context.logGateway.info(
+            `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
+          );
+        } finally {
+          releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
+        }
       }
       // A reload may revoke authority for an in-flight request, but it must not
       // retroactively grant one that was denied when admitted before node wake.
