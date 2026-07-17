@@ -44,3 +44,80 @@ describe("tlon urbit auth ssrf", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 });
+
+describe("tlon urbit auth body drain", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("drains a streamed response body and extracts the set-cookie header", async () => {
+    const cookieValue = "urbauth-~zod=456; Path=/; HttpOnly";
+    const body = new TextEncoder().encode("login ok");
+    const response = new Response(new Blob([body]).stream(), {
+      status: 200,
+      headers: { "set-cookie": cookieValue },
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", mockFetch);
+    const lookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+
+    const cookie = await authenticate("http://127.0.0.1:8080", "code", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+      lookupFn,
+      fetchImpl: mockFetch as typeof fetch,
+    });
+    expect(cookie).toContain("urbauth-~zod=456");
+  });
+
+  it("cancels the body stream after the drain cap for an oversized response", async () => {
+    const cookieValue = "urbauth-~zod=789; Path=/; HttpOnly";
+    const largeBody = new Uint8Array(256 * 1024).fill(0x78);
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(largeBody);
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "set-cookie": cookieValue },
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", mockFetch);
+    const lookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+
+    const cookie = await authenticate("http://127.0.0.1:8080", "code", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+      lookupFn,
+      fetchImpl: mockFetch as typeof fetch,
+    });
+    expect(cookie).toContain("urbauth-~zod=789");
+  });
+
+  it("skips the drain for body-less responses and still extracts the cookie", async () => {
+    // When no body stream is available, there is nothing to drain — cookie
+    // headers are already finalised. The authenticate function should extract
+    // the cookie without attempting an unbounded text() read.
+    const cookieValue = "urbauth-~zod=streamless; Path=/; HttpOnly";
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: null,
+      headers: new Headers({ "set-cookie": cookieValue }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const lookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+
+    const cookie = await authenticate("http://127.0.0.1:8080", "code", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+      lookupFn,
+      fetchImpl: mockFetch as typeof fetch,
+    });
+    expect(cookie).toContain("urbauth-~zod=streamless");
+  });
+});
