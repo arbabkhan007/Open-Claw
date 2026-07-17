@@ -342,6 +342,7 @@ describe("spawnSubagentDirect seam flow", () => {
         sessionKey: result.childSessionKey,
       }),
       expect.objectContaining({
+        forceSyntheticClient: true,
         timeoutMs: expect.any(Number),
       }),
     );
