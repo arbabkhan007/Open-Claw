@@ -16,6 +16,7 @@ extension OpenClawChatViewModel {
     func replaceMessages(_ messages: [OpenClawChatMessage]) {
         guard self.messages != messages else { return }
         self.messages = messages
+        self.seedInputHistory(from: messages)
         markTimelineChanged()
     }
 
@@ -79,7 +80,7 @@ extension OpenClawChatViewModel {
     }
 
     static func transcriptCacheAgentID(sessionKey: String, agentID: String?) -> String? {
-        guard Self.agentID(fromSessionKey: sessionKey) == nil else { return nil }
+        guard OpenClawChatSessionKey.agentID(from: sessionKey) == nil else { return nil }
         let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized?.isEmpty == false ? normalized : nil
     }

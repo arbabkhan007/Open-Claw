@@ -16,7 +16,8 @@ import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
-import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
@@ -35,18 +36,20 @@ import {
   resolveKilledSubagentTaskEndedAt,
 } from "./subagent-registry-completion.js";
 import {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
   persistSubagentSessionTiming,
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentProgressOrigin, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
+import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+} from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -169,6 +172,7 @@ export type RegisterSubagentRunParams = {
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
@@ -587,7 +591,7 @@ export function createSubagentRunManager(params: {
     fallback?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
-    transcriptFile?: string;
+    transcriptTarget?: AgentRunSessionTarget;
     task?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
@@ -661,11 +665,12 @@ export function createSubagentRunManager(params: {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       outcome: undefined,
       execution: {
         status: "running",
         startedAt: now,
-        transcriptFile: replaceParams.transcriptFile,
+        transcriptTarget: replaceParams.transcriptTarget,
       },
       completion: {
         required: source.expectsCompletionMessage === true,
@@ -712,10 +717,10 @@ export function createSubagentRunManager(params: {
         void safeRemoveAttachmentsDir(source);
       }
       if (
-        source.execution?.transcriptFile &&
-        source.execution.transcriptFile !== replaceParams.transcriptFile
+        source.execution?.transcriptTarget &&
+        source.execution.transcriptTarget !== replaceParams.transcriptTarget
       ) {
-        void removeInternalSessionEffectsTranscript(source.execution.transcriptFile);
+        void removeInternalSessionEffectsSession(source.execution.transcriptTarget);
       }
     }
     params.ensureListener();
@@ -754,6 +759,7 @@ export function createSubagentRunManager(params: {
       controllerSessionKey,
       requesterSessionKey,
       requesterOrigin,
+      progressOrigin: registerParams.progressOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
       taskName: registerParams.taskName,
@@ -783,6 +789,7 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
@@ -1040,3 +1047,4 @@ export function createSubagentRunManager(params: {
     waitForSubagentCompletion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
