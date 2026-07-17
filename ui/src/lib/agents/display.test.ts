@@ -13,6 +13,7 @@ import { buildAgentContext, formatBytes, resolveEffectiveModelFallbacks } from "
 describe("formatBytes", () => {
   it("preserves the Control UI byte-size display contract", () => {
     expect(formatBytes(undefined)).toBe("-");
+    expect(formatBytes(-1)).toBe("-");
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(12 * 1024)).toBe("12 KB");
