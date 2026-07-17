@@ -1026,9 +1026,17 @@ export const OpenClawSchema = z
       .superRefine((val, ctx) => {
         if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
           try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {
-              defaultUnit: "h",
-            });
+            const ms = parseDurationMs(
+              normalizeStringifiedOptionalString(val.sessionRetention) ?? "",
+              { defaultUnit: "h" },
+            );
+            if (ms <= 0) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["sessionRetention"],
+                message: "duration must be positive (use ms, s, m, h, d), e.g. 24h",
+              });
+            }
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
