@@ -1,4 +1,5 @@
 // Covers git commit helper behavior in fake repositories.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -54,6 +55,24 @@ async function makeFakeGitRepo(
 async function makeFakeOpenClawPackage(root: string) {
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+}
+
+function limitPositionalReads(maxBytes: number) {
+  const realReadSync = fsSync.readSync.bind(fsSync);
+  vi.spyOn(fsSync, "readSync").mockImplementation(((
+    fd: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: number | null,
+  ) =>
+    realReadSync(
+      fd,
+      buffer,
+      offset,
+      Math.min(length, maxBytes),
+      position,
+    )) as typeof fsSync.readSync);
 }
 
 describe("git commit resolution", () => {
@@ -379,6 +398,39 @@ describe("git commit resolution", () => {
     });
 
     expect(resolveCommitHash({ cwd: repoRootValue, env: {} })).toBe("bbbbbbb");
+  });
+
+  it("fills short positional reads for loose refs", async () => {
+    const temp = await makeTempDir("git-commit-short-ref");
+    const repoRoot = path.join(temp, "repo");
+    await makeFakeGitRepo(repoRoot, {
+      head: "ref: refs/heads/main\n",
+      refs: {
+        "refs/heads/main": "abcdef0123456789abcdef0123456789abcdef01",
+      },
+    });
+    limitPositionalReads(4);
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("abcdef0");
+  });
+
+  it("fills short positional reads for worktree commondir paths", async () => {
+    const temp = await makeTempDir("git-commit-short-commondir");
+    const repoRoot = path.join(temp, "repo");
+    const worktreeGitDir = path.join(temp, "worktree-git");
+    const commonGitDir = path.join(temp, "common-git");
+    await fs.mkdir(commonGitDir, { recursive: true });
+    const refPath = path.join(commonGitDir, "refs", "heads", "main");
+    await fs.mkdir(path.dirname(refPath), { recursive: true });
+    await fs.writeFile(refPath, "abcdef0123456789abcdef0123456789abcdef01\n", "utf-8");
+    await makeFakeGitRepo(repoRoot, {
+      gitdir: worktreeGitDir,
+      head: "ref: refs/heads/main\n",
+      commondir: "../common-git",
+    });
+    limitPositionalReads(4);
+
+    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("abcdef0");
   });
 
   it("reads full HEAD refs before parsing long branch names", async () => {
