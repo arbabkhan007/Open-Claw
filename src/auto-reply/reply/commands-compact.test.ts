@@ -20,16 +20,21 @@ vi.mock("./commands-compact.runtime.js", () => ({
   resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
+vi.mock("../../gateway/session-reset-service.js", () => ({
+  performGatewaySessionReset: vi.fn(async () => ({ ok: true })),
+}));
 
 const {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
+  enqueueSystemEvent,
   formatContextUsageShort,
   incrementCompactionCount,
   isEmbeddedAgentRunAbortableForCompaction,
   resolveSessionFilePathOptions,
   waitForEmbeddedAgentRunEnd,
 } = await import("./commands-compact.runtime.js");
+const { performGatewaySessionReset } = await import("../../gateway/session-reset-service.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
 function buildCompactParams(
@@ -529,6 +534,50 @@ describe("handleCompactCommand", () => {
     }
     expect(call.sessionEntry.sessionId).toBe("target-session");
     expect(call.tokensAfter).toBe(321);
+  });
+
+  it("flushes after-compaction reset requests after recording the terminal status event", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:whatsapp:direct:12345",
+        agentId: "main",
+        reason: "new",
+        commandSource: "embedded-agent:hook",
+      });
+      return {
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 999,
+          tokensAfter: 321,
+        },
+      };
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "target-session",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(vi.mocked(enqueueSystemEvent)).toHaveBeenCalledWith(
+      "Compacted (999 → 321) • Context 12.1k",
+      { sessionKey: "agent:main:main" },
+    );
+    expect(vi.mocked(performGatewaySessionReset)).toHaveBeenCalledOnce();
+    const statusEventOrder = vi.mocked(enqueueSystemEvent).mock.invocationCallOrder.at(-1);
+    const resetOrder = vi.mocked(performGatewaySessionReset).mock.invocationCallOrder.at(-1);
+    expect(statusEventOrder).toBeLessThan(resetOrder ?? 0);
   });
 
   it("reports unknown context when terminal compaction omits the post-compaction count", async () => {

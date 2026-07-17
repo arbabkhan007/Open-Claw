@@ -321,7 +321,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
     });
-    await hookSessionResetQueue.flush();
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
@@ -338,6 +337,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
   runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  if (result.ok && result.compacted) {
+    await hookSessionResetQueue.flush();
+  }
   return {
     shouldContinue: false,
     reply: {

@@ -67,6 +67,9 @@ const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+type CopilotDeferredHookSessionReset = NonNullable<
+  Parameters<typeof runAgentHarnessAfterCompactionHook>[0]["ctx"]["deferEmbeddedHookSessionReset"]
+>;
 export type CopilotSessionConfig = Pick<
   SessionConfig,
   | "availableTools"
@@ -99,6 +102,7 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   copilotHome?: string;
   cwd?: string;
   enableSessionTelemetry?: boolean;
+  deferEmbeddedHookSessionReset?: CopilotDeferredHookSessionReset;
   hooksConfig?: CopilotHooksConfig;
   infiniteSessionConfig?: SessionConfig["infiniteSessions"];
   initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
@@ -410,6 +414,9 @@ export async function runCopilotAttempt(
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
     modelSelectionLocked: input.modelSelectionLocked,
+    ...(input.deferEmbeddedHookSessionReset
+      ? { deferEmbeddedHookSessionReset: input.deferEmbeddedHookSessionReset }
+      : {}),
   };
   const finishAttempt = (result: AgentHarnessAttemptResult) =>
     finalizeCopilotAttempt(input, result, hookContext, attemptStartedAt, now);

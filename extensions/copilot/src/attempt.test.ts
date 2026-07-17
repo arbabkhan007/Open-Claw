@@ -2083,6 +2083,52 @@ describe("runCopilotAttempt", () => {
     });
   });
 
+  it("exposes SDK after_compaction reset API through the lifecycle-owned reset queue", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const afterCompaction = vi.fn(async (_event, ctx) => {
+      expect(ctx.api?.resetSession).toEqual(expect.any(Function));
+      await expect(ctx.api?.resetSession("new")).resolves.toMatchObject({
+        ok: true,
+        key: "agent:main:discord:channel:123",
+        deferred: true,
+      });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          return undefined;
+        });
+      },
+    });
+
+    await runCopilotAttempt(
+      {
+        ...makeParams({
+          sandboxSessionKey: "agent:main:sandbox:policy",
+          sessionKey: "agent:main:discord:channel:123",
+        }),
+        deferEmbeddedHookSessionReset,
+      },
+      { pool: makeFakePool(sdk) },
+    );
+
+    sdk.sessions[0]?.emit("session.compaction_complete", { messagesRemoved: 3, success: true });
+
+    await vi.waitFor(() => {
+      expect(afterCompaction).toHaveBeenCalledTimes(1);
+    });
+    expect(deferEmbeddedHookSessionReset).toHaveBeenCalledWith({
+      key: "agent:main:discord:channel:123",
+      agentId: "agent-1",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+  });
+
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
     const afterCompaction = vi.fn();
     const onDeferredCompaction = vi.fn();
