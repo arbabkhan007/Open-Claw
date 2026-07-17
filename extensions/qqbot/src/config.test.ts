@@ -240,6 +240,58 @@ describe("qqbot config", () => {
     expect(resolved.name).toBe("Bot Two");
   });
 
+  it("ignores blank QQBOT_CLIENT_SECRET env fallback", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+        },
+      },
+    } as OpenClawConfig;
+    const previous = process.env.QQBOT_CLIENT_SECRET;
+
+    process.env.QQBOT_CLIENT_SECRET = "   ";
+    try {
+      const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
+
+      expect(resolved.clientSecret).toBe("");
+      expect(resolved.secretSource).toBe("none");
+      expect(qqbotSetupPlugin.config.isConfigured?.(resolved, cfg)).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.QQBOT_CLIENT_SECRET;
+      } else {
+        process.env.QQBOT_CLIENT_SECRET = previous;
+      }
+    }
+  });
+
+  it("trims non-blank QQBOT_CLIENT_SECRET env fallback", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+        },
+      },
+    } as OpenClawConfig;
+    const previous = process.env.QQBOT_CLIENT_SECRET;
+
+    process.env.QQBOT_CLIENT_SECRET = "  real-secret  ";
+    try {
+      const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
+
+      expect(resolved.clientSecret).toBe("real-secret");
+      expect(resolved.secretSource).toBe("env");
+      expect(qqbotSetupPlugin.config.isConfigured?.(resolved, cfg)).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.QQBOT_CLIENT_SECRET;
+      } else {
+        process.env.QQBOT_CLIENT_SECRET = previous;
+      }
+    }
+  });
+
   it("resolves env SecretRefs on runtime resolution", () => {
     const cfg = makeQqbotSecretRefConfig();
     const previous = process.env.QQBOT_CLIENT_SECRET;
