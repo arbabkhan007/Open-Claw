@@ -169,8 +169,8 @@ function resolveSystemLaunchDaemonPlistPathForLabel(label: string): string {
 }
 
 async function findSystemLaunchDaemonPlistPathForLabel(label: string): Promise<string | null> {
-  // Service inspection intentionally skips unreadable files; activation cannot
-  // reuse that best-effort policy because it could hide a same-label daemon.
+  // Canonical-path errors fail closed below. The fallback scan skips unreadable
+  // noncanonical vendor plists so unrelated permissions do not block installs.
   const canonicalPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
   try {
     await fs.access(canonicalPath);
@@ -190,15 +190,16 @@ async function findSystemLaunchDaemonPlistPathForLabel(label: string): Promise<s
     }
     throw err;
   }
-  const candidates = entries.filter(
-    (entry) => entry.endsWith(".plist") && entry !== `${label}.plist`,
-  );
+  const candidates = entries.filter((entry) => entry.endsWith(".plist"));
   const matches = await Promise.all(
     candidates.map(async (entry) => {
       const plistPath = path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, entry);
-      // launchd keys jobs by the plist Label, not its filename. Every candidate
-      // must be readable before activating a gui job with the same identity.
-      const contents = await fs.readFile(plistPath, "utf8");
+      // launchd keys jobs by the plist Label, not its filename. Loaded jobs are
+      // already caught above, so unreadable unrelated fallback files are skipped.
+      const contents = await fs.readFile(plistPath, "utf8").catch(() => null);
+      if (contents === null) {
+        return null;
+      }
       return parseLaunchdPlistLabel(contents) === label ? plistPath : null;
     }),
   );
@@ -452,7 +453,8 @@ async function resolveSystemLaunchDaemonConflict(
   try {
     plistPath = await findSystemLaunchDaemonPlistPathForLabel(label);
   } catch (err) {
-    const detail = truncateUtf16Safe(sanitizeForLog(String(err)), 500);
+    const rawDetail = err instanceof Error ? err.message : String(err);
+    const detail = truncateUtf16Safe(sanitizeForLog(rawDetail), 500);
     throw new Error(
       `Could not verify whether system LaunchDaemon ${serviceTarget} has an installed plist: ${detail}`,
       { cause: err },
@@ -895,7 +897,7 @@ export async function repairLaunchAgentBootstrap(args: {
     return {
       ok: false,
       status: "system-launchdaemon-unverifiable",
-      detail: String(err),
+      detail: err instanceof Error ? err.message : String(err),
     };
   }
   if (conflict) {

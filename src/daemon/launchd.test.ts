@@ -1292,7 +1292,7 @@ describe("launchd bootstrap repair", () => {
         ok: false,
         status: "system-launchdaemon-unverifiable",
         detail:
-          "Error: Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: launchctl print failed: permission denied",
+          "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: launchctl print failed: permission denied",
       });
       expect(state.fileWrites).toEqual([]);
       expectNoLaunchAgentActivationCalls();
@@ -1429,7 +1429,7 @@ describe("launchd install", () => {
           programArguments: defaultProgramArguments,
         }),
       ).rejects.toThrow(
-        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway has an installed plist: Error: EACCES",
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway has an installed plist: EACCES",
       );
 
       expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
@@ -1437,26 +1437,29 @@ describe("launchd install", () => {
     });
   });
 
-  it("frames unreadable unrelated system plists as an unverifiable conflict check", async () => {
+  it("ignores readable and unreadable unrelated system LaunchDaemon plists", async () => {
     await withProcessPlatform("darwin", async () => {
       const env = createDefaultLaunchdEnv();
-      const unrelatedPath = "/Library/LaunchDaemons/com.vendor.restricted.plist";
-      state.files.set(unrelatedPath, "<plist/>");
-      state.systemPlistReadErrorPath = unrelatedPath;
+      const restrictedPath = "/Library/LaunchDaemons/com.vendor.restricted.plist";
+      state.files.set(restrictedPath, "<plist/>");
+      state.files.set(
+        "/Library/LaunchDaemons/com.vendor.readable.plist",
+        createTestLaunchAgentPlist({
+          label: "com.vendor.readable",
+          programArguments: ["/usr/bin/true"],
+        }),
+      );
+      state.systemPlistReadErrorPath = restrictedPath;
       state.systemPlistReadErrorCode = "EACCES";
 
-      await expect(
-        installLaunchAgent({
-          env,
-          stdout: new PassThrough(),
-          programArguments: defaultProgramArguments,
-        }),
-      ).rejects.toThrow(
-        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway has an installed plist: Error: EACCES",
-      );
+      await installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      });
 
-      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
-      expectNoLaunchAgentActivationCalls();
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(true);
+      expectLaunchctlEnableBootstrapOrder(env);
     });
   });
 
