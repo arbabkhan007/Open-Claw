@@ -262,7 +262,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired dual-field plan payload builder -1.
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      8149,
+      // +1: shared reply-session initialization conflict classifier for plugin SDK.
+      8150,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -296,7 +297,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired dual-field plan payload builder -1.
       // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
-      4533,
+      // +1: shared reply-session initialization conflict classifier for plugin SDK.
+      4534,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
