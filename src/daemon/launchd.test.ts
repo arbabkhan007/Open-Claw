@@ -6,6 +6,7 @@ import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  parseLaunchdPlistLabel,
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
@@ -19,6 +20,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stageLaunchAgent,
   stopLaunchAgent,
 } from "./launchd.js";
 
@@ -501,6 +503,15 @@ beforeEach(() => {
 });
 
 describe("launchd runtime parsing", () => {
+  it("parses and unescapes launchd plist labels", () => {
+    expect(
+      parseLaunchdPlistLabel(
+        "<key>Label</key><string>ai.openclaw.gateway&amp;integration</string>",
+      ),
+    ).toBe("ai.openclaw.gateway&integration");
+    expect(parseLaunchdPlistLabel("<plist/>")).toBeNull();
+  });
+
   it("parses state, pid, and exit status", () => {
     const output = [
       "state = running",
@@ -1349,6 +1360,31 @@ describe("launchd install", () => {
 
       await expect(
         installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow(plistPath);
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
+      expectNoLaunchAgentActivationCalls();
+    });
+  });
+
+  it("refuses to stage a LaunchAgent over a same-label system LaunchDaemon", async () => {
+    await withProcessPlatform("darwin", async () => {
+      const env = createDefaultLaunchdEnv();
+      const plistPath = "/Library/LaunchDaemons/custom-staged-gateway.plist";
+      state.files.set(
+        plistPath,
+        createTestLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: defaultProgramArguments,
+        }),
+      );
+
+      await expect(
+        stageLaunchAgent({
           env,
           stdout: new PassThrough(),
           programArguments: defaultProgramArguments,

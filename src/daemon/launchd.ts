@@ -190,19 +190,19 @@ async function findSystemLaunchDaemonPlistPathForLabel(label: string): Promise<s
     }
     throw err;
   }
-  for (const entry of entries) {
-    if (!entry.endsWith(".plist") || entry === `${label}.plist`) {
-      continue;
-    }
-    const plistPath = path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, entry);
-    // launchd keys jobs by the plist Label, not its filename. Every candidate
-    // must be readable before activating a gui job with the same identity.
-    const contents = await fs.readFile(plistPath, "utf8");
-    if (parseLaunchdPlistLabel(contents) === label) {
-      return plistPath;
-    }
-  }
-  return null;
+  const candidates = entries.filter(
+    (entry) => entry.endsWith(".plist") && entry !== `${label}.plist`,
+  );
+  const matches = await Promise.all(
+    candidates.map(async (entry) => {
+      const plistPath = path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, entry);
+      // launchd keys jobs by the plist Label, not its filename. Every candidate
+      // must be readable before activating a gui job with the same identity.
+      const contents = await fs.readFile(plistPath, "utf8");
+      return parseLaunchdPlistLabel(contents) === label ? plistPath : null;
+    }),
+  );
+  return matches.find((plistPath): plistPath is string => plistPath !== null) ?? null;
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
