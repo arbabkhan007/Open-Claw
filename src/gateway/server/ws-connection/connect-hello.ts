@@ -87,6 +87,7 @@ export async function sendGatewayHello(
       capabilities: [
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
+        GATEWAY_SERVER_CAPS.MANAGED_IMAGE_ARTIFACT_COORDINATES,
       ],
     },
     snapshot,

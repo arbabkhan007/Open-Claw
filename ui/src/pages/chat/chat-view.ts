@@ -54,6 +54,7 @@ import {
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
+import type { ManagedOutgoingImageRequest } from "./managed-image-preview.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
@@ -88,6 +89,7 @@ export type ChatProps = {
   planStatus?: PlanStatus | null;
   questionStatus?: QuestionStatus | null;
   messages: unknown[];
+  resolveManagedOutgoingImage?: (request: ManagedOutgoingImageRequest) => Promise<Blob | null>;
   historyPagination?: {
     loading: boolean;
   };
@@ -121,8 +123,7 @@ export type ChatProps = {
   ) => Promise<DetailFullMessageResult | null | undefined>;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
-  /** Pane too narrow for side-by-side chat + detail panel: stack them
-   * vertically instead (the divider flips to a horizontal handle). */
+  /** Stack chat and detail panel when the pane is too narrow for their minimum widths. */
   sidebarStacked?: boolean;
   splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
@@ -202,6 +203,10 @@ export type ChatProps = {
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
+  /** Suppress the floating workspace opener when a split-pane header owns it. */
+  paneHeaderActive?: boolean;
+  /** Single-pane split-view opener; split panes own their header controls. */
+  onOpenSplitView?: () => void;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
@@ -275,6 +280,7 @@ export function renderChat(props: ChatProps) {
       loading: props.loading,
       historyPagination: props.historyPagination,
       messages: props.messages,
+      resolveManagedOutgoingImage: props.resolveManagedOutgoingImage,
       toolMessages: props.toolMessages,
       streamSegments: props.streamSegments,
       stream: props.stream,

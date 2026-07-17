@@ -9006,6 +9006,7 @@ public struct ArtifactSummary: Codable, Sendable {
     public let runid: String?
     public let taskid: String?
     public let messageseq: Int?
+    public let contentindex: Int?
     public let source: String?
     public let download: [String: AnyCodable]
 
@@ -9019,6 +9020,7 @@ public struct ArtifactSummary: Codable, Sendable {
         runid: String? = nil,
         taskid: String? = nil,
         messageseq: Int? = nil,
+        contentindex: Int? = nil,
         source: String? = nil,
         download: [String: AnyCodable])
     {
@@ -9031,6 +9033,7 @@ public struct ArtifactSummary: Codable, Sendable {
         self.runid = runid
         self.taskid = taskid
         self.messageseq = messageseq
+        self.contentindex = contentindex
         self.source = source
         self.download = download
     }
@@ -9045,6 +9048,7 @@ public struct ArtifactSummary: Codable, Sendable {
         case runid = "runId"
         case taskid = "taskId"
         case messageseq = "messageSeq"
+        case contentindex = "contentIndex"
         case source
         case download
     }

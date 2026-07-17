@@ -37,6 +37,7 @@ export const ArtifactSummarySchema = closedObject({
   runId: Type.Optional(NonEmptyString),
   taskId: Type.Optional(NonEmptyString),
   messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
+  contentIndex: Type.Optional(Type.Integer({ minimum: 0 })),
   source: Type.Optional(NonEmptyString),
   download: closedObject({
     mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),

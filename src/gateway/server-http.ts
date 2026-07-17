@@ -96,8 +96,8 @@ const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js
 
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
 
-const getManagedImageAttachmentsModule = createLazyRuntimeModule(
-  () => import("./managed-image-attachments.js"),
+const getManagedImageAttachmentsHttpModule = createLazyRuntimeModule(
+  () => import("./managed-image-attachments-http.js"),
 );
 
 const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
@@ -812,7 +812,7 @@ export function createGatewayHttpServer(opts: {
         requestStages.push({
           name: "chat-managed-image-media",
           run: async () =>
-            (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            (await getManagedImageAttachmentsHttpModule()).handleManagedOutgoingImageHttpRequest(
               req,
               res,
               {

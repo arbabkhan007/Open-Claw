@@ -810,7 +810,6 @@ src/gateway/gateway-acp-bind.live.test.ts
 src/gateway/gateway-codex-harness.live.test.ts
 src/gateway/gateway-models.profiles.live.test.ts
 src/gateway/managed-image-attachments.test.ts
-src/gateway/managed-image-attachments.ts
 src/gateway/mcp-http.test.ts
 src/gateway/model-pricing-cache.test.ts
 src/gateway/model-pricing-cache.ts

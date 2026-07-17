@@ -1,4 +1,5 @@
 // Canonical shared-SQLite store for managed outgoing image metadata.
+import path from "node:path";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -38,6 +39,20 @@ export type ManagedImageRecord = {
   alt: string;
   original: ManagedImageRecordVariant;
 };
+
+export function resolveManagedImageOriginalPath(record: ManagedImageRecord): string {
+  if (
+    !path.isAbsolute(record.original.mediaRoot) ||
+    record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
+    !record.original.mediaId ||
+    record.original.mediaId.includes("/") ||
+    record.original.mediaId.includes("\\") ||
+    record.original.mediaId.includes("\0")
+  ) {
+    throw new Error("Managed image record has an unsafe media identity");
+  }
+  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
+}
 
 export type ManagedImageRecordDatabase = Pick<
   OpenClawStateKyselyDatabase,

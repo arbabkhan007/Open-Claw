@@ -52,6 +52,7 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { DeletedMessages } from "../deleted-messages.ts";
+import type { ManagedOutgoingImageRequest } from "../managed-image-preview.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
@@ -104,9 +105,7 @@ type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
-  /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
-  /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
   planStatus?: PlanStatus | null;
   sessions: SessionsListResult | null;
@@ -122,6 +121,7 @@ type ChatThreadProps = {
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
+  resolveManagedOutgoingImage?: (request: ManagedOutgoingImageRequest) => Promise<Blob | null>;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
@@ -135,7 +135,6 @@ type ChatThreadProps = {
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
-  /** Current composer draft; the selection popup preserves it when prefilling. */
   getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
@@ -143,7 +142,6 @@ type ChatThreadProps = {
   /** Sends a detached /btw side question built from the selection popup. */
   onSideQuestion?: (command: string) => void;
   onOpenSession?: (sessionKey: string) => void;
-  /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
   backgroundTasks?: BackgroundTasksProps;
 };
 

@@ -13,6 +13,7 @@ function readSource(relativePath: string): string {
 describe("gateway startup import boundaries", () => {
   it("keeps heavy cron and doctor legacy paths out of the server.impl import graph", () => {
     const serverImpl = readSource("src/gateway/server.impl.ts");
+    const artifactDownload = readSource("src/gateway/server-methods/artifact-download.ts");
     const validation = readSource("src/config/validation.ts");
 
     expect(serverImpl).not.toContain('from "./server-cron.js"');
@@ -55,6 +56,8 @@ describe("gateway startup import boundaries", () => {
     );
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
+    expect(artifactDownload).not.toContain('from "../managed-image-attachments-download.js"');
+    expect(artifactDownload).toContain('import("../managed-image-attachments-download.js")');
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     expect(serverImpl).toContain('import("./server-worker-environment-startup.js")');
     for (const workerModule of ["live-events", "service", "store", "transcript-commit"]) {
