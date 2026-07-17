@@ -93,6 +93,20 @@ describe("gateway tool", () => {
     );
   });
 
+  it("forwards the execution abort signal to config.get", async () => {
+    const tool = createGatewayTool();
+    const controller = new AbortController();
+
+    await tool.execute("call-config-get", { action: "config.get" }, controller.signal);
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "config.get",
+      expect.anything(),
+      {},
+      { signal: controller.signal },
+    );
+  });
+
   it("scopes config.get output to the requested path and keeps metadata compact", async () => {
     const result = await createGatewayTool().execute("call-config-get", {
       action: "config.get",

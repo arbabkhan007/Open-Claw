@@ -38,4 +38,36 @@ describe("gateway tool", () => {
       expect(callGatewayToolMock).not.toHaveBeenCalled();
     },
   );
+
+  it("forwards the abort signal to callGatewayTool for config.get", async () => {
+    const tool = createGatewayTool();
+    const controller = new AbortController();
+
+    await tool.execute?.("tool-call", { action: "config.get" }, controller.signal);
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "config.get",
+      expect.anything(),
+      expect.anything(),
+      { signal: controller.signal },
+    );
+  });
+
+  it("forwards the abort signal to callGatewayTool for config.schema.lookup", async () => {
+    const tool = createGatewayTool();
+    const controller = new AbortController();
+
+    await tool.execute?.(
+      "tool-call",
+      { action: "config.schema.lookup", path: "channels" },
+      controller.signal,
+    );
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "config.schema.lookup",
+      expect.anything(),
+      expect.anything(),
+      { signal: controller.signal },
+    );
+  });
 });
