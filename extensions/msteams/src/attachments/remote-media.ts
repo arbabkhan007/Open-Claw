@@ -2,16 +2,14 @@
 import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
-import { inferPlaceholder } from "./shared.js";
+import {
+  inferPlaceholder,
+  MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS,
+  MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+} from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
-// Align with Mattermost/Zalo/Tlon media downloads: header wait and body idle
-// are separate failure modes. Without readIdleTimeoutMs, a large attachment
-// that stalls mid-chunk can hang the inbound media save forever.
-const MSTEAMS_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
-const MSTEAMS_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
 
 /**
  * Direct save path used when the caller supplies the already-guarded fetch
