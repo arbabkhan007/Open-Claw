@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
   systemPlistAccessErrorCode: "",
   systemPlistReadErrorPath: "",
   systemPlistReadErrorCode: "",
+  readdirCalls: [] as string[],
   printNotLoadedRemaining: 0,
   printError: "",
   printCode: 1,
@@ -431,6 +432,7 @@ vi.mock("node:fs/promises", async () => {
       throw new Error(`ENOENT: no such file or directory, open '${key}'`);
     }),
     readdir: vi.fn(async (p: string) => {
+      state.readdirCalls.push(p);
       const prefix = `${p}/`;
       return Array.from(state.files.keys())
         .filter((filePath) => filePath.startsWith(prefix))
@@ -462,6 +464,7 @@ beforeEach(() => {
   state.systemPlistAccessErrorCode = "";
   state.systemPlistReadErrorPath = "";
   state.systemPlistReadErrorCode = "";
+  state.readdirCalls.length = 0;
   state.printNotLoadedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
@@ -2536,6 +2539,18 @@ describe("launchd install", () => {
       expect(
         launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
       ).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not scan unloaded system plists on the restart path", async () => {
+    await withProcessPlatform("darwin", async () => {
+      await restartLaunchAgent({
+        env: createDefaultLaunchdEnv(),
+        stdout: new PassThrough(),
+      });
+
+      expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expect(state.readdirCalls).not.toContain("/Library/LaunchDaemons");
     });
   });
 

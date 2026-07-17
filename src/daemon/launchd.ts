@@ -434,6 +434,7 @@ type SystemLaunchDaemonConflict =
 
 async function resolveSystemLaunchDaemonConflict(
   label: string,
+  options: { scanInstalledPlists?: boolean } = {},
 ): Promise<SystemLaunchDaemonConflict | null> {
   if (process.platform !== "darwin") {
     return null;
@@ -448,6 +449,9 @@ async function resolveSystemLaunchDaemonConflict(
     throw new Error(
       `Could not verify whether system LaunchDaemon ${serviceTarget} is loaded: ${detail}`,
     );
+  }
+  if (options.scanInstalledPlists === false) {
+    return null;
   }
   let plistPath: string | null;
   try {
@@ -482,8 +486,11 @@ function formatSystemLaunchDaemonConflict(conflict: SystemLaunchDaemonConflict):
   ].join("\n");
 }
 
-async function assertNoSystemLaunchDaemonConflict(label: string): Promise<void> {
-  const conflict = await resolveSystemLaunchDaemonConflict(label);
+async function assertNoSystemLaunchDaemonConflict(
+  label: string,
+  options?: { scanInstalledPlists?: boolean },
+): Promise<void> {
+  const conflict = await resolveSystemLaunchDaemonConflict(label, options);
   if (!conflict) {
     return;
   }
@@ -1379,7 +1386,9 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
-  await assertNoSystemLaunchDaemonConflict(label);
+  // Restart only needs to reject a live competing manager. Install, stage, and
+  // bootstrap repair retain the full scan for latent on-disk conflicts.
+  await assertNoSystemLaunchDaemonConflict(label, { scanInstalledPlists: false });
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
