@@ -1450,6 +1450,34 @@ export async function runHeartbeatOnce(opts: {
   const dueHeartbeatTasks =
     runScope === "commitment-only" ? [] : resolveDueHeartbeatTasks(preflight, startedAt);
 
+  // Phase 2.5: Skip scheduled heartbeats when the resolved session has been
+  // idle longer than HEARTBEAT_IDLE_THRESHOLD_MS without pending work.
+  // Only ordinary scheduled interval heartbeats (intent === "scheduled")
+  // are gated; event/manual/immediate wakes always proceed.  Hearts that
+  // have due commitments, queued system/cron events, or due heartbeat
+  // tasks are preserved — the idle skip only fires when there is no
+  // pending work on the session.
+  const HEARTBEAT_IDLE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  if (
+    opts.intent === "scheduled" &&
+    dueHeartbeatTasks.length === 0 &&
+    preflight.dueCommitments.length === 0 &&
+    preflight.pendingEventEntries.length === 0 &&
+    !preflight.hasTaggedCronEvents &&
+    recentSessionEntry
+  ) {
+    const lastInteractionAt =
+      recentSessionEntry.lastInteractionAt ?? recentSessionEntry.sessionStartedAt;
+    if (lastInteractionAt != null && startedAt - lastInteractionAt > HEARTBEAT_IDLE_THRESHOLD_MS) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "session-idle",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "session-idle" };
+    }
+  }
+
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
   // a new session ID (empty transcript) each run, avoiding the cost of
