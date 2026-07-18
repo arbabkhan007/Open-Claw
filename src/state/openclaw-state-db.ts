@@ -65,7 +65,9 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  */
 // v3 rebuilds every OpenClaw-owned table with SQLite STRICT type enforcement.
 // database_verifications is additive derived cache; no bump preserves safe downgrades.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 3;
+// v4 adds local marketplace feed watches and their bounded update history.
+export const OPENCLAW_STATE_SCHEMA_VERSION = 4;
+const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */
@@ -130,7 +132,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "agent-databases-composite-primary-key"
     | "audit-events-v2"
     | "operator-approvals-system-agent"
-    | "strict-tables-v3";
+    | "strict-tables-v3"
+    | "marketplace-feed-watches-v4";
   path: string;
 };
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
@@ -924,11 +927,12 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
     if (!hasCanonicalAuditEventsSchema(db)) {
       migrations.push({ kind: "audit-events-v2", path: pathname });
     }
-    if (
-      tableExists(db, "audit_events") &&
-      readSqliteUserVersion(db) < OPENCLAW_STATE_SCHEMA_VERSION
-    ) {
+    const userVersion = readSqliteUserVersion(db);
+    if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
       migrations.push({ kind: "strict-tables-v3", path: pathname });
+    }
+    if (tableExists(db, "audit_events") && userVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+      migrations.push({ kind: "marketplace-feed-watches-v4", path: pathname });
     }
     migrations.push(
       ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
@@ -959,6 +963,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
       db,
       () => {
         const applied: string[] = [];
+        const previousVersion = readSqliteUserVersion(db);
         if (repairAgentDatabasesCompositePrimaryKey(db)) {
           applied.push(`Migrated shared state agent database registry primary key → agent_id,path`);
         }
@@ -981,6 +986,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             applied.push(
               `Migrated shared state tables to SQLite STRICT typing (${strictMigration.migratedTables.length})`,
             );
+          }
+          if (previousVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+            applied.push("Added local marketplace feed watch and update history tables");
           }
         }
         markCurrentStateSchemaVersion(db);
@@ -1746,7 +1754,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         assertCanonicalStateSchemaShape(db, pathname);
         db.exec(OPENCLAW_STATE_SCHEMA_SQL);
         migrateLegacyCronRunLogsToTaskRuns(db);
-        if (previousVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+        if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_STATE_SCHEMA_SQL, {
             databaseLabel: pathname,
           });

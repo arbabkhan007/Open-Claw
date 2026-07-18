@@ -156,6 +156,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "operator approvals → OpenClaw system changes";
     case "strict-tables-v3":
       return "tables → SQLite STRICT typing";
+    case "marketplace-feed-watches-v4":
+      return "local marketplace feed watches and update history";
   }
   return migration.kind satisfies never;
 }
