@@ -1073,6 +1073,37 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
+  it("preserves runtime materialization tokens for spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: {
+        tools: {
+          allow: [
+            "read",
+            "sessions_spawn",
+            "bundle-mcp",
+            "probe__search",
+            "lsp_hover_typescript",
+            "group:plugins",
+          ],
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expectListIncludes(inheritedAllow, [
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+      "group:plugins",
+    ]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+  });
+
   it("passes group-restricted tool surface to cron-created agent turns", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

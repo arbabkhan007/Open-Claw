@@ -7,7 +7,9 @@ type CreateOpenClawToolsArg = {
     skillCommand?: { skillFile?: string };
   };
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
+  inheritedToolAllowlist?: string[];
   nativeChannelId?: string;
+  pluginToolAllowlist?: string[];
 };
 
 const hoisted = vi.hoisted(() => {
@@ -80,5 +82,42 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.beforeToolCallHookContext?.skillCommand?.skillFile).toBe(
       "/workspace/skills/daily-brief/SKILL.md",
     );
+  });
+
+  it("preserves deferred runtime selectors for spawned children", () => {
+    resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: {
+        tools: {
+          allow: [
+            "read",
+            "bundle-mcp",
+            "probe__search",
+            "lsp_hover_typescript",
+            "custom_plugin_tool",
+          ],
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(args?.pluginToolAllowlist).toEqual([
+      "read",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+      "custom_plugin_tool",
+    ]);
+    expect(args?.inheritedToolAllowlist).toEqual([
+      "read",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
   });
 });

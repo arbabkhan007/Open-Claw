@@ -30,6 +30,7 @@ import {
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  filterRuntimeMaterializationAllowlistEntries,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   replaceWithEffectiveToolAllowlist,
@@ -217,28 +218,7 @@ export function resolveGatewayScopedTools(params: {
     params.cfg,
     agentId ?? resolveDefaultAgentId(params.cfg),
   );
-  const explicitDenylist = collectExplicitDenylist([
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    senderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
-    ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
-    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
-  ]);
-  const inheritedToolDenylist = [...explicitDenylist];
-  // Passed by reference to sessions_spawn and populated after the final policy
-  // pass so child sessions inherit the actual parent tool surface.
-  const inheritedToolAllowlist: string[] = [];
-  const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
-  const shouldInheritEffectiveToolAllowlist = [
+  const toolPolicyInheritanceSources = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -251,7 +231,21 @@ export function resolveGatewayScopedTools(params: {
     subagentPolicy,
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  ];
+  const explicitDenylist = collectExplicitDenylist([
+    ...toolPolicyInheritanceSources,
+    defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
+    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
+  ]);
+  const explicitToolAllowlist = collectExplicitAllowlist(toolPolicyInheritanceSources);
+  const inheritedToolDenylist = [...explicitDenylist];
+  // Passed by reference to sessions_spawn and populated after the final policy
+  // pass so child sessions inherit the actual parent tool surface.
+  const inheritedToolAllowlist: string[] = [];
+  const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const shouldInheritEffectiveToolAllowlist =
+    toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const shouldCaptureCronCreatorToolAllowlist =
     shouldInheritEffectiveToolAllowlist ||
     explicitDenylist.length > 0 ||
@@ -284,20 +278,7 @@ export function resolveGatewayScopedTools(params: {
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-      inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-    ]),
+    pluginToolAllowlist: explicitToolAllowlist,
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
       ? cronCreatorToolAllowlist
@@ -426,7 +407,32 @@ export function resolveGatewayScopedTools(params: {
     ? tools.filter((tool) => tool.name.trim().toLowerCase() !== "exec")
     : tools;
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
+    const gatewaySurfaceDeny = [
+      ...defaultGatewayDeny,
+      ...ownerOnlyGatewayDeny,
+      ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+      ...excludedToolNames,
+    ];
+    const inheritedRuntimeToolAllowlist = filterRuntimeMaterializationAllowlistEntries({
+      entries: explicitToolAllowlist,
+      policies: [
+        profilePolicyWithAlsoAllow,
+        providerProfilePolicyWithAlsoAllow,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        groupPolicy,
+        senderPolicy,
+        sandboxPolicy,
+        subagentPolicy,
+        inheritedToolPolicy,
+        gatewaySurfaceDeny.length > 0 ? { deny: gatewaySurfaceDeny } : undefined,
+      ],
+    });
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools, {
+      preserveRuntimeToolAllowlistEntries: inheritedRuntimeToolAllowlist,
+    });
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
     replaceWithEffectiveCronCreatorToolAllowlist(

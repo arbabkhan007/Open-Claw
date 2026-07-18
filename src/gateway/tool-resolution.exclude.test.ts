@@ -9,6 +9,7 @@ type CreateOpenClawToolsArg = {
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
@@ -659,5 +660,84 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       { name: "read" },
       { name: "cron" },
     ]);
+  });
+
+  it("preserves runtime materialization tokens for spawned subagents", () => {
+    resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          subagents: {
+            tools: {
+              allow: [
+                "read",
+                "sessions_spawn",
+                "bundle-mcp",
+                "probe__search",
+                "lsp_hover_typescript",
+                "custom_plugin_tool",
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:subagent:worker",
+      surface: "loopback",
+    });
+
+    const args = readCreateToolsArgs();
+    expect(args.pluginToolAllowlist).toEqual([
+      "read",
+      "sessions_spawn",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+      "custom_plugin_tool",
+    ]);
+    expect(args.inheritedToolAllowlist).toEqual([
+      "read",
+      "sessions_spawn",
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
+  });
+
+  it("does not restore selectors removed by a narrower subagent policy", () => {
+    resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          profile: "coding",
+          subagents: {
+            tools: { allow: ["read", "sessions_spawn", "probe__search"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:subagent:worker",
+      surface: "loopback",
+    });
+
+    const args = readCreateToolsArgs();
+    expect(args.pluginToolAllowlist).toContain("bundle-mcp");
+    expect(args.pluginToolAllowlist).toContain("probe__search");
+    expect(args.inheritedToolAllowlist).toEqual(["read", "sessions_spawn", "probe__search"]);
+  });
+
+  it("filters runtime selectors through gateway denies", () => {
+    resolveGatewayScopedTools({
+      cfg: {
+        gateway: { tools: { deny: ["bundle-mcp"] } },
+        tools: {
+          subagents: {
+            tools: {
+              allow: ["read", "sessions_spawn", "bundle-mcp", "probe__search"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:subagent:worker",
+      surface: "loopback",
+    });
+
+    expect(readCreateToolsArgs().inheritedToolAllowlist).toEqual(["read", "sessions_spawn"]);
   });
 });

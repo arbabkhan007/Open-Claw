@@ -91,6 +91,7 @@ import {
 } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
+  filterRuntimeMaterializationAllowlistEntries,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -1114,7 +1115,29 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     options?.delegationCapability,
   );
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
+    // Deferred MCP/LSP/plugin selectors are absent from the concrete tool array.
+    // Re-filter them through the same layers before passing them to spawned children.
+    const inheritedRuntimeToolAllowlist = filterRuntimeMaterializationAllowlistEntries({
+      entries: pluginToolAllowlist,
+      policies: [
+        profilePolicyWithAlsoAllow,
+        providerProfilePolicyWithAlsoAllow,
+        globalPolicyWithToolSearchControls,
+        globalProviderPolicyWithToolSearchControls,
+        agentPolicyWithToolSearchControls,
+        agentProviderPolicyWithToolSearchControls,
+        groupPolicyWithToolSearchControls,
+        senderPolicyWithToolSearchControls,
+        sandboxToolPolicyWithToolSearchControls,
+        ownerOnlyCoreToolPolicy,
+        subagentPolicyWithToolSearchControls,
+        inheritedToolPolicy,
+        options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
+      ],
+    });
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools, {
+      preserveRuntimeToolAllowlistEntries: inheritedRuntimeToolAllowlist,
+    });
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
     replaceWithEffectiveCronCreatorToolAllowlist(

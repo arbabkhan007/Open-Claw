@@ -21,6 +21,7 @@ import {
 import {
   collectExplicitDenylist,
   collectExplicitAllowlist,
+  filterRuntimeMaterializationAllowlistEntries,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   replaceWithEffectiveToolAllowlist,
@@ -159,6 +160,7 @@ export function resolveSkillDispatchTools(params: {
     inheritedToolPolicy,
   ];
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
+  const explicitToolAllowlist = collectExplicitAllowlist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const shouldCaptureCronCreatorToolAllowlist =
@@ -202,7 +204,7 @@ export function resolveSkillDispatchTools(params: {
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
-    pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
+    pluginToolAllowlist: explicitToolAllowlist,
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
       ? cronCreatorToolAllowlist
@@ -241,7 +243,25 @@ export function resolveSkillDispatchTools(params: {
     }),
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
+    const inheritedRuntimeToolAllowlist = filterRuntimeMaterializationAllowlistEntries({
+      entries: explicitToolAllowlist,
+      policies: [
+        profilePolicyWithAlsoAllow,
+        providerProfilePolicyWithAlsoAllow,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        groupPolicy,
+        senderPolicy,
+        sandboxPolicy,
+        subagentPolicy,
+        inheritedToolPolicy,
+      ],
+    });
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered, {
+      preserveRuntimeToolAllowlistEntries: inheritedRuntimeToolAllowlist,
+    });
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
     replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
