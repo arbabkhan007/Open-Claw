@@ -449,7 +449,9 @@ export const streamOpenAICodexResponses: StreamFunction<
           }
           lastError = error instanceof Error ? error : new Error(String(error));
           // Network errors are retryable
-          if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+          const lastErrorMessage =
+            typeof lastError.message === "string" ? lastError.message : String(lastError);
+          if (attempt < maxRetries && !lastErrorMessage.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
             await sleepWithAbort(delayMs, activeSignal);
             continue;
@@ -1243,8 +1245,17 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
     return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   }
   if (data && typeof data === "object" && "arrayBuffer" in data) {
-    const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
+    const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer>; size?: unknown };
+    if (
+      typeof blobLike.size === "number" &&
+      blobLike.size > OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES
+    ) {
+      throw new Error("Codex WebSocket message exceeded size limit");
+    }
     const arrayBuffer = await blobLike.arrayBuffer();
+    if (arrayBuffer.byteLength > OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES) {
+      throw new Error("Codex WebSocket message exceeded size limit");
+    }
     return new TextDecoder().decode(new Uint8Array(arrayBuffer));
   }
   return null;
