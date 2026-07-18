@@ -411,7 +411,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     case "computer":
       return action != null && COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
-      return action === "list" || action === "inspect";
+      return action === "list" || action === "inspect" || action === "review";
     case "transcripts":
       return action === "status";
     case "gateway":
