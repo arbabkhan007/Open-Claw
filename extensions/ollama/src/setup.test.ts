@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkOllamaCloudAuth,
   configureOllamaNonInteractive,
-  ensureOllamaModelPulled,
   promptAndConfigureOllama,
 } from "./setup.js";
+import { createOllamaFetchMock, mockCallArg } from "./setup.test-helpers.js";
 
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -39,53 +39,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-function createOllamaFetchMock(params: {
-  tags?: string[];
-  show?: Record<string, number | undefined>;
-  capabilities?: Record<string, string[] | undefined>;
-  pullResponse?: Response;
-  tagsError?: Error;
-  meResponse?: Response;
-}) {
-  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = requestUrl(input);
-    if (url.endsWith("/api/tags")) {
-      if (params.tagsError) {
-        throw params.tagsError;
-      }
-      return jsonResponse({ models: (params.tags ?? []).map((name) => ({ name })) });
-    }
-    if (url.endsWith("/api/show")) {
-      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
-      const contextWindow = body.name ? params.show?.[body.name] : undefined;
-      const capabilities = body.name
-        ? params.capabilities === undefined
-          ? ["tools"]
-          : params.capabilities[body.name]
-        : undefined;
-      return jsonResponse({
-        ...(contextWindow ? { model_info: { "llama.context_length": contextWindow } } : {}),
-        ...(capabilities ? { capabilities } : {}),
-      });
-    }
-    if (url.endsWith("/api/me")) {
-      return params.meResponse ?? jsonResponse({});
-    }
-    if (url.endsWith("/api/pull")) {
-      return params.pullResponse ?? new Response('{"status":"success"}\n', { status: 200 });
-    }
-    throw new Error(`Unexpected fetch: ${url}`);
-  });
-}
-
-function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
-  return mock.mock.calls.at(index);
-}
-
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
-  return mockCall(mock, index)?.at(argIndex);
-}
-
 function abortReasonAsError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
@@ -115,13 +68,6 @@ function createCloudLocalPrompter(): WizardPrompter {
     text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
     note: vi.fn(async () => undefined),
   } as unknown as WizardPrompter;
-}
-
-function createDefaultOllamaConfig(primary: string) {
-  return {
-    agents: { defaults: { model: { primary } } },
-    models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-  };
 }
 
 function createRuntime() {
@@ -739,173 +685,6 @@ describe("ollama setup", () => {
 
     await expect(setup).rejects.toThrow("Failed to download recommended Ollama model");
     expect(progress.stop).toHaveBeenCalledWith(expect.stringContaining("Failed to download"));
-  });
-
-  describe("ensureOllamaModelPulled", () => {
-    it("pulls model when not available locally", async () => {
-      vi.useFakeTimers();
-      try {
-        const progress = { update: vi.fn(), stop: vi.fn() };
-        const prompter = {
-          progress: vi.fn(() => progress),
-        } as unknown as WizardPrompter;
-
-        const fetchMock = createOllamaFetchMock({
-          tags: ["llama3:8b"],
-          pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
-        });
-        vi.stubGlobal("fetch", fetchMock);
-
-        await ensureOllamaModelPulled({
-          config: createDefaultOllamaConfig("ollama/gemma4"),
-          model: "ollama/gemma4",
-          prompter,
-        });
-
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-        expect(mockCallArg(fetchMock, 1)).toContain("/api/pull");
-        const pullInit = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
-        expect(pullInit?.signal).toBeInstanceOf(AbortSignal);
-        expect(pullInit?.signal?.aborted).toBe(false);
-
-        await vi.advanceTimersByTimeAsync(30_000);
-        expect(pullInit?.signal?.aborted).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("fails stalled model pull streams after an idle timeout", async () => {
-      vi.useFakeTimers();
-      try {
-        const progress = { update: vi.fn(), stop: vi.fn() };
-        const prompter = {
-          progress: vi.fn(() => progress),
-        } as unknown as WizardPrompter;
-        const fetchMock = vi.fn(async (input: string | URL | Request) => {
-          const url = requestUrl(input);
-          if (url.endsWith("/api/tags")) {
-            return jsonResponse({ models: [] });
-          }
-          if (url.endsWith("/api/pull")) {
-            return new Response(new ReadableStream<Uint8Array>(), { status: 200 });
-          }
-          throw new Error(`Unexpected fetch: ${url}`);
-        });
-        vi.stubGlobal("fetch", fetchMock);
-
-        const pullPromise = ensureOllamaModelPulled({
-          config: createDefaultOllamaConfig("ollama/gemma4"),
-          model: "ollama/gemma4",
-          prompter,
-        }).catch((err: unknown) => err);
-
-        await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
-
-        await vi.advanceTimersByTimeAsync(300_000);
-        const pullError = await pullPromise;
-        expect(pullError).toBeInstanceOf(Error);
-        expect((pullError as Error).name).toBe("WizardCancelledError");
-        expect((pullError as Error).message).toBe("Failed to download selected Ollama model");
-        expect(progress.stop).toHaveBeenCalledWith(
-          "Failed to download gemma4: Ollama pull stalled: no data received for 300s",
-        );
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("skips pull when model is already available", async () => {
-      const prompter = {} as unknown as WizardPrompter;
-
-      const fetchMock = createOllamaFetchMock({ tags: ["gemma4"] });
-      vi.stubGlobal("fetch", fetchMock);
-
-      await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/gemma4"),
-        model: "ollama/gemma4",
-        prompter,
-      });
-
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("skips pull when an untagged model is available as latest", async () => {
-      const prompter = {} as unknown as WizardPrompter;
-
-      const fetchMock = createOllamaFetchMock({ tags: ["gemma4:latest"] });
-      vi.stubGlobal("fetch", fetchMock);
-
-      await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/gemma4"),
-        model: "ollama/gemma4",
-        prompter,
-      });
-
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("uses baseURL alias when checking and pulling models", async () => {
-      const progress = { update: vi.fn(), stop: vi.fn() };
-      const prompter = {
-        progress: vi.fn(() => progress),
-      } as unknown as WizardPrompter;
-
-      const fetchMock = createOllamaFetchMock({
-        tags: [],
-        pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
-      });
-      vi.stubGlobal("fetch", fetchMock);
-
-      await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/gemma4" } } },
-          models: {
-            providers: {
-              ollama: {
-                baseURL: "http://127.0.0.1:11435",
-                models: [],
-              } as never,
-            },
-          },
-        },
-        model: "ollama/gemma4",
-        prompter,
-      });
-
-      expect(mockCallArg(fetchMock)).toBe("http://127.0.0.1:11435/api/tags");
-      expect(mockCallArg(fetchMock, 1)).toBe("http://127.0.0.1:11435/api/pull");
-    });
-
-    it("skips pull for cloud models", async () => {
-      const prompter = {} as unknown as WizardPrompter;
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-
-      await ensureOllamaModelPulled({
-        config: createDefaultOllamaConfig("ollama/kimi-k2.5:cloud"),
-        model: "ollama/kimi-k2.5:cloud",
-        prompter,
-      });
-
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it("skips when model is not an ollama model", async () => {
-      const prompter = {} as unknown as WizardPrompter;
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-
-      await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "openai/gpt-4o" } } },
-        },
-        model: "openai/gpt-4o",
-        prompter,
-      });
-
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
   });
 
   it("uses discovered model when requested non-interactive download fails", async () => {
