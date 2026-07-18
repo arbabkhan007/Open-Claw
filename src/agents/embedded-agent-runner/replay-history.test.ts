@@ -516,4 +516,125 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toStrictEqual([messages[0]]);
   });
+
+  it("drops orphaned thinking blocks from a stop-turn whose only text was NO_REPLY (#99620)", () => {
+    // A yield-turn assistant with [thinking(sig), text:"NO_REPLY"] has its
+    // silent text dropped — the orphaned thinking block must also be dropped
+    // to prevent adjacent assistant merge on provider request rebuild.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "stale reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toStrictEqual([messages[0]]);
+  });
+
+  it("drops orphaned thinking blocks before a follow-up tool-use assistant to prevent adjacent merge (#99620)", () => {
+    // Full scenario from #99620: yield turn → sessions_yield runtime-context →
+    // next tool turn. After stripping silent text and runtime-context custom
+    // messages, the yield-turn thinking block must not persist.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "next reasoning", thinkingSignature: "sig_next" },
+          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
+        ],
+        timestamp: 0,
+      },
+      userMessage("[tool result]"),
+      bedrockAssistant([{ type: "text", text: "done" }], "stop"),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    // The yield-turn assistant should be dropped entirely;
+    // the tool-turn assistant and its thinking block must be preserved.
+    expect(out).toHaveLength(4);
+    expect(out[0]).toBe(messages[0]); // user "hi" unchanged
+    expect(out[1]).toBe(messages[2]); // tool-use assistant preserved
+    expect(out[2]).toBe(messages[3]); // user tool result
+    expect(out[3]).toBe(messages[4]); // assistant "done"
+  });
+
+  it("preserves thinking blocks when a NO_REPLY assistant has a tool_use sibling (#99620 boundary)", () => {
+    // When the yield-turn assistant has a tool_use block alongside the silent
+    // text, the thinking block is NOT orphaned — the tool_use provides replay
+    // value and prevents the adjacent merge risk.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "real reasoning", thinkingSignature: "sig_tool" },
+          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    // Thinking block preserved because tool_use provides replay value
+    expect(out).toHaveLength(2);
+    const content = (out[1] as { content: { type: string }[] }).content;
+    expect(content.some((b) => b.type === "thinking")).toBe(true);
+    expect(content.some((b) => b.type === "toolCall")).toBe(true);
+  });
+
+  it("drops orphaned thinking when metadata strip reveals NO_REPLY (#99772 metadata path)", () => {
+    // When stripInternalMetadataForDisplay removes metadata and reveals
+    // NO_REPLY text, hasSilentText must be set so the orphaned-thinking
+    // guard fires. Without this fix, the metadata-stripped path silently
+    // drops the text without marking hasSilentText.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "stale reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nNO_REPLY` },
+        ],
+        "stop",
+      ),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    // The yield-turn assistant with orphaned thinking should be dropped
+    expect(out).toStrictEqual([messages[0]]);
+  });
+
+  it("preserves assistant message with unknown content blocks after NO_REPLY strip (#99772 P2)", () => {
+    // Regression: unknown/primitive content blocks must prevent the
+    // orphaned-thinking guard from dropping the message. The every()
+    // predicate should return false for unclassifiable blocks.
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "stale reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: "NO_REPLY" },
+          // Unknown block — not thinking, not text. Must preserve message.
+          { customType: "legacy_data", data: "some metadata" },
+        ],
+        "stop",
+      ),
+    ] as AgentMessage[];
+    const out = normalizeAssistantReplayContent(messages);
+    // Unknown block prevents drop — message stays, but NO_REPLY text stripped
+    expect(out).toHaveLength(2); // user + assistant preserved
+    const content = (out[1] as AgentMessage & { content: unknown[] }).content;
+    expect(content).toHaveLength(2);
+    expect((content[0] as Record<string, string>).type).toBe("thinking");
+    expect((content[1] as Record<string, string>).customType).toBe("legacy_data");
+    expect(content.some((b) => (b as Record<string, string>).text === "NO_REPLY")).toBe(false);
+  });
 });

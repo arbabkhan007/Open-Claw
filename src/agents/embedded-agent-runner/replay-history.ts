@@ -226,6 +226,7 @@ function normalizeAssistantReplayTextContent(message: AgentMessage, replayConten
 
 function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
   let touched = false;
+  let hasSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
@@ -243,19 +244,50 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
         sanitizedContent.push(block);
       } else {
         touched = true;
+        hasSilentText = true;
       }
       continue;
     }
     touched = true;
     const trimmed = strippedText.trim();
-    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+    const isStrippedSilent = trimmed && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    if (trimmed && !isStrippedSilent) {
       sanitizedContent.push({ ...block, text: strippedText });
+    }
+    if (isStrippedSilent) {
+      hasSilentText = true;
     }
   }
   if (!touched) {
     return message;
   }
   if (sanitizedContent.length === 0) {
+    return null;
+  }
+  // Transcript-hygiene rule: When a silent-reply (NO_REPLY) text block was
+  // dropped and the remaining content is only thinking/redacted_thinking
+  // blocks (no tool_use, no visible text), drop the entire message.
+  //
+  // Invariant: no assistant message in replayed history should consist
+  // exclusively of thinking-family blocks after silent text is removed.
+  // Keeping orphaned thinking blocks causes adjacent assistant messages to
+  // merge in provider payloads, producing [thinking, thinking, tool_use]
+  // which Anthropic rejects as "cannot be modified" (#99620).
+  // This is provider-agnostic: an all-thinking assistant turn is never
+  // meaningful replay for any provider, since the companion text that made
+  // the thinking block useful was a silent reply.
+  if (
+    hasSilentText &&
+    sanitizedContent.every((block) => {
+      // Unknown or primitive blocks are NOT thinking — preserve the message
+      // rather than dropping content we cannot classify (#99772).
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = (block as { type?: unknown }).type;
+      return type === "thinking" || type === "redacted_thinking";
+    })
+  ) {
     return null;
   }
   return { ...message, content: sanitizedContent } as AgentMessage;
