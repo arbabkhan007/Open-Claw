@@ -3,10 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <application>
-        <!-- Debug-only explicit adb target. Release variants never merge this manifest. -->
+        <!-- Debug-only adb target with an app-scoped task. Release variants never merge it. -->
         <activity
             android:name=".WearScreenshotActivity"
             android:exported="true"
+            android:taskAffinity="${applicationId}.screenshot"
             tools:ignore="ExportedActivity" />
     </application>
 </manifest>

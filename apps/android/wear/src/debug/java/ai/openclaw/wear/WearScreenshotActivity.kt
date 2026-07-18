@@ -20,8 +20,7 @@ internal enum class WearScreenshotScene(
   ;
 
   companion object {
-    fun fromRawValue(raw: String?): WearScreenshotScene =
-      entries.firstOrNull { scene -> scene.rawValue == raw?.trim()?.lowercase() } ?: Chat
+    fun fromRawValue(raw: String?): WearScreenshotScene = entries.firstOrNull { scene -> scene.rawValue == raw?.trim()?.lowercase() } ?: Chat
   }
 }
 

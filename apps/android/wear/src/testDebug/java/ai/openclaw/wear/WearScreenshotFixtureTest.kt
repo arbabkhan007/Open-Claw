@@ -1,7 +1,7 @@
 package ai.openclaw.wear
 
+import android.app.Application
 import android.content.ComponentName
-import android.content.pm.PackageManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,15 +38,17 @@ class WearScreenshotFixtureTest {
     assertTrue(snapshot.gatewayControlsSupported)
   }
 
+  @Suppress("DEPRECATION")
   @Test
   fun debugManifestExportsOnlyTheExplicitScreenshotActivity() {
-    val application = RuntimeEnvironment.getApplication<WearApplication>()
+    val application: Application = RuntimeEnvironment.getApplication()
     val activity =
       application.packageManager.getActivityInfo(
         ComponentName(application, WearScreenshotActivity::class.java),
-        PackageManager.ComponentInfoFlags.of(0),
+        0,
       )
 
     assertTrue(activity.exported)
+    assertEquals("${application.packageName}.screenshot", activity.taskAffinity)
   }
 }

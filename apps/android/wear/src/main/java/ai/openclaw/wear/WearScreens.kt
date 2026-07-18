@@ -136,10 +136,11 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState = rememberPagerState(
-    initialPage = initialPage.pagerIndex,
-    pageCount = { WearAppPage.entries.size },
-  )
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPage.pagerIndex,
+      pageCount = { WearAppPage.entries.size },
+    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
