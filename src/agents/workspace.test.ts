@@ -6,6 +6,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sleepWithAbort } from "../infra/backoff.js";
+import { retryAsync } from "../infra/retry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
@@ -1164,5 +1166,37 @@ describe("filterBootstrapFilesForSession", () => {
   it("filters to allowlist for cron sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:cron:daily-check");
     expectCronAllowedBootstrapNames(result);
+  });
+});
+
+describe("workspace retry abort", () => {
+  it("aborts promptly during retry backoff when the caller signal fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      let calls = 0;
+      const fn = async () => {
+        calls++;
+        throw new Error("transient");
+      };
+
+      const promise = retryAsync(fn, {
+        attempts: 3,
+        minDelayMs: 50,
+        maxDelayMs: 50,
+        shouldRetry: () => !controller.signal.aborted,
+        sleep: (ms) => sleepWithAbort(ms, controller.signal),
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+      controller.abort();
+
+      await expect(promise).rejects.toThrow();
+      expect(calls).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

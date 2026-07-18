@@ -297,6 +297,7 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  signal?: AbortSignal;
 }): Promise<WorkspaceBootstrapFile[]> {
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
@@ -305,8 +306,9 @@ export async function resolveBootstrapFilesForRun(params: {
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
+        signal: params.signal,
       })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+    : await loadWorkspaceBootstrapFiles(params.workspaceDir, params.signal);
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
       filterBootstrapFilesForSession(rawFiles, sessionKey),
@@ -347,6 +349,7 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  signal?: AbortSignal;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];

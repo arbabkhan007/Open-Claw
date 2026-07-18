@@ -8,6 +8,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { retryAsync } from "../infra/retry.js";
@@ -80,6 +81,7 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  signal?: AbortSignal;
 }): Promise<WorkspaceGuardedReadResult> {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
@@ -127,6 +129,7 @@ async function readWorkspaceFileWithGuards(params: {
         minDelayMs: 50,
         maxDelayMs: 50,
         shouldRetry: (err) => isTransientWorkspaceReadError(err),
+        ...(params.signal ? { sleep: (ms: number) => sleepWithAbort(ms, params.signal) } : {}),
       },
     );
   } catch (error) {
@@ -273,6 +276,7 @@ function isTransientWorkspaceReadError(error: unknown): boolean {
 async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   try {
     return await retryAsync(async () => (await fs.readFile(filePath, "utf-8")) !== template, {
@@ -280,6 +284,7 @@ async function fileContentDiffersFromTemplate(
       minDelayMs: 50,
       maxDelayMs: 50,
       shouldRetry: (err) => isTransientWorkspaceReadError(err),
+      ...(signal ? { sleep: (ms: number) => sleepWithAbort(ms, signal) } : {}),
     });
   } catch (err) {
     const anyErr = err as { code?: string };
@@ -941,7 +946,10 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -993,6 +1001,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
+      signal,
     });
     if (loaded.ok) {
       result.push({
@@ -1127,6 +1136,7 @@ async function resolveExtraBootstrapPatternPaths(
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  signal?: AbortSignal,
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -1166,6 +1176,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,
+      signal,
     });
     if (loaded.ok) {
       files.push({
