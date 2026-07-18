@@ -690,6 +690,35 @@ normalize_capture_for_play() {
   fi
 }
 
+capture_stable_wear_frame() {
+  local adb="$1"
+  local serial="$2"
+  local output_path="$3"
+  local previous_path="${output_path%.png}.previous.png"
+  local candidate_path="${output_path%.png}.candidate.png"
+  local attempt
+
+  # SwiftShader can expose a partially composited Wear buffer for one frame.
+  # Require two identical frames so a transient buffer cannot become store art.
+  rm -f "$output_path" "$previous_path" "$candidate_path"
+  "$adb" -s "$serial" exec-out screencap -p >"$previous_path"
+  for ((attempt = 1; attempt <= 8; attempt += 1)); do
+    sleep 0.25
+    "$adb" -s "$serial" exec-out screencap -p >"$candidate_path"
+    if cmp -s "$previous_path" "$candidate_path"; then
+      mv "$candidate_path" "$output_path"
+      rm -f "$previous_path"
+      return
+    fi
+    mv "$candidate_path" "$previous_path"
+  done
+
+  mv "$previous_path" "$output_path"
+  rm -f "$candidate_path"
+  echo "Wear screenshot did not reach a stable composited frame after 8 attempts." >&2
+  return 1
+}
+
 write_artifact_manifest() {
   local serial="$1"
   local avd_name
@@ -803,7 +832,11 @@ for scene in "${SCENES[@]}"; do
   launch_scene "$ADB_BIN" "$ADB_SERIAL" "$scene" "$activity_start_path"
   wait_for_scene_ready "$ADB_BIN" "$ADB_SERIAL" "$scene" "$ui_dump_path"
   sleep "$SCREENSHOT_SETTLE_SECONDS"
-  "$ADB_BIN" -s "$ADB_SERIAL" exec-out screencap -p >"$raw_path"
+  if [[ "$FORM_FACTOR" == "wear" ]]; then
+    capture_stable_wear_frame "$ADB_BIN" "$ADB_SERIAL" "$raw_path"
+  else
+    "$ADB_BIN" -s "$ADB_SERIAL" exec-out screencap -p >"$raw_path"
+  fi
   normalize_capture_for_play "$raw_path" "$output_path"
   cp "$output_path" "$artifact_path"
   echo "Captured ${output_path}"

@@ -299,6 +299,8 @@ describe("android screenshots script", () => {
       ),
     ).toBe(true);
     expect(starts.every((call) => !call.includes("openclaw.screenshotMode"))).toBe(true);
+    const captures = adbCalls.filter((call) => call.includes("screencap"));
+    expect(captures).toHaveLength(10);
     expect(sipsCalls).toHaveLength(10);
     expect(sipsCalls.filter((call) => call.includes("-s format tiff"))).toHaveLength(5);
     expect(sipsCalls.filter((call) => call.includes("-s format jpeg"))).toHaveLength(5);
