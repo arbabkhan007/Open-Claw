@@ -834,9 +834,13 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "strict-tables-v3", path: databasePath },
+      { kind: "marketplace-feed-watches-v4", path: databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: ["Migrated shared state tables to SQLite STRICT typing (1)"],
+      changes: [
+        "Migrated shared state tables to SQLite STRICT typing (1)",
+        "Added local marketplace feed watch and update history tables",
+      ],
       warnings: [],
     });
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
@@ -1267,6 +1271,7 @@ describe("openclaw state database", () => {
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "audit-events-v2", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
+      { kind: "marketplace-feed-watches-v4", path: databasePath },
     ]);
     expect(() => openOpenClawStateDatabase(options)).toThrow(/legacy audit event schema/);
 
@@ -1274,6 +1279,7 @@ describe("openclaw state database", () => {
       changes: [
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
+        "Added local marketplace feed watch and update history tables",
       ],
       warnings: [],
     });
