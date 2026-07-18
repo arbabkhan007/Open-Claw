@@ -69,6 +69,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { sanitizeBlankAwsCredentials } from "./aws-credential-refresh.js";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
@@ -108,6 +109,10 @@ function normalizeAdaptiveClaudeToolChoice(
     return "auto";
   }
   return toolChoice;
+}
+
+function resolveBedrockBearerToken(options: BedrockOptions): string | undefined {
+  return options.bearerToken?.trim() || process.env.AWS_BEARER_TOKEN_BEDROCK?.trim() || undefined;
 }
 
 // OpenClaw synthesizes these caps when the provider's real output limit is unknown.
@@ -183,7 +188,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
     }
 
     // Resolve bearer token for Bedrock API key auth.
-    const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
+    const bearerToken = resolveBedrockBearerToken(options);
     const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
 
     // in Node.js/Bun environment only
@@ -228,6 +233,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
     if (useBearerToken) {
       config.token = { token: bearerToken };
       config.authSchemePreference = ["httpBearerAuth"];
+    } else if (process.env.AWS_BEDROCK_SKIP_AUTH !== "1") {
+      // Prevent whitespace-only static AWS credentials from being picked
+      // up by the SDK default credential chain. The fromEnv() provider
+      // checks only truthiness, so strings such as " " are selected
+      // before profile, SSO, ECS, or IMDS credentials.
+      sanitizeBlankAwsCredentials();
     }
 
     try {

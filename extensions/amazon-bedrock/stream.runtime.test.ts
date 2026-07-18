@@ -77,6 +77,7 @@ async function captureClientRegion(
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("Bedrock tool-result replay", () => {
@@ -294,6 +295,71 @@ describe("Bedrock stop reasons", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(stopReason);
+  });
+});
+
+describe("Bedrock bearer token resolution", () => {
+  function mockSendAndCaptureToken() {
+    let configuredToken: unknown;
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
+      this: BedrockRuntimeClient,
+    ) {
+      const tokenCfg = this.config.token;
+      const tokenPromise: Promise<unknown> =
+        typeof tokenCfg === "function" ? tokenCfg() : Promise.resolve(undefined);
+      return tokenPromise.then((token) => {
+        configuredToken = token;
+        return {
+          $metadata: { httpStatusCode: 200 },
+          stream: streamEvents([
+            { messageStart: { role: ConversationRole.ASSISTANT } },
+            { messageStop: { stopReason: "end_turn" } },
+          ]),
+        } as never;
+      });
+    } as (...args: unknown[]) => unknown);
+    return () => configuredToken;
+  }
+
+  function runWithBearerToken(bearerToken?: string) {
+    return streamBedrock(
+      bedrockModel({}),
+      { messages: [{ role: "user", content: "ping", timestamp: 0 }] } as never,
+      { bearerToken },
+    ).result();
+  }
+
+  it("ignores blank bearer tokens so the AWS credential chain remains available", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "  ");
+    const getConfiguredToken = mockSendAndCaptureToken();
+
+    await runWithBearerToken(" \t ");
+
+    expect(getConfiguredToken()).toBeUndefined();
+    expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
+  });
+
+  it("trims configured bearer tokens", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "env-token");
+    const getConfiguredToken = mockSendAndCaptureToken();
+
+    await runWithBearerToken("  option-token  ");
+
+    expect(getConfiguredToken()).toEqual({ token: "option-token" });
+  });
+
+  it("sanitizes blank static AWS keys to keep the default credential chain available", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "   ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    const getConfiguredToken = mockSendAndCaptureToken();
+
+    // No bearer token + blank static keys → sanitization clears them
+    // so the SDK falls through to profile, SSO, ECS, or IMDS credentials.
+    await runWithBearerToken(undefined);
+
+    // The request succeeded and no bearer token was configured,
+    // proving blank env vars did not prevent client creation.
+    expect(getConfiguredToken()).toBeUndefined();
   });
 });
 

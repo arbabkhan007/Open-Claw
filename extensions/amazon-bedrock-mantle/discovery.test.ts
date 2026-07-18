@@ -780,3 +780,83 @@ describe("bedrock mantle discovery", () => {
     expect(result.models?.map((m) => m.id)).toEqual(["custom-model"]);
   });
 });
+
+describe("credential sanitization before IAM token generation", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetIamTokenCacheForTest();
+  });
+
+  it("clears whitespace-only static credentials before invoking the token provider", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SESSION_TOKEN", "token");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
+
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
+  });
+
+  it("clears a blank session token without removing valid static keys", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SESSION_TOKEN", " \t ");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
+
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
+  });
+
+  it("clears a blank Bedrock bearer token without removing valid static keys", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
+
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
+  });
+
+  it("preserves valid static credentials", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
+
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+  });
+
+  it("does not throw when no AWS credential env vars are set", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
+
+    await expect(
+      generateBearerTokenFromIam({
+        region: "us-east-1",
+        tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+      }),
+    ).resolves.toBe("bedrock-token");
+  });
+});
