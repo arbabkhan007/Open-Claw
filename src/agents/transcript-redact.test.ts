@@ -426,6 +426,33 @@ describe("redactTranscriptMessage", () => {
     expect(block.arguments.apiKey).toBe("plains…e123");
   });
 
+  it("preserves commentary phase signatures on completions and Anthropic routes", () => {
+    for (const route of [
+      { api: "openai-completions", provider: "openrouter", model: "deepseek/deepseek-v4-flash" },
+      { api: "anthropic-messages", provider: "anthropic", model: "claude-sonnet-4-6" },
+    ]) {
+      const msg = {
+        role: "assistant",
+        ...route,
+        content: [
+          {
+            type: "text",
+            text: "Importing the order into the tracker…",
+            textSignature: JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+          },
+        ],
+      } as unknown as AgentMessage;
+
+      const result = redactTranscriptMessage(msg, cfg("tools"));
+      const blocks = msgContent(result) as Array<Record<string, string>>;
+      // Stripping the tag would resurface suppressed pre-tool narration for
+      // history-backed consumers (Control UI reload, session resume).
+      expect(expectDefined(blocks[0], "blocks[0] test invariant").textSignature).toBe(
+        JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" }),
+      );
+    }
+  });
+
   it("preserves Google text and legacy thinking signatures", () => {
     const msg = {
       role: "assistant",

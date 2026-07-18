@@ -53,6 +53,7 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { encodeTextSignatureV1 } from "./openai-responses-shared.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
   projectOpenAITools,
@@ -99,6 +100,41 @@ function isThinkingContentBlock(block: { type: string }): block is ThinkingConte
 
 function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
+}
+
+// Chat Completions has no per-item phase metadata (unlike Responses), so the
+// stream processor provisionally tags pre-tool narration as commentary at the
+// tool-call boundary — before tool-call events reach consumers — and rolls the
+// tags back when spurious tool calls are stripped. Mirrors the agent-side rule
+// in src/agents/transport-stream-shared.ts.
+function tagPendingCommentaryText(content: AssistantMessage["content"]): void {
+  const textBlocks = content.filter(isTextContentBlock);
+  let commentaryTextIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
+  for (const block of textBlocks) {
+    if (block.text.trim().length > 0 && block.textSignature === undefined) {
+      block.textSignature = encodeTextSignatureV1(
+        `commentary-${commentaryTextIndex}`,
+        "commentary",
+      );
+      commentaryTextIndex += 1;
+    }
+  }
+}
+
+function clearPendingCommentaryText(content: AssistantMessage["content"]): void {
+  for (const block of content.filter(isTextContentBlock)) {
+    if (typeof block.textSignature !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.textSignature) as { v?: unknown; id?: unknown };
+      if (parsed.v === 1 && typeof parsed.id === "string" && parsed.id.startsWith("commentary-")) {
+        delete block.textSignature;
+      }
+    } catch {
+      // Non-JSON signatures are legacy item ids owned by other transports.
+    }
+  }
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -508,6 +544,10 @@ export const streamOpenAICompletions: StreamFunction<
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
+            // Provisionally tag buffered narration before tool-call events go
+            // out, so block/preview consumers never see it unphased; rolled
+            // back at stream end if the tool calls are stripped as spurious.
+            tagPendingCommentaryText(output.content);
             for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
@@ -583,6 +623,14 @@ export const streamOpenAICompletions: StreamFunction<
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
+        // The stripped-spurious turn delivers its text as the reply; leaving
+        // the provisional boundary tags in place would silence the answer.
+        clearPendingCommentaryText(output.content);
+      }
+      // Backstop for tool turns whose narration arrived after the last tool
+      // call or that skipped the streaming boundary (message-shaped responses).
+      if (output.stopReason === "toolUse") {
+        tagPendingCommentaryText(output.content);
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });

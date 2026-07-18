@@ -848,10 +848,15 @@ export function handleMessageUpdate(
     !deliveryPhase &&
     Boolean(streamItemId) &&
     isResponsesApiAssistantMessage(partialAssistant);
-  // Anthropic commentary is known only at the tool boundary; keep early
-  // unphased deltas out of durable block replies until that phase is known.
+  // Anthropic and Chat Completions commentary is known only at the tool
+  // boundary; keep early unphased deltas out of durable block replies until
+  // that phase is known.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
+  const isPhasePendingCompletionsText =
+    evtType !== "text_end" &&
+    !deliveryPhase &&
+    isOpenAiCompletionsAssistantMessage(partialAssistant);
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -892,6 +897,8 @@ export function handleMessageUpdate(
     return;
   }
   if (deliveryPhase === "commentary") {
+    // Any withheld unphased prefix belongs to this narration; never flush it.
+    ctx.state.phasePendingBlockText = "";
     const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
     const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
     if (isResponsesCommentary && chunk) {
@@ -926,10 +933,28 @@ export function handleMessageUpdate(
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
+  // Text that stays permanently phaseless has no later tagging point; deliver
+  // the withheld buffer at text_end so ordinary answers still reach durable
+  // block replies (same fallback the Responses WS buffering uses, #61968).
+  // Flush before handling this event's own chunk: a text_end can carry the
+  // reply's suffix, which must land after the withheld prefix.
+  if (
+    evtType === "text_end" &&
+    !deliveryPhase &&
+    !skipLiveStream &&
+    ctx.state.phasePendingBlockText
+  ) {
+    appendBlockReplyChunk(ctx, ctx.state.phasePendingBlockText);
+    ctx.state.phasePendingBlockText = "";
+  }
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply && !isPhasePendingAnthropicText) {
-      appendBlockReplyChunk(ctx, chunk);
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
+      if (isPhasePendingAnthropicText || isPhasePendingCompletionsText) {
+        ctx.state.phasePendingBlockText += chunk;
+      } else {
+        appendBlockReplyChunk(ctx, chunk);
+      }
     }
   }
 

@@ -189,6 +189,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
+    phasePendingBlockText: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
@@ -416,6 +417,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
     state.blockBuffer = "";
+    state.phasePendingBlockText = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();
     partialReplyDirectiveAccumulator.reset();

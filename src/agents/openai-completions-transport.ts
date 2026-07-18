@@ -70,7 +70,12 @@ import {
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
-import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
+import {
+  clearPendingCommentaryText,
+  failTransportStream,
+  finalizeTransportStream,
+  tagPendingCommentaryText,
+} from "./transport-stream-shared.js";
 
 function hasToolHistory(messages: Context["messages"]): boolean {
   return messages.some(
@@ -495,6 +500,10 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
+    // Provisionally tag buffered narration before the tool-call event goes out,
+    // so block/preview consumers never see it unphased; rolled back at stream
+    // end if the tool calls turn out to be spurious and get stripped.
+    tagPendingCommentaryText(output.content);
     const block: ToolCallBlock = {
       type: "toolCall",
       // DSML has no provider call id. A response-local counter would alias a
@@ -719,6 +728,10 @@ async function processOpenAICompletionsStream(
             currentBlock = null;
             flushPendingPostToolCallDeltas();
           }
+          // Provisionally tag buffered narration before toolcall_start goes
+          // out, so block/preview consumers never see it unphased; rolled back
+          // at stream end if the tool calls are stripped as spurious.
+          tagPendingCommentaryText(output.content);
           const initialSig = extractGoogleThoughtSignature(toolCall);
           block = {
             type: "toolCall",
@@ -804,6 +817,14 @@ async function processOpenAICompletionsStream(
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
+    // The stripped-spurious turn delivers its text as the reply; leaving the
+    // provisional boundary tags in place would silence the whole answer.
+    clearPendingCommentaryText(output.content);
+  }
+  // Backstop for tool turns whose narration arrived after the last tool call
+  // or that skipped the streaming boundary (message-shaped responses).
+  if (output.stopReason === "toolUse") {
+    tagPendingCommentaryText(output.content);
   }
 }
 

@@ -15,9 +15,18 @@ import {
   redactSensitiveFieldValue,
   redactSensitiveText,
 } from "../logging/redact.js";
-import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  isAnthropicReasoningRoute,
+  isCustomProviderRoute,
+  isGitHubCopilotResponsesRoute,
+  isGoogleOpenAICompletionsRoute,
+  isGoogleReasoningRoute,
+  isOpenAICompletionsRoute,
+  isOpenAIResponsesRoute,
+  type TranscriptAssistantRoute,
+} from "./transcript-redact.routes.js";
 
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
@@ -193,82 +202,10 @@ type TranscriptValueLocation =
   | "assistant-content-block"
   | "nested";
 
-type TranscriptAssistantRoute = {
-  api?: string;
-  endpointClass?: ProviderEndpointClass;
-  model?: string;
-  provider?: string;
-};
-
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
-const GOOGLE_REASONING_APIS = new Set([
-  "google-generative-ai",
-  "google-vertex",
-  "google-gemini-cli",
-  "openclaw-google-generative-ai-transport",
-]);
-const ANTHROPIC_REASONING_APIS = new Set([
-  "anthropic-messages",
-  "bedrock-converse-stream",
-  "openclaw-anthropic-messages-transport",
-]);
-const OPENAI_COMPLETIONS_APIS = new Set([
-  "openai-completions",
-  "openclaw-openai-completions-transport",
-]);
 const OPAQUE_REPLAY_TOKEN_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const GOOGLE_THOUGHT_SIGNATURE_RE =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-f0-9]{16}$/;
-
-function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_RESPONSES_APIS.has(route.api);
-}
-
-function isGoogleReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && GOOGLE_REASONING_APIS.has(route.api);
-}
-
-function isAnthropicReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && ANTHROPIC_REASONING_APIS.has(route.api);
-}
-
-function isOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_COMPLETIONS_APIS.has(route.api);
-}
-
-function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return (
-    isOpenAICompletionsRoute(route) &&
-    (route?.provider === "google" ||
-      route?.endpointClass === "google-generative-ai" ||
-      route?.endpointClass === "google-vertex")
-  );
-}
-
-function isCustomProviderRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return (
-    Boolean(route?.api && route.model && route.provider) &&
-    route?.api !== "mistral-conversations" &&
-    !isOpenAIResponsesRoute(route) &&
-    !isGoogleReasoningRoute(route) &&
-    !isAnthropicReasoningRoute(route) &&
-    !isOpenAICompletionsRoute(route)
-  );
-}
-
-function isGitHubCopilotResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return (
-    (route?.api === "openai-responses" || route?.api === "openclaw-openai-responses-transport") &&
-    route.provider === "github-copilot"
-  );
-}
 
 function isStructurallyValidOpaqueReplayToken(value: string): boolean {
   return (
@@ -673,7 +610,12 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
+      // Completions and Anthropic transports tag pre-tool narration with the
+      // same v1 phase signature; stripping it here would resurface suppressed
+      // commentary for history-backed consumers (Control UI reload, resume).
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isOpenAICompletionsRoute(currentAssistantRoute) ||
+        isAnthropicReasoningRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "text" &&
       key === "textSignature" &&

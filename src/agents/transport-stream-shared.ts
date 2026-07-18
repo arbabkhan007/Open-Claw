@@ -38,11 +38,61 @@ const EMPTY_TOOL_RESULT_TEXT = "(no output)";
  * embedded handler read this to route commentary/narration out of the final
  * reply. Shared so every provider transport tags phases identically.
  */
-export function encodeAssistantTextSignatureV1(
-  id: string,
-  phase?: "commentary" | "final_answer",
-): string {
+function encodeAssistantTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
+}
+
+/**
+ * Tags untagged non-empty text blocks in a tool-calling turn as commentary so
+ * the reply pipeline routes the narration out of the delivered reply. Counts
+ * already-tagged text blocks first so generated ids stay unique and repeated
+ * calls stay idempotent.
+ */
+function isTaggableTextBlock(
+  block: unknown,
+): block is { type: "text"; text: string; textSignature?: string } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as { type?: unknown; text?: unknown };
+  return record.type === "text" && typeof record.text === "string";
+}
+
+export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): void {
+  const textBlocks = content.filter(isTaggableTextBlock);
+  let commentaryTextIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
+  for (const block of textBlocks) {
+    if (block.text.trim().length > 0 && block.textSignature === undefined) {
+      block.textSignature = encodeAssistantTextSignatureV1(
+        `commentary-${commentaryTextIndex}`,
+        "commentary",
+      );
+      commentaryTextIndex += 1;
+    }
+  }
+}
+
+/**
+ * Rolls back transport-generated provisional commentary tags. Needed when a
+ * turn provisionally tagged at a tool-call boundary resolves as a plain text
+ * reply (spurious tool calls stripped) — leaving the tag would silence the
+ * legitimate answer. Only `commentary-<n>` ids are cleared, so item-scoped
+ * signatures from other transports are never touched.
+ */
+export function clearPendingCommentaryText(content: ReadonlyArray<unknown>): void {
+  for (const block of content.filter(isTaggableTextBlock)) {
+    if (typeof block.textSignature !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.textSignature) as { v?: unknown; id?: unknown };
+      if (parsed.v === 1 && typeof parsed.id === "string" && parsed.id.startsWith("commentary-")) {
+        delete block.textSignature;
+      }
+    } catch {
+      // Non-JSON signatures are legacy item ids owned by other transports.
+    }
+  }
 }
 
 export function sanitizeTransportPayloadText(text: string): string {

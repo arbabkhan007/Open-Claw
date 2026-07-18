@@ -152,7 +152,7 @@ function normalizeResponsesReasoningReplayItem(params: {
   return next as ReplayableResponseReasoningItem;
 }
 
-function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
+export function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
   const payload: TextSignatureV1 = { v: 1, id };
   if (phase) {
     payload.phase = phase;

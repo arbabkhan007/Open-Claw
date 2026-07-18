@@ -2,7 +2,7 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
-import type { Context, Model, SimpleStreamOptions } from "../types.js";
+import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
@@ -274,6 +274,45 @@ describe("OpenAI-compatible completions params", () => {
       { type: "text", text: "Requests like this are not allowed." },
     ]);
     expect(result.stopReason).toBe("stop");
+  });
+
+  it("tags pre-tool narration as commentary when the turn stops for tool calls", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Importing ORDER-1234 into the tracker…"),
+      makeToolCallChunk("call_import", "import_order", '{"id":"ORDER-1234"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.stopReason).toBe("toolUse");
+    const textBlock = result.content.find((block) => block.type === "text") as
+      | TextContent
+      | undefined;
+    expect(textBlock?.text).toBe("Importing ORDER-1234 into the tracker…");
+    expect(JSON.parse(String(textBlock?.textSignature))).toMatchObject({
+      v: 1,
+      phase: "commentary",
+    });
+  });
+
+  it("keeps text untagged when spurious tool calls are stripped on finish_reason stop", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Here is the answer."),
+      makeToolCallChunk("call_spurious", "noop", "{}"),
+      makeFinishChunk("stop"),
+    ];
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    // The dropped-tool-call path delivers the text as the reply; a commentary
+    // tag here would silence the whole turn.
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
   });
 
   it("preserves a valid provider-reported usage cost", async () => {
@@ -1553,7 +1592,8 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
     const result = await stream.result();
 
-    expect(result.content[0]).toEqual({ type: "text", text: "Use <" });
+    // Pre-tool text survives as a commentary-tagged block on tool-calling turns.
+    expect(result.content[0]).toMatchObject({ type: "text", text: "Use <" });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });
 
