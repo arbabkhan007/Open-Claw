@@ -317,6 +317,90 @@ describe("cron store", () => {
     expect(preserved.jobs[0]?.raw).toBe("keep-me");
   });
 
+  it("rejects oversized quarantine files to prevent OOM", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(quarantinePath, "x".repeat(8 * 1024 * 1024 + 1), "utf-8");
+
+    await expect(loadCronQuarantineFile(quarantinePath)).rejects.toThrow(
+      /File exceeds 8388608 bytes/,
+    );
+  });
+
+  it("rejects writing a quarantine sidecar that would exceed the byte cap", async () => {
+    const { storePath } = await makeStorePath();
+    const bigEntry = {
+      sourceIndex: 0,
+      reason: "oversized-raw",
+      raw: "x".repeat(8 * 1024 * 1024 + 100),
+    };
+
+    await expect(
+      saveCronQuarantineFile({ storePath, nowMs: 1, entries: [bigEntry] }),
+    ).rejects.toThrow(/Cron quarantine file exceeds 8388608 bytes/);
+  });
+
+  it("archives an existing quarantine sidecar and starts fresh when the cap is exceeded", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+
+    // Fill the existing sidecar to just under the cap so adding one more entry
+    // crosses the boundary, exercising the cap-saturation recovery path.
+    const paddingSize = 8 * 1024 * 1024 - 1024;
+    const existingJobs = Array.from({ length: 10 }, (_, i) => ({
+      sourceIndex: i,
+      reason: "old-entry",
+      job: { id: `old-job-${i}`, padding: "x".repeat(Math.floor(paddingSize / 10)) },
+    }));
+    await fs.writeFile(
+      quarantinePath,
+      JSON.stringify({ version: 1, jobs: existingJobs }, null, 2),
+      "utf-8",
+    );
+
+    const newEntry = { sourceIndex: 99, reason: "new-entry", job: { id: "new-job" } };
+    await saveCronQuarantineFile({ storePath, nowMs: 123, entries: [newEntry] });
+
+    const fresh = await loadCronQuarantineFile(quarantinePath);
+    expect(fresh.jobs).toHaveLength(1);
+    expect(fresh.jobs[0]?.sourceIndex).toBe(99);
+    expect(fresh.jobs[0]?.reason).toBe("new-entry");
+
+    const dir = await fs.readdir(path.dirname(quarantinePath));
+    expect(dir.some((name) => name.endsWith(".archive.json"))).toBe(true);
+  });
+
+  it("prunes oldest archives when the retention limit is exceeded", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+
+    // Create more quarantine sidecars than the retention limit so the oldest
+    // archives are pruned when each overflow triggers a new archive.
+    const paddingSize = 8 * 1024 * 1024 - 512;
+    for (let i = 0; i < 7; i++) {
+      const existingJobs = Array.from({ length: 5 }, (_, j) => ({
+        sourceIndex: j,
+        reason: `overflow-${i}`,
+        job: { id: `overflow-job-${i}-${j}`, padding: "x".repeat(Math.floor(paddingSize / 5)) },
+      }));
+      await fs.writeFile(
+        quarantinePath,
+        JSON.stringify({ version: 1, jobs: existingJobs }, null, 2),
+        "utf-8",
+      );
+      const entry = { sourceIndex: 99, reason: `new-entry-${i}`, job: { id: `new-job-${i}` } };
+      await saveCronQuarantineFile({ storePath, nowMs: i * 1000, entries: [entry] });
+    }
+
+    const dir = await fs.readdir(path.dirname(quarantinePath));
+    const archives = dir.filter((name) => name.endsWith(".archive.json"));
+    // At most 5 archives should be retained; the oldest should be pruned.
+    expect(archives.length).toBeLessThanOrEqual(5);
+  });
+
   it("does not rewrite quarantine files when every entry is already present", async () => {
     const { storePath } = await makeStorePath();
     const quarantinePath = resolveCronQuarantinePath(storePath);

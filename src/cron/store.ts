@@ -6,7 +6,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+
+// Cron quarantine sidecars are small JSON files; cap reads so a corrupted or
+// hostile file cannot OOM the cron load path.
+const CRON_QUARANTINE_MAX_BYTES = 8 * 1024 * 1024;
+// Maximum number of quarantine archive files to retain. When a new archive is
+// created past this limit the oldest archives are pruned to prevent unbounded
+// disk growth from repeated overflow recovery.
+const CRON_QUARANTINE_ARCHIVE_MAX_COUNT = 5;
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -220,8 +229,11 @@ export async function saveCronStore(
 /** Loads the cron quarantine sidecar, validating its persisted v1 shape. */
 export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQuarantineFile> {
   try {
-    const raw = await fs.promises.readFile(pathLocal, "utf-8");
-    const parsed = parseJsonWithJson5Fallback(raw);
+    const { buffer } = await readRegularFile({
+      filePath: pathLocal,
+      maxBytes: CRON_QUARANTINE_MAX_BYTES,
+    });
+    const parsed = parseJsonWithJson5Fallback(buffer.toString("utf-8"));
     if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
       throw new Error(`Unsupported cron quarantine file shape at ${pathLocal}`);
     }
@@ -269,6 +281,33 @@ export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQua
   }
 }
 
+function buildQuarantineJobEntry(
+  entry: QuarantinedCronConfigJob,
+  nowMs: number,
+): CronQuarantineFile["jobs"][number] {
+  const result: CronQuarantineFile["jobs"][number] = {
+    quarantinedAtMs: nowMs,
+    sourceIndex: entry.sourceIndex,
+    reason: entry.reason,
+  };
+  if (entry.job) {
+    result.job = structuredClone(entry.job);
+  }
+  if ("raw" in entry) {
+    result.raw = structuredClone(entry.raw);
+  }
+  if (entry.state) {
+    result.state = structuredClone(entry.state);
+  }
+  if (entry.updatedAtMs !== undefined) {
+    result.updatedAtMs = entry.updatedAtMs;
+  }
+  if (entry.scheduleIdentity !== undefined) {
+    result.scheduleIdentity = entry.scheduleIdentity;
+  }
+  return result;
+}
+
 function quarantineEntryKey(entry: QuarantinedCronConfigJob): string {
   const rawId = entry.job
     ? (normalizeOptionalString(entry.job.id) ?? normalizeOptionalString(entry.job.jobId))
@@ -295,9 +334,27 @@ export async function saveCronQuarantineFile(params: {
     return null;
   }
   const quarantinePath = resolveCronQuarantinePath(params.storePath);
-  const existing = await loadCronQuarantineFile(quarantinePath);
-  const seen = new Set(existing.jobs.map(quarantineEntryKey));
+
+  // If the existing sidecar is already over the byte cap, we cannot safely
+  // load it for deduplication. Archive it and start fresh with the new entries.
+  let existing: CronQuarantineFile = { version: 1, jobs: [] };
+  let existingKeys = new Set<string>();
+  const existingStat = await fs.promises.stat(quarantinePath).catch((err: unknown) => {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  if (existingStat && existingStat.size > CRON_QUARANTINE_MAX_BYTES) {
+    await archiveQuarantineFile(quarantinePath);
+  } else {
+    existing = await loadCronQuarantineFile(quarantinePath);
+    existingKeys = new Set(existing.jobs.map(quarantineEntryKey));
+  }
+
+  const seen = new Set(existingKeys);
   const nextJobs = existing.jobs.slice();
+  const appendedEntries: QuarantinedCronConfigJob[] = [];
   let appended = false;
   for (const entry of params.entries.toSorted((a, b) => a.sourceIndex - b.sourceIndex)) {
     const key = quarantineEntryKey(entry);
@@ -308,21 +365,90 @@ export async function saveCronQuarantineFile(params: {
     // keep appending the same quarantined config job.
     seen.add(key);
     appended = true;
-    nextJobs.push({
-      quarantinedAtMs: params.nowMs,
-      sourceIndex: entry.sourceIndex,
-      reason: entry.reason,
-      ...(entry.job ? { job: structuredClone(entry.job) } : {}),
-      ...("raw" in entry ? { raw: structuredClone(entry.raw) } : {}),
-      ...(entry.state ? { state: structuredClone(entry.state) } : {}),
-      ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
-      ...(entry.scheduleIdentity !== undefined ? { scheduleIdentity: entry.scheduleIdentity } : {}),
-    });
+    appendedEntries.push(entry);
+    nextJobs.push(buildQuarantineJobEntry(entry, params.nowMs));
   }
   if (!appended) {
     return quarantinePath;
   }
   const payload = JSON.stringify({ version: 1, jobs: nextJobs }, null, 2);
+  if (Buffer.byteLength(payload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
+    // The sidecar has grown past the cap. Archive the existing file so the
+    // canonical SQLite cron store can still persist, then start a fresh
+    // quarantine file containing only the new entries. This prevents a
+    // cap-saturated sidecar from blocking every subsequent cron mutation.
+    await archiveQuarantineFile(quarantinePath);
+    const freshJobs = appendedEntries.map((entry) => buildQuarantineJobEntry(entry, params.nowMs));
+    const freshPayload = JSON.stringify({ version: 1, jobs: freshJobs }, null, 2);
+    if (Buffer.byteLength(freshPayload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
+      throw new Error(`Cron quarantine file exceeds ${CRON_QUARANTINE_MAX_BYTES} bytes`);
+    }
+    await atomicWrite(quarantinePath, freshPayload);
+    return quarantinePath;
+  }
   await atomicWrite(quarantinePath, payload);
   return quarantinePath;
+}
+
+async function archiveQuarantineFile(quarantinePath: string): Promise<void> {
+  try {
+    await fs.promises.access(quarantinePath);
+  } catch {
+    // Nothing to archive.
+    return;
+  }
+  const archivePath = `${quarantinePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.archive.json`;
+  await fs.promises.rename(quarantinePath, archivePath);
+  // Prune oldest archives beyond the retention limit so repeated overflow
+  // recovery cannot exhaust disk with unbounded archive accumulation.
+  await pruneOldQuarantineArchives(quarantinePath);
+}
+
+/** Lists quarantine archive files for the given sidecar path, sorted oldest first. */
+async function listQuarantineArchives(
+  quarantinePath: string,
+): Promise<Array<{ name: string; ts: number }>> {
+  const dir = path.dirname(quarantinePath);
+  const base = path.basename(quarantinePath);
+  const prefix = `${base}.`;
+  const suffix = ".archive.json";
+  const entries: Array<{ name: string; ts: number }> = [];
+  try {
+    const names = await fs.promises.readdir(dir);
+    for (const name of names) {
+      if (name.startsWith(prefix) && name.endsWith(suffix)) {
+        // Filename: {base}.{ts}.{random}.archive.json — extract the timestamp
+        // part between the base prefix and the next dot.
+        const afterPrefix = name.slice(prefix.length);
+        const dotIdx = afterPrefix.indexOf(".");
+        if (dotIdx === -1) continue;
+        const tsStr = afterPrefix.slice(0, dotIdx);
+        const ts = Number(tsStr);
+        if (Number.isFinite(ts)) {
+          entries.push({ name, ts });
+        }
+      }
+    }
+  } catch {
+    return [];
+  }
+  entries.sort((a, b) => a.ts - b.ts);
+  return entries;
+}
+
+/** Removes the oldest archive files when the archive count exceeds the retention limit. */
+async function pruneOldQuarantineArchives(quarantinePath: string): Promise<void> {
+  const archives = await listQuarantineArchives(quarantinePath);
+  if (archives.length <= CRON_QUARANTINE_ARCHIVE_MAX_COUNT) {
+    return;
+  }
+  const dir = path.dirname(quarantinePath);
+  const toRemove = archives.slice(0, archives.length - CRON_QUARANTINE_ARCHIVE_MAX_COUNT);
+  await Promise.all(
+    toRemove.map((entry) =>
+      fs.promises.unlink(path.join(dir, entry.name)).catch(() => {
+        // Best-effort prune; ignore concurrent deletion races.
+      }),
+    ),
+  );
 }
