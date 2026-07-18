@@ -241,6 +241,14 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
+  "gateway.security":
+    "Opt-in hardening toggles for the gateway WebSocket upgrade handshake. Each flag is off by default to preserve existing deployment behavior; enable individual toggles when your reverse-proxy or network-exposed gateway needs stricter pre-handshake admission.",
+  "gateway.security.strictHeaderValidation":
+    "Opt-in strict proxy/header validation: reject Forwarded/X-Forwarded-Proto mismatches with the socket transport (non-trusted peers only), X-Forwarded-For vs Forwarded client-IP contradictions, and duplicate or comma-chained sensitive proxy headers (Host, Origin, Forwarded, X-Forwarded-*) read from the raw request line. Keep this off behind proxies that legitimately chain X-Forwarded-For; enable it only when clients send a single clean value per header.",
+  "gateway.security.rejectUntrustedProxyHeaders":
+    "Reject any proxy header (X-Forwarded-For/Host/Proto, Forwarded, X-Real-IP) arriving from a peer not listed in gateway.trustedProxies. Enable only after trustedProxies is configured, otherwise legitimate proxy traffic will be rejected.",
+  "gateway.security.rejectCrossSiteWebSocketRequests":
+    "Reject browser WebSocket upgrades whose Sec-Fetch-Site is cross-site or cross-origin. Keep this off for loopback deployments where browsers legitimately flag localhost/127.0.0.1 aliases as cross-site; enable it only when every legitimate browser WS client is same-origin to the gateway.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":
