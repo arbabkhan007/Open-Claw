@@ -1675,18 +1675,25 @@ describe("openai-completions stop-reason tool-call guard", () => {
     const result = await stream.result();
 
     expect(result.stopReason).toBe("error");
-    const messages = capturedMessages!;
+
+    if (!capturedMessages) throw new Error("expected captured messages");
+    const messages: Array<Record<string, unknown>> = capturedMessages;
+
     const toolMessage = messages.find((m) => m.role === "tool") as
       | { tool_call_id?: string }
       | undefined;
     expect(toolMessage).toBeDefined();
-    const normalizedId = toolMessage!.tool_call_id;
+    if (!toolMessage) throw new Error("expected tool message");
+
+    const normalizedId = toolMessage.tool_call_id;
     expect(normalizedId).toBeDefined();
+    if (normalizedId == null) throw new Error("expected tool call id");
+
     // Must not contain an unpaired surrogate at the tail.
-    expect(normalizedId!.length).toBeLessThanOrEqual(40);
-    expect(/[\uD800-\uDBFF]$/.test(normalizedId!)).toBe(false);
+    expect(normalizedId.length).toBeLessThanOrEqual(40);
+    expect(/[\uD800-\uDBFF]$/.test(normalizedId)).toBe(false);
     // The prefix must be preserved.
-    expect(normalizedId!.startsWith(prefix.slice(0, 39))).toBe(true);
+    expect(normalizedId.startsWith(prefix.slice(0, 39))).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
