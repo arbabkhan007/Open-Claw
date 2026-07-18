@@ -1762,7 +1762,7 @@ describe("handleChatGatewayEvent", () => {
     );
   });
 
-  it("moves terminal error payload content into the alert instead of the transcript", () => {
+  it("preserves terminal assistant content that extends the streamed text", () => {
     const message = {
       role: "assistant",
       content: [{ type: "text", text: "Partial answer before gateway error. Final detail." }],
@@ -1787,11 +1787,9 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(
       state.chatMessages[0],
       "assistant",
-      "Partial answer before gateway error.",
+      "Partial answer before gateway error. Final detail.",
     );
-    expect(state.chatRunError).toEqual({
-      summary: "Partial answer before gateway error. Final detail.",
-    });
+    expect(state.chatRunError).toEqual({ summary: "gateway disconnected" });
   });
 
   it("keeps stream segments visible when an error ends after a tool event", () => {

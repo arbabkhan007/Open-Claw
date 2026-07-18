@@ -139,6 +139,27 @@ function resolveChatErrorText(payload: ChatEventPayload): string {
   return "chat error";
 }
 
+function resolveExtendedErrorAssistantMessage(
+  state: ChatState,
+  payload: ChatEventPayload,
+): Record<string, unknown> | null {
+  const message = normalizeFinalAssistantMessage(payload.message);
+  if (!message || shouldHideAssistantChatMessage(message)) {
+    return null;
+  }
+  const streamedText = state.chatStream?.trim();
+  const messageText = extractText(message)?.trim();
+  if (
+    !streamedText ||
+    !messageText ||
+    messageText.length <= streamedText.length ||
+    !messageText.startsWith(streamedText)
+  ) {
+    return null;
+  }
+  return message;
+}
+
 function appendCachedChatMessage(
   state: ChatState,
   sessionKey: string,
@@ -276,14 +297,29 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
-    if (hadActiveRunBeforeEvent) {
+    const extendedAssistantMessage = hadActiveRunBeforeEvent
+      ? resolveExtendedErrorAssistantMessage(state, payload)
+      : null;
+    if (extendedAssistantMessage) {
+      // A terminal payload may complete genuine prose that only partially
+      // streamed. Preserve that fuller answer before presenting the run error.
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        replacementMessages: [extendedAssistantMessage],
+      });
+      state.chatMessages = appendTerminalAssistantMessage(
+        state.chatMessages,
+        extendedAssistantMessage,
+      );
+    } else if (hadActiveRunBeforeEvent) {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("interrupted", "failed");
     setChatRunError(
       state,
       hadActiveRunBeforeEvent
-        ? resolveChatErrorText(payload)
+        ? extendedAssistantMessage
+          ? payload.errorMessage?.trim() || "chat error"
+          : resolveChatErrorText(payload)
         : payload.errorMessage?.trim() || "chat error",
     );
   }
