@@ -91,6 +91,7 @@ type QueueEntry = {
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
+  onTaskTimeout?: () => void;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -335,7 +336,20 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
         | { cause: "abort-grace"; graceMs: number }
         | { cause: "release-signal" },
     ) => {
+      // Multiple timeout paths (progress budget, abort grace, release signal)
+      // can fire; only the first flips the fence and rejects.
+      if (timedOut) {
+        return;
+      }
       timedOut = true;
+      // Flip the caller's fence synchronously before the enqueue promise
+      // rejects and the lane is released, so a worker still unwinding in the
+      // background observes the timeout and suppresses late side effects.
+      try {
+        entry.onTaskTimeout?.();
+      } catch (err) {
+        diag.warn(`lane task timeout callback failed: lane=${lane} error="${String(err)}"`);
+      }
       reject(
         new CommandLaneTaskTimeoutError(lane, {
           ...details,
@@ -550,6 +564,7 @@ export function enqueueCommandInLane<T>(
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
+      onTaskTimeout: opts?.onTaskTimeout,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
