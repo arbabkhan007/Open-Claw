@@ -115,6 +115,7 @@ export type ChatProps = {
   canSend: boolean;
   disabledReason: string | null;
   error: string | null;
+  runError?: { summary: string } | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -553,7 +554,31 @@ export function renderChat(props: ChatProps) {
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
-              ${scrollToBottomButton} ${chatColumnFooter}
+              ${scrollToBottomButton}
+              ${props.runError
+                ? html`
+                    <div class="chat-run-error" role="alert">
+                      <div class="chat-run-error__summary">
+                        <span class="chat-run-error__icon" aria-hidden="true"
+                          >${icons.circleAlert}</span
+                        >
+                        <span class="chat-run-error__content">${props.runError.summary}</span>
+                      </div>
+                      <details class="chat-run-error__details">
+                        <summary>
+                          <span class="chat-run-error__details-show"
+                            >${t("chat.actions.showErrorDetails")}</span
+                          >
+                          <span class="chat-run-error__details-hide"
+                            >${t("chat.actions.hideErrorDetails")}</span
+                          >
+                        </summary>
+                        <pre>${t("chat.actions.errorLogsCommand")}</pre>
+                      </details>
+                    </div>
+                  `
+                : nothing}
+              ${chatColumnFooter}
               ${renderSideChatPanel({
                 ...sideChatProps,
                 // Detached slash sends are refused while disconnected (see

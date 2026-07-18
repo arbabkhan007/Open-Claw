@@ -647,7 +647,6 @@ function createChatProps(
     onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeVideo: () => undefined,
-    onDismissError: () => undefined,
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
@@ -720,6 +719,47 @@ describe("chat conversation width", () => {
 
     expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
     expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
+  });
+
+  it("renders chat errors as a neutral alert immediately above the composer", () => {
+    const errorText = "Model login expired for OpenAI. Sign in again, then retry.";
+    const container = renderChatView({
+      runError: { summary: errorText },
+    });
+    const alert = requireElement(container, ".chat-run-error", "chat run error");
+    const details = requireElement(alert, "details", "chat error details");
+    const summary = requireElement(details, "summary", "chat error details summary");
+
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toContain(errorText);
+    expect(details.hasAttribute("open")).toBe(false);
+    expect(summary.querySelector(".chat-run-error__details-show")?.textContent?.trim()).toBe(
+      "Show details",
+    );
+    expect(summary.querySelector(".chat-run-error__details-hide")?.textContent?.trim()).toBe(
+      "Hide details",
+    );
+    expect(details.textContent).toContain("Logs: openclaw logs --follow");
+    expect(alert.classList.contains("danger")).toBe(false);
+    expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(container.querySelector(".chat-thread .chat-run-error")).toBeNull();
+
+    expect(alert.querySelector("button")).toBeNull();
+  });
+
+  it("keeps generic chat errors in the dismissible callout", () => {
+    const onDismissError = vi.fn();
+    const container = renderChatView({
+      error: "Could not store this message.",
+      onDismissError,
+    });
+
+    expect(container.querySelector(".chat-run-error")).toBeNull();
+    const callout = requireElement(container, ".callout--dismissible", "generic chat error");
+    const dismiss = requireElement<HTMLButtonElement>(callout, "button", "dismiss error");
+    dismiss.click();
+
+    expect(onDismissError).toHaveBeenCalledOnce();
   });
 });
 

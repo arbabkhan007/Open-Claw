@@ -929,6 +929,18 @@ describe("validateChatEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts expandable diagnostics on failed chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 3,
+        state: "error",
+        errorMessage: "Model login expired. Sign in again, then retry.",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects v3-style chat deltas without deltaText", () => {
     expect(
       validateChatEvent({

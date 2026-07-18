@@ -1450,7 +1450,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               ) {
                 await persistGatewayUserTurnTranscriptBestEffort();
               }
-              let broadcastedSourceReplyFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -1469,7 +1468,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   suppressReplies: hasAppendedWebchatAgentMedia(),
                 });
               } else {
-                broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
+                await finalizeChatSendSourceReplies({
                   accountId,
                   context,
                   deliveredReplies,
@@ -1478,8 +1477,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   session: preparedSession.value,
                 });
               }
-              const shouldBroadcastAgentError =
-                returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+              const shouldBroadcastAgentError = returnedAgentErrorPayloads.length > 0;
               if (shouldBroadcastAgentError) {
                 broadcastChatError({
                   context,

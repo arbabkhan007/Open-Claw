@@ -2337,6 +2337,7 @@ class ChatPane extends OpenClawLightDomElement {
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
       error: state.lastError,
+      runError: state.chatRunError ?? null,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
