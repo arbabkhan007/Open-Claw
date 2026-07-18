@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { verifyStableMainCloseout } from "./lib/stable-release-closeout.mjs";
 
+const STABLE_CLOSEOUT_TIMEOUT_MS = 120_000;
+
 function parseArgs(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 1) {
