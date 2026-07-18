@@ -11,7 +11,7 @@ import type { PluginRuntime } from "./types.js";
 
 const RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE = "runtime-config-load-write";
 
-const warnedDeprecatedConfigApis = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+const warnedDeprecatedConfigApis = createDedupeCache({ maxSize: 4096, ttlMs: 0 });
 
 function formatDeprecatedConfigApiSubject(name: "loadConfig" | "writeConfigFile"): string {
   const scope = getPluginRuntimeGatewayRequestScope();

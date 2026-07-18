@@ -6,7 +6,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
-const warnedDeprecatedDiscoveryProviders = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+const warnedDeprecatedDiscoveryProviders = createDedupeCache({ maxSize: 4096, ttlMs: 0 });
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
 type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;

@@ -168,7 +168,7 @@ function readGithubCopilotDomainFromConfig(config?: OpenClawConfig): string | un
 // github.com (fail-closed for the token). That silent fallback turns a typo like
 // `acme.ghe.co` into an opaque 401 (tenant token vs public endpoint), so warn the
 // user loudly — once per distinct bad value — that their config was ignored.
-const warnedRejectedConfigDomains = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+const warnedRejectedConfigDomains = createDedupeCache({ maxSize: 4096, ttlMs: 0 });
 function warnOnceOnRejectedConfigDomain(configured: string): void {
   const lowered = configured.toLowerCase();
   if (lowered === DEFAULT_GITHUB_COPILOT_DOMAIN) {

@@ -14,7 +14,7 @@ import { asBoolean } from "../utils/boolean.js";
 import type { StreamingCompatEntry } from "./streaming-compat-entry.js";
 
 const log = createSubsystemLogger("channels/streaming");
-const warnedFlatStreamingKeys = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+const warnedFlatStreamingKeys = createDedupeCache({ maxSize: 4096, ttlMs: 0 });
 
 /** @internal Test-only reset for the flat streaming key deprecation warning cache. */
 export function resetFlatStreamingKeyDeprecationWarningsForTest(): void {
