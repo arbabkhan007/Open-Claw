@@ -356,6 +356,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   opts: UpdateCommandOptions;
   timeoutMs: number;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
+  compatibilityHostVersion?: string | null;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     const invalid = buildInvalidConfigPostCoreUpdateResult();
@@ -597,6 +598,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
     ...clawHubRiskAcknowledgementOptions,
+    ...(params.compatibilityHostVersion === undefined
+      ? {}
+      : { compatibilityHostVersion: params.compatibilityHostVersion }),
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {
