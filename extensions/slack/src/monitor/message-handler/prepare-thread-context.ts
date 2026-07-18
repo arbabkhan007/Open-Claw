@@ -1,5 +1,8 @@
 // Slack plugin module implements prepare thread context behavior.
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundEnvelope,
+  resolveInboundSupplementalSenderAllowed,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -13,6 +16,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
 import { readSessionUpdatedAt, resolveChannelResetConfig } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
 import {
@@ -81,23 +85,31 @@ function isSlackThreadContextSenderAllowed(params: {
   userName?: string;
   botId?: string;
 }): boolean {
-  if (params.allowFromLower.length === 0 || params.botId) {
-    return true;
-  }
-  if (!params.userId) {
-    return false;
-  }
-  return resolveSlackAllowListMatch({
-    allowList: params.allowFromLower,
-    id: params.userId,
-    name: params.userName,
-    allowNameMatching: params.allowNameMatching,
-  }).allowed;
+  return resolveInboundSupplementalSenderAllowed({
+    isGroup: true,
+    groupPolicy: params.allowFromLower.length === 0 ? "open" : "allowlist",
+    allowFrom: params.allowFromLower,
+    isSenderAllowed: (allowFrom) => {
+      if (params.botId) {
+        return true;
+      }
+      if (!params.userId) {
+        return false;
+      }
+      return resolveSlackAllowListMatch({
+        allowList: allowFrom,
+        id: params.userId,
+        name: params.userName,
+        allowNameMatching: params.allowNameMatching,
+      }).allowed;
+    },
+  });
 }
 
 async function resolveSlackThreadUserMap(params: {
   ctx: SlackMonitorContext;
   messages: SlackThreadStarter[];
+  eventScope?: SlackEventScope;
 }): Promise<Map<string, { name?: string }>> {
   const uniqueUserIds: string[] = [];
   const seen = new Set<string>();
@@ -114,7 +126,7 @@ async function resolveSlackThreadUserMap(params: {
   }
   const { results } = await runTasksWithConcurrency({
     tasks: uniqueUserIds.map((id) => async () => {
-      const user = await params.ctx.resolveUserName(id);
+      const user = await params.ctx.resolveUserName(id, params.eventScope);
       return user ? { id, user } : null;
     }),
     limit: SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY,
@@ -145,6 +157,7 @@ export async function resolveSlackThreadContextData(params: {
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
+  eventScope?: SlackEventScope;
 }): Promise<SlackThreadContextData> {
   const botIdentity = {
     botUserId: params.ctx.botUserId,
@@ -195,7 +208,7 @@ export async function resolveSlackThreadContextData(params: {
   const starter = params.threadStarter;
   const starterSenderName =
     params.allowNameMatching && params.allowFromLower.length > 0 && starter?.userId
-      ? (await params.ctx.resolveUserName(starter.userId))?.name
+      ? (await params.ctx.resolveUserName(starter.userId, params.eventScope))?.name
       : undefined;
   const starterIsCurrentBot = Boolean(
     starter &&
@@ -238,7 +251,7 @@ export async function resolveSlackThreadContextData(params: {
       const { resolveSlackMedia } = await loadSlackMediaModule();
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,
-        client: params.ctx.app.client,
+        client: params.eventScope?.client ?? params.ctx.app.client,
         token: params.ctx.botToken,
         maxBytes: params.ctx.mediaMaxBytes,
       });
@@ -278,7 +291,7 @@ export async function resolveSlackThreadContextData(params: {
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
-      client: params.ctx.app.client,
+      client: params.eventScope?.client ?? params.ctx.app.client,
       currentMessageTs: params.message.ts,
       limit: threadInitialHistoryLimit,
     });
@@ -310,6 +323,7 @@ export async function resolveSlackThreadContextData(params: {
           ? await resolveSlackThreadUserMap({
               ctx: params.ctx,
               messages: threadHistoryWithoutCurrentBot,
+              eventScope: params.eventScope,
             })
           : new Map<string, { name?: string }>();
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =

@@ -1,14 +1,20 @@
+import Foundation
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
+    @Test func `mac chat advertises inline widgets`() {
+        #expect(GatewayConnection.operatorClientCaps == [OpenClawGatewayClientCapability.inlineWidgets])
+    }
+
     @Test func `bare global session target carries normalized selected agent`() {
         let transport = MacGatewayChatTransport(defaultGlobalAgentID: "  Agent-A  ")
 
         #expect(transport.sessionTarget(for: " GLOBAL ") == .init(
-            sessionKey: " GLOBAL ",
+            sessionKey: "GLOBAL",
             agentID: "agent-a"))
         #expect(transport.sessionTarget(for: "agent:agent-a:main") == .init(
             sessionKey: "agent:agent-a:main",
@@ -30,6 +36,50 @@ struct MacGatewayChatTransportMappingTests {
         #expect(transport.sessionTarget(for: "global") == .init(
             sessionKey: "global",
             agentID: nil))
+    }
+
+    @Test func `session settings request preserves verbosity patch`() {
+        let request = MacGatewayChatTransport.sessionSettingsRequest(
+            sessionKey: "global",
+            agentID: "reviewer",
+            patch: OpenClawChatSessionSettingsPatch(
+                model: .some("openai/gpt-5.6-sol"),
+                thinkingLevel: .some("high"),
+                verboseLevel: .some("full")))
+
+        #expect(request.method == "sessions.patch")
+        #expect(request.params["key"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
+        #expect(request.params["thinkingLevel"]?.value as? String == "high")
+        #expect(request.params["verboseLevel"]?.value as? String == "full")
+    }
+
+    @Test func `full message request uses generated gateway field names`() throws {
+        let request = try MacGatewayChatTransport.fullMessageRequest(
+            sessionKey: "global",
+            agentID: "reviewer",
+            messageID: "msg-42")
+
+        #expect(request.method == "chat.message.get")
+        #expect(request.params["sessionKey"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["messageId"]?.value as? String == "msg-42")
+        #expect(request.params["maxChars"]?.value as? Int == 500_000)
+    }
+
+    @Test func `legacy trace preference migrates to independent defaults once`() throws {
+        let suiteName = "MacGatewayChatTransportMappingTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(false, forKey: OpenClawChatWindowShell.assistantTraceDefaultsKey)
+
+        #expect(WebChatTracePreferences.displayOptions(defaults: defaults).isEmpty)
+        #expect(defaults.object(forKey: OpenClawChatWindowShell.assistantReasoningDefaultsKey) as? Bool == false)
+        #expect(defaults.object(forKey: OpenClawChatWindowShell.assistantToolActivityDefaultsKey) as? Bool == false)
+
+        defaults.set(true, forKey: OpenClawChatWindowShell.assistantReasoningDefaultsKey)
+        #expect(WebChatTracePreferences.displayOptions(defaults: defaults) == [.reasoning])
     }
 
     @Test func `snapshot maps to health`() {
@@ -85,9 +135,35 @@ struct MacGatewayChatTransportMappingTests {
         let frame = EventFrame(type: "event", event: "tick", payload: nil, seq: 1, stateversion: nil)
         let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.event(frame))
         #expect({
-            if case .tick = mapped { return true }
+            if case .tick = mapped {
+                return true
+            }
             return false
         }())
+    }
+
+    @Test func `sessions changed event maps to authoritative refresh signal`() {
+        let payload = OpenClawProtocol.AnyCodable([
+            "sessionKey": OpenClawProtocol.AnyCodable("agent:main:main"),
+            "agentId": OpenClawProtocol.AnyCodable("main"),
+            "reason": OpenClawProtocol.AnyCodable("command-metadata"),
+        ])
+        let frame = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: payload,
+            seq: 1,
+            stateversion: nil)
+
+        let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.event(frame))
+        guard case let .sessionsChanged(change) = mapped else {
+            Issue.record("expected .sessionsChanged, got \(String(describing: mapped))")
+            return
+        }
+        #expect(change == .init(
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            reason: "command-metadata"))
     }
 
     @Test func `chat event maps to chat`() {
@@ -154,7 +230,9 @@ struct MacGatewayChatTransportMappingTests {
     @Test func `seq gap maps to seq gap`() {
         let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.seqGap(expected: 1, received: 9))
         #expect({
-            if case .seqGap = mapped { return true }
+            if case .seqGap = mapped {
+                return true
+            }
             return false
         }())
     }

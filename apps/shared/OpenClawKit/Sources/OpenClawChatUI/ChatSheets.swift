@@ -74,7 +74,7 @@ struct ChatSessionsSheet: View {
                     self.emptyState
                 }
             }
-            .searchable(text: self.$searchText, prompt: Text("Search sessions"))
+            .searchable(text: self.$searchText, prompt: "Search sessions")
             .navigationTitle("Sessions")
             .toolbar {
                 #if os(macOS)
@@ -103,18 +103,26 @@ struct ChatSessionsSheet: View {
                 "Rename Session",
                 isPresented: Binding(
                     get: { self.renameTarget != nil },
-                    set: { if !$0 { self.renameTarget = nil } }))
-            {
+                    set: {
+                        if !$0 { self.renameTarget = nil }
+                    })) {
                 TextField("Session name", text: self.$renameText)
-                Button("Rename") {
+                    .font(OpenClawChatTypography.body)
+                Button {
                     if let target = self.renameTarget {
                         self.viewModel.renameSession(key: target.key, label: self.renameText)
                         self.refreshScopedSessionsSoon()
                     }
                     self.renameTarget = nil
+                } label: {
+                    Text("Rename")
+                        .font(OpenClawChatTypography.body)
                 }
-                Button("Cancel", role: .cancel) {
+                Button(role: .cancel) {
                     self.renameTarget = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawChatTypography.body)
                 }
             }
         }
@@ -150,7 +158,10 @@ struct ChatSessionsSheet: View {
     }
 
     private func sessionRow(_ session: OpenClawChatSessionEntry) -> some View {
-        Button {
+        let archiveActionTitle = LocalizedStringKey(session.isArchived
+            ? String(localized: "Restore")
+            : String(localized: "Archive"))
+        return Button {
             if session.isArchived {
                 // Archived sessions reject new sends; opening one restores it
                 // first and only switches on success so the composer never
@@ -183,7 +194,7 @@ struct ChatSessionsSheet: View {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel(Text("Pinned"))
+                        .accessibilityLabel("Pinned")
                 }
             }
         }
@@ -193,7 +204,7 @@ struct ChatSessionsSheet: View {
                     self.viewModel.setSessionPinned(key: session.key, pinned: !session.isPinned)
                     self.refreshScopedSessionsSoon()
                 } label: {
-                    Label(
+                    self.actionLabel(
                         session.isPinned ? "Unpin" : "Pin",
                         systemImage: session.isPinned ? "pin.slash" : "pin")
                 }
@@ -201,41 +212,77 @@ struct ChatSessionsSheet: View {
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button {
-                self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
-                self.refreshScopedSessionsSoon()
-            } label: {
-                Label(
-                    session.isArchived ? "Unarchive" : "Archive",
-                    systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+            if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+                session,
+                mainSessionKey: self.viewModel.resolvedMainSessionKey)
+            {
+                Button {
+                    self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                    self.refreshScopedSessionsSoon()
+                } label: {
+                    self.actionLabel(
+                        archiveActionTitle,
+                        systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+                }
+                .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
             }
-            .tint(session.isArchived ? OpenClawChatTheme.accent : OpenClawChatTheme.danger)
         }
         .contextMenu {
             Button {
                 self.renameText = session.displayName ?? ""
                 self.renameTarget = session
             } label: {
-                Label("Rename", systemImage: "pencil")
+                self.actionLabel("Rename", systemImage: "pencil")
             }
             if !session.isArchived {
                 Button {
                     self.viewModel.setSessionPinned(key: session.key, pinned: !session.isPinned)
                     self.refreshScopedSessionsSoon()
                 } label: {
-                    Label(
+                    self.actionLabel(
                         session.isPinned ? "Unpin" : "Pin",
                         systemImage: session.isPinned ? "pin.slash" : "pin")
                 }
             }
+            if session.isArchived || ChatSessionSidebarModel.canArchiveSession(
+                session,
+                mainSessionKey: self.viewModel.resolvedMainSessionKey)
+            {
+                Button {
+                    self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                    self.refreshScopedSessionsSoon()
+                } label: {
+                    self.actionLabel(
+                        archiveActionTitle,
+                        systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+                }
+            }
             Button {
-                self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
+                Task { await self.viewModel.forkSession(key: session.key) }
+            } label: {
+                self.actionLabel(
+                    LocalizedStringKey(String(localized: "Fork")),
+                    systemImage: "arrow.triangle.branch")
+            }
+            Button {
+                self.viewModel.setSessionUnread(key: session.key, unread: session.unread != true)
                 self.refreshScopedSessionsSoon()
             } label: {
-                Label(
-                    session.isArchived ? "Unarchive" : "Archive",
-                    systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
+                self.actionLabel(
+                    LocalizedStringKey(session.unread == true
+                        ? String(localized: "Mark Read")
+                        : String(localized: "Mark Unread")),
+                    systemImage: session.unread == true ? "envelope.open" : "envelope.badge")
             }
+        }
+    }
+
+    private func actionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        Label {
+            Text(title)
+                .font(OpenClawChatTypography.body)
+        } icon: {
+            Image(systemName: systemImage)
         }
     }
 

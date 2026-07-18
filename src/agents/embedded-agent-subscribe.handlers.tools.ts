@@ -11,10 +11,13 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QuestionRequestQuestion } from "../../packages/gateway-protocol/src/schema/questions.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
@@ -35,16 +38,16 @@ import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
-import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { hasReplyPayloadContent, type MessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { truncateUtf16Safe } from "../utils.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   consumeStructuredReplaySafeToolCall,
+  consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -61,6 +64,7 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -69,6 +73,7 @@ import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
+  capLiveExecResult,
   extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
@@ -81,17 +86,27 @@ import {
   isToolResultTimedOut,
   sanitizeToolArgs,
   sanitizeToolResult,
+  truncateLiveExecOutput,
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { formatAgentHarnessUserInputPrompt } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
-import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
+import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import {
+  cancelAskUserPromptDelivery,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+  settleAskUserPromptDelivery,
+  waitForAskUserPromptReady,
+} from "./tools/ask-user-tool.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -105,13 +120,95 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
-const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
+
+function buildAskUserQuestionPresentation(params: {
+  questionId: string;
+  questions: QuestionRequestQuestion[];
+}): MessagePresentation | undefined {
+  // Button taps resolve atomically, so v1 keeps multi-question records text-only.
+  if (params.questions.length !== 1) {
+    return undefined;
+  }
+  const [question] = params.questions;
+  if (!question || question.multiSelect || question.isSecret || question.options.length === 0) {
+    return undefined;
+  }
+  const presentationText = [
+    question.question,
+    "",
+    ...question.options.map(
+      (option) => `- ${option.label}${option.description ? `: ${option.description}` : ""}`,
+    ),
+    "",
+    "Tap an option, or reply with the option text or your own answer.",
+  ].join("\n");
+  return {
+    blocks: [
+      { type: "text", text: presentationText },
+      {
+        type: "buttons",
+        buttons: question.options.map((option) => ({
+          label: option.label,
+          action: {
+            type: "question",
+            questionId: params.questionId,
+            optionValue: option.label,
+          },
+        })),
+      },
+    ],
+  };
+}
+const fallbackToolTerminalObservers = new WeakMap<
+  ToolHandlerContext["state"],
+  ReturnType<typeof createToolTerminalObserver>
+>();
+
+function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
+  const existing = fallbackToolTerminalObservers.get(ctx.state);
+  if (existing) {
+    return existing;
+  }
+  const created = createToolTerminalObserver(ctx.params.runId);
+  fallbackToolTerminalObservers.set(ctx.state, created);
+  return created;
+}
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
+
+function readUpdatePlanResult(
+  result: unknown,
+): { explanation?: string; steps: AgentPlanStep[] } | undefined {
+  const details = readToolResultDetails(result);
+  if (details?.status !== "updated" || !Array.isArray(details.plan)) {
+    return undefined;
+  }
+  const steps = normalizeAgentPlanSteps(details.plan) ?? [];
+  const explanation = readStringValue(details.explanation);
+  return { ...(explanation ? { explanation } : {}), steps };
+}
+
+function buildAskUserPromptPayload(
+  toolCallId: string,
+  sessionKey: string | undefined,
+  args: unknown,
+) {
+  try {
+    const { questions } = normalizeAskUserParams(args);
+    const reservation = reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions });
+    if (!reservation) {
+      return undefined;
+    }
+    return reservation;
+  } catch {
+    // Argument validation owns malformed calls; do not deliver an unusable prompt first.
+    return undefined;
+  }
+}
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -211,7 +308,17 @@ function traceToolExecutionStart(params: {
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
-const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_CHARS + 1;
+
+function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): string | undefined {
+  if (rawArgsPreview == null) {
+    return undefined;
+  }
+  // Bound before regex normalization so malformed tool args cannot make warning work unbounded.
+  const wasTruncated = rawArgsPreview.length > TOOL_START_WARNING_PREVIEW_MAX_CHARS;
+  const bounded = truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
+  const preview = sanitizeForConsole(bounded, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
+  return wasTruncated && preview ? `${preview}…` : preview;
+}
 
 type ToolStartRecord = {
   startTime: number;
@@ -236,6 +343,16 @@ export function countActiveToolExecutions(runId: string): number {
     }
   }
   return count;
+}
+
+/** Cleans up tool start data for a run that has been unsubscribed or aborted. */
+export function cleanupRunToolStartData(runId: string): void {
+  const prefix = `${runId}:`;
+  for (const key of toolStartData.keys()) {
+    if (key.startsWith(prefix)) {
+      toolStartData.delete(key);
+    }
+  }
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -317,35 +434,26 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
   });
 }
 
-function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
-  ctx.log.warn(`${label} callback failed: ${String(error)}`);
-}
-
 function emitExecutionPhaseBestEffort(
   ctx: ToolHandlerContext,
   info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
 ): void {
-  try {
-    ctx.params.onExecutionPhase?.(info);
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool execution phase", error);
-  }
+  runBestEffortCallback({
+    label: "tool execution phase",
+    log: ctx.log,
+    callback: () => ctx.params.onExecutionPhase?.(info),
+  });
 }
 
 function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
 ): void {
-  try {
-    const result = ctx.params.onAgentEvent?.(event);
-    if (isPromiseLike<void>(result)) {
-      void Promise.resolve(result).catch((error: unknown) => {
-        warnBestEffortEventFailure(ctx, "tool agent event", error);
-      });
-    }
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool agent event", error);
-  }
+  runBestEffortCallback({
+    label: "tool agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.(event),
+  });
 }
 
 function applyCurrentMessageProvider(
@@ -406,39 +514,6 @@ function readExecToolDetails(result: unknown): ExecToolDetails | null {
     return null;
   }
   return details as ExecToolDetails;
-}
-
-function truncateLiveExecOutput(text: string): string {
-  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
-}
-
-function capLiveExecResult(result: unknown): unknown {
-  const execDetails = readExecToolDetails(result);
-  if (
-    !execDetails ||
-    !("aggregated" in execDetails) ||
-    typeof execDetails.aggregated !== "string"
-  ) {
-    return result;
-  }
-  const aggregated = truncateLiveExecOutput(execDetails.aggregated);
-  if (aggregated === execDetails.aggregated) {
-    return result;
-  }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return result;
-  }
-  const details = readToolResultDetails(result);
-  return {
-    ...(result as Record<string, unknown>),
-    details: {
-      ...details,
-      aggregated,
-    },
-  };
 }
 
 function extractExecOutput(result: unknown): string | undefined {
@@ -569,8 +644,7 @@ function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
   const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
-  // Only an explicit typed progress field crosses into channel UI. Tool output
-  // and details may contain fetched content or private args, so never infer.
+  // Only typed progress crosses into UI; tool output/details may contain private data.
   if (progress?.visibility !== "channel" || progress.privacy !== "public") {
     return undefined;
   }
@@ -766,6 +840,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   channelLabel?: string;
   accountId?: string;
   sentApproverDms?: boolean;
+  host?: "gateway" | "node";
+  nodeId?: string;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -794,6 +870,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     channelLabel: readStringValue(details.channelLabel),
     accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
+    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
+    nodeId: readStringValue(details.nodeId),
   };
 }
 
@@ -824,9 +902,9 @@ async function emitToolResultOutput(params: {
     }
     ctx.state.deterministicApprovalPromptPending = true;
     try {
-      const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult(
-        buildExecApprovalPendingReplyPayload({
+        buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
@@ -863,6 +941,8 @@ async function emitToolResultOutput(params: {
           channelLabel: approvalUnavailable.channelLabel,
           accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
+          host: approvalUnavailable.host,
+          nodeId: approvalUnavailable.nodeId,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
@@ -929,21 +1009,40 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
-  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-      reason: "tool_start",
-      assistantMessageIndex: ctx.state.assistantMessageIndex,
-    });
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(() => {
-        continueToolExecutionStart();
-      });
+  const startToolName = normalizeToolName(evt.toolName);
+  const askUserPromptReservation =
+    startToolName === "ask_user" && ctx.params.onToolResult
+      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, evt.args)
+      : undefined;
+  const cancelAskUserPromptReservation = () => {
+    if (askUserPromptReservation) {
+      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey);
     }
-    continueToolExecutionStart();
-    return undefined;
+  };
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
+    let onBlockReplyFlushResult: void | Promise<void>;
+    try {
+      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+        reason: "tool_start",
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+      });
+    } catch (error) {
+      cancelAskUserPromptReservation();
+      throw error;
+    }
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.then(
+        () => continueToolExecutionStart(),
+        (error: unknown) => {
+          cancelAskUserPromptReservation();
+          throw error;
+        },
+      );
+    }
+    return continueToolExecutionStart();
   };
 
-  const continueToolExecutionStart = () => {
+  const continueToolExecutionStart = (): void | Promise<void> => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -958,7 +1057,6 @@ export function handleToolExecutionStart(
       source: "embedded-agent",
     });
 
-    // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
@@ -981,10 +1079,7 @@ export function handleToolExecutionStart(
       if (!filePath) {
         const argsType = typeof args;
         const rawArgsPreview = readStringValue(args);
-        const argsPreview = sanitizeForConsole(
-          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
-          TOOL_START_WARNING_PREVIEW_MAX_CHARS,
-        );
+        const argsPreview = buildToolStartWarningArgsPreview(rawArgsPreview);
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
@@ -1155,12 +1250,53 @@ export function handleToolExecutionStart(
         }
       }
     }
+
+    if (toolName === "ask_user" && ctx.params.onToolResult) {
+      const payload = askUserPromptReservation;
+      if (payload) {
+        const questionId = payload.questionId;
+        void waitForAskUserPromptReady(questionId)
+          .then((questions) => {
+            if (!questions) {
+              return;
+            }
+            const prompt = formatAgentHarnessUserInputPrompt(questions, {
+              intro: "Question for you:",
+            });
+            const presentation = buildAskUserQuestionPresentation({ questionId, questions });
+            return ctx.params.onToolResult?.({
+              text: `${prompt}\n\nReply with the number, the option text, or your own answer.`,
+              ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
+              channelData: { askUser: { questionId } },
+            });
+          })
+          .then(
+            () => settleAskUserPromptDelivery(questionId),
+            (error: unknown) => {
+              settleAskUserPromptDelivery(questionId, error);
+              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
+            },
+          );
+      }
+    }
   };
 
   // Flush pending block replies to preserve message boundaries before tool execution.
-  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  let flushBlockReplyBufferResult: void | Promise<void>;
+  try {
+    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  } catch (error) {
+    cancelAskUserPromptReservation();
+    throw error;
+  }
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(() => continueAfterBlockReplyFlush());
+    return flushBlockReplyBufferResult.then(
+      () => continueAfterBlockReplyFlush(),
+      (error: unknown) => {
+        cancelAskUserPromptReservation();
+        throw error;
+      },
+    );
   }
   return continueAfterBlockReplyFlush();
 }
@@ -1183,8 +1319,7 @@ export function handleToolExecutionUpdate(
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
-  // Typed progress already has a sanitized item update path. Suppress the raw
-  // partial-result event for those updates to avoid duplicate preview lines.
+  // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate =
     !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
   if (emitDetailedLiveUpdate) {
@@ -1271,6 +1406,9 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
+  if (toolName === "ask_user") {
+    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey);
+  }
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
@@ -1303,6 +1441,7 @@ export async function handleToolExecutionEnd(
       ? (startData.args as Record<string, unknown>)
       : {};
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
   const startArgs =
@@ -1316,10 +1455,10 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
   );
-  // Older/custom event producers omit executionStarted. Treat omission as
-  // executed; only an explicit false can prove preparation stopped the call.
-  const executionStarted = evt.executionStarted !== false && !executionPrevented;
-  const attemptedMutatingAction = callSummary.mutatingAction && executionStarted;
+  // A racing observer can consume the active wrapper boundary. Settled and
+  // custom producers use their terminal fact, while policy blocks override it.
+  const executionStarted =
+    (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
@@ -1328,6 +1467,7 @@ export async function handleToolExecutionEnd(
     toolName,
     meta,
     replaySafe: callSummary.replaySafe,
+    ...(isToolError ? { isError: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1339,42 +1479,32 @@ export async function handleToolExecutionEnd(
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
-  if (isToolError) {
-    const errorMessage = extractToolErrorMessage(sanitizedResult);
-    const errorCode = extractToolErrorCode(sanitizedResult);
-    const validationErrorSummary =
-      evt.executionStarted === false && evt.errorKind === "argument-validation"
-        ? createToolValidationErrorSummary(toolName)
-        : undefined;
-    ctx.state.lastToolError = {
-      toolName,
-      meta,
-      ...(errorCode ? { errorCode } : {}),
-      error: errorMessage,
-      ...(validationErrorSummary ? { validationErrorSummary } : {}),
-      timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
-      middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-      mutatingAction: attemptedMutatingAction,
-      actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
-      fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
-    };
-  } else if (ctx.state.lastToolError) {
-    // Keep unresolved mutating failures until the same action succeeds.
-    if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
-          toolName,
-          meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-          fileTarget: callSummary?.fileTarget,
-        })
-      ) {
-        ctx.state.lastToolError = undefined;
-      }
-    } else {
-      ctx.state.lastToolError = undefined;
-    }
-  }
+  const errorMessage = isToolError ? extractToolErrorMessage(sanitizedResult) : undefined;
+  const errorCode = isToolError ? extractToolErrorCode(sanitizedResult) : undefined;
+  const validationErrorSummary =
+    isToolError && evt.executionStarted === false && evt.errorKind === "argument-validation"
+      ? createToolValidationErrorSummary(toolName)
+      : undefined;
+  const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
+    toolCallId,
+    toolName,
+    arguments: startArgs,
+    ...(meta ? { meta } : {}),
+    executionStarted,
+    outcome: isToolError ? "failure" : "success",
+    ...(isToolError
+      ? {
+          failure: {
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorMessage ? { error: errorMessage } : {}),
+            ...(validationErrorSummary ? { validationErrorSummary } : {}),
+            timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+            middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
+          },
+        }
+      : {}),
+  });
+  ctx.state.lastToolError = terminal.lastToolError;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -1457,6 +1587,7 @@ export async function handleToolExecutionEnd(
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1464,7 +1595,6 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
@@ -1481,9 +1611,29 @@ export async function handleToolExecutionEnd(
       const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
       if (isFirstHeartbeatResponse) {
-        void ctx.params.onHeartbeatToolResponse?.(response);
+        runBestEffortCallback({
+          label: "heartbeat tool response",
+          log: ctx.log,
+          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+        });
       }
     }
+  }
+
+  const planUpdate =
+    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+  if (planUpdate) {
+    const planEvent = {
+      stream: "plan" as const,
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        ...planUpdate,
+      },
+    };
+    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
   emitAgentEvent({
@@ -1757,3 +1907,4 @@ export async function handleToolExecutionEnd(
       });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

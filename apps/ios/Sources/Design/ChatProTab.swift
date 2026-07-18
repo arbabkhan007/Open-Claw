@@ -9,10 +9,14 @@ struct ChatProTab: View {
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @AppStorage("openclaw.webchat.showAssistantTrace")
+    private var showsAssistantTrace = true
     @State private var viewModel: OpenClawChatViewModel?
     @State private var viewModelOwnerID = ""
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
+    @State private var showsBackgroundTasks = false
+    @State private var showsSessions = false
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -129,6 +133,16 @@ struct ChatProTab: View {
             .sheet(item: self.$transcriptShareItem) { item in
                 ChatTranscriptShareSheet(fileURL: item.fileURL)
             }
+            .sheet(isPresented: self.$showsBackgroundTasks) {
+                BackgroundTasksScreen(agentID: self.currentAgentID)
+            }
+            .sheet(isPresented: self.$showsSessions) {
+                NavigationStack {
+                    CommandSessionsScreen(
+                        usesNativeNavigationChrome: true,
+                        openChat: { self.showsSessions = false })
+                }
+            }
             .alert(
                 String(localized: "Unable to Export Transcript"),
                 isPresented: self.$showsTranscriptExportError)
@@ -151,6 +165,7 @@ struct ChatProTab: View {
                 drawsBackground: false,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
+                showsAssistantTrace: self.showsAssistantTrace,
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,
@@ -172,7 +187,8 @@ struct ChatProTab: View {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The session attaches once the gateway is ready."))
+                description: Text("The session attaches once the gateway is ready.")
+                    .font(OpenClawType.body))
         }
     }
 
@@ -268,10 +284,21 @@ struct ChatProTab: View {
             isGatewayConnected: self.appModel.talkMode.isGatewayConnected,
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
+            level: self.talkLevel,
             toggle: { sessionKey in
                 self.appModel.focusChatSession(sessionKey)
                 self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
             })
+    }
+
+    private var talkLevel: Double {
+        if self.appModel.talkMode.isSpeaking {
+            return self.appModel.talkMode.playbackLevel ?? 0
+        }
+        if self.appModel.talkMode.isListening {
+            return self.appModel.talkMode.micLevel
+        }
+        return 0
     }
 
     private var voiceNoteControl: OpenClawChatVoiceNoteControl {
@@ -335,7 +362,30 @@ struct ChatProTab: View {
                 .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
             }
 
+            Button {
+                self.showsSessions = true
+            } label: {
+                Label {
+                    Text(String(localized: "Sessions…"))
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "rectangle.stack")
+                }
+            }
+
             Divider()
+
+            Button {
+                self.showsBackgroundTasks = true
+            } label: {
+                Label {
+                    Text("Background Tasks")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+            }
+            .disabled(!self.appModel.isOperatorGatewayConnected)
 
             Button {
                 self.exportTranscript()
@@ -348,6 +398,15 @@ struct ChatProTab: View {
                 }
             }
             .disabled(self.viewModel == nil)
+
+            Toggle(isOn: self.$showsAssistantTrace) {
+                Label {
+                    Text(String(localized: "Show reasoning & tool activity"))
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "brain.head.profile")
+                }
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -432,10 +491,14 @@ struct ChatProTab: View {
 
     private var messagePlaceholder: String {
         if self.gatewayConnected {
-            return String(localized: "Message \(self.agentDisplayName)...")
+            return String(
+                format: String(localized: "Message %@..."),
+                self.agentDisplayName)
         }
         if self.canQueueOffline {
-            return String(localized: "Message \(self.agentDisplayName); sends when connected")
+            return String(
+                format: String(localized: "Message %@; sends when connected"),
+                self.agentDisplayName)
         }
         return String(localized: "Connect to a gateway")
     }
