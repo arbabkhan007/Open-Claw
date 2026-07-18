@@ -390,6 +390,7 @@ export const CronJobStateSchema = closedObject({
   triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastTriggerFireAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   triggerState: Type.Optional(Type.Unknown()),
+  lastRunWasManual: Type.Optional(Type.Boolean()),
 });
 
 const CronJobStatePatchSchema = closedObject({
@@ -414,6 +415,7 @@ const CronJobStatePatchSchema = closedObject({
   triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastTriggerFireAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   triggerState: Type.Optional(Type.Unknown()),
+  lastRunWasManual: Type.Optional(Type.Boolean()),
 });
 
 /** Persisted cron job definition returned by scheduler list/get APIs. */
