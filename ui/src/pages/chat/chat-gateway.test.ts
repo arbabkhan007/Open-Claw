@@ -2006,6 +2006,30 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: legacy gateway failure" });
   });
 
+  it("keeps a streamed legacy error projection out of the transcript", () => {
+    const errorText = "Error: legacy gateway failure";
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: errorText,
+      chatStreamStartedAt: 9,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: errorText }],
+        timestamp: 10,
+      },
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunError).toEqual({ summary: errorText });
+  });
+
   it("uses server-provided error guidance as the alert copy", () => {
     const state = createState({
       sessionKey: "main",

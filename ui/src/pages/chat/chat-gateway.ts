@@ -351,6 +351,8 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       : null;
     const payloadMessageProjectsStream =
       hadActiveRunBeforeEvent && errorPayloadMessageProjectsVisibleStream(state, payload);
+    const legacyErrorMessageProjectsStream =
+      payloadMessageProjectsStream && !payload.errorMessage?.trim();
     if (extendedAssistantMessage) {
       // A terminal payload may complete genuine prose that only partially
       // streamed. Preserve that fuller answer before presenting the run error.
@@ -358,14 +360,14 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         state.chatMessages,
         extendedAssistantMessage,
       );
-    } else if (hadActiveRunBeforeEvent) {
+    } else if (hadActiveRunBeforeEvent && !legacyErrorMessageProjectsStream) {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("interrupted", "failed");
     setChatRunError(
       state,
       hadActiveRunBeforeEvent
-        ? payloadMessageProjectsStream
+        ? payloadMessageProjectsStream && !legacyErrorMessageProjectsStream
           ? resolveGatewayErrorText(payload)
           : resolveChatErrorText(payload)
         : payload.errorMessage?.trim() || "chat error",
