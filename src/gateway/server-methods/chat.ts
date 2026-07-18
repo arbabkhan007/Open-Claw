@@ -152,10 +152,10 @@ import type {
 } from "./types.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
-
 type ChatMetadataResult = {
   commands?: unknown[];
   models?: unknown[];
+  catalogMode?: "replace";
 };
 
 async function handleChatMetadataRequest({

@@ -7,7 +7,6 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import type { TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
@@ -27,7 +26,6 @@ import {
 import {
   renderSettingsEmpty,
   renderSettingsGroup,
-  renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
@@ -48,6 +46,7 @@ import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderLanguageSelect } from "./language-select.ts";
+import { renderModelSection } from "./quick-model-section.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
 
@@ -81,6 +80,7 @@ type QuickSettingsProps = {
 
   // Model & Thinking
   currentModel: string;
+  modelCatalogMode?: "replace";
   thinkingLevel: string;
   fastMode: FastMode | undefined;
   onModelChange?: () => void;
@@ -174,7 +174,6 @@ const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; labelKey: string }> = [
   { value: 140, labelKey: "quickSettings.appearance.textSizes.xxl" },
 ];
 
-const THINKING_LEVELS = ["off", "low", "medium", "high"];
 const TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
 // Keep raw uploads comfortably below the 2 MB persisted data URL limit after
 // base64 expansion and a small MIME/header prefix are added.
@@ -391,11 +390,6 @@ function handleAssistantAvatarFileSelect(e: Event, props: QuickSettingsProps) {
 }
 
 // ── Section renderers ──
-
-function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
-  return value === "auto" ? "auto" : value === "on";
-}
-
 function isConfigBusy(props: QuickSettingsProps): boolean {
   return (
     props.configLoading === true ||
@@ -412,51 +406,6 @@ function renderGeneralSection(props: QuickSettingsProps) {
       control: renderLanguageSelect(props.locale, props.onLocaleChange),
     }),
   ]);
-}
-
-function renderModelSection(props: QuickSettingsProps) {
-  const fastMode = formatFastModeValue(props.fastMode);
-  const configBusy = isConfigBusy(props);
-  return renderTargetSection(
-    GENERAL_SETTINGS_TARGET_IDS.model,
-    { title: t("quickSettings.model.title") },
-    [
-      renderSettingsNavRow({
-        title: t("quickSettings.model.model"),
-        control: renderSettingsValue(props.currentModel || "default", { mono: true }),
-        onClick: () => props.onModelChange?.(),
-      }),
-      renderSettingsRow({
-        title: t("quickSettings.model.thinking"),
-        control: renderSettingsSegmented({
-          value: props.thinkingLevel,
-          options: THINKING_LEVELS.map((level) => ({
-            value: level,
-            label: t(`quickSettings.model.thinkingLevels.${level}`),
-          })),
-          disabled: configBusy,
-          onChange: (level) => props.onThinkingChange?.(level),
-        }),
-      }),
-      renderSettingsRow({
-        title: t("quickSettings.model.fastMode"),
-        control: renderSettingsSegmented<"auto" | "on" | "off">({
-          value: fastMode,
-          options: [
-            { value: "auto", label: t("quickSettings.model.fastModes.auto") },
-            { value: "on", label: t("quickSettings.model.fastModes.fast") },
-            { value: "off", label: t("quickSettings.model.fastModes.standard") },
-          ],
-          disabled: configBusy,
-          onChange: (value) => {
-            if (value !== fastMode) {
-              props.onFastModeChange?.(fastModeOptionValue(value));
-            }
-          },
-        }),
-      }),
-    ],
-  );
 }
 
 function renderChannelsSection(props: QuickSettingsProps) {

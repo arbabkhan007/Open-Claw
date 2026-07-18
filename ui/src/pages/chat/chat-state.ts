@@ -63,6 +63,7 @@ import {
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
+import * as chatModelCatalog from "./chat-model-catalog.ts";
 import {
   clearPendingQueueItemsForRun,
   readDeliveredQueuedChatSendForRun,
@@ -217,6 +218,7 @@ export type ChatPageHost = ChatHost &
     chatSideResultTerminalRuns: Set<string>;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
+    chatModelCatalogMode?: chatModelCatalog.ChatModelCatalogMode;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
@@ -709,7 +711,7 @@ function applyChatMetadataResult(
 ): ChatMetadataApplyResult {
   const models = applyModelCatalogResult(result.models);
   if (models) {
-    host.chatModelCatalog = models;
+    chatModelCatalog.applyChatModelCatalog(host, models, result.catalogMode);
   }
   const commandsApplied = applyRemoteSlashCommandsResult({
     client,
@@ -718,7 +720,6 @@ function applyChatMetadataResult(
   });
   return { commands: commandsApplied, models: Boolean(models) };
 }
-
 function ownsChatMetadataRequest(
   host: ChatPageHost,
   client: GatewayBrowserClient,
@@ -732,16 +733,15 @@ function ownsChatMetadataRequest(
     resolveChatAgentId(host) === agentId
   );
 }
-
 async function refreshCompatibilityModelCatalog(
   host: ChatPageHost,
   client: GatewayBrowserClient,
   agentId: string | null | undefined,
   requestVersion: number,
 ) {
-  const models = await loadModels(client);
+  const result = await loadModels(client, { includeMetadata: true });
   if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
-    host.chatModelCatalog = models;
+    chatModelCatalog.applyChatModelCatalog(host, result.models, result.catalogMode);
   }
 }
 
@@ -772,7 +772,7 @@ export async function refreshChatMetadata(
   const requestVersion = ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
+    chatModelCatalog.clearChatModelCatalog(host);
     return;
   }
   const client = host.client;
@@ -785,7 +785,7 @@ export async function refreshChatMetadata(
   try {
     if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
       if (shouldClearUnresolvedModels) {
-        host.chatModelCatalog = [];
+        chatModelCatalog.clearChatModelCatalog(host);
       }
       await Promise.allSettled([
         ...(shouldRefreshCompatibilityModels
@@ -805,7 +805,7 @@ export async function refreshChatMetadata(
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
     if (!metadataApplied.models && shouldClearUnresolvedModels) {
-      host.chatModelCatalog = [];
+      chatModelCatalog.clearChatModelCatalog(host);
     }
     if (!metadataApplied.models || !metadataApplied.commands) {
       await Promise.allSettled([
@@ -820,7 +820,7 @@ export async function refreshChatMetadata(
   } catch {
     if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       if (shouldClearUnresolvedModels) {
-        host.chatModelCatalog = [];
+        chatModelCatalog.clearChatModelCatalog(host);
       }
       await Promise.allSettled([
         ...(shouldRefreshCompatibilityModels

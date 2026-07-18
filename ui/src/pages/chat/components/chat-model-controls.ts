@@ -27,6 +27,7 @@ import {
   resolveChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import * as modelCatalogUi from "./chat-model-catalog-hint.ts";
 import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
 export type ChatModelControlsProps = {
@@ -36,6 +37,7 @@ export type ChatModelControlsProps = {
   gatewayAvailable: boolean;
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
+  modelSettingsHref?: string;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionRuntimeId?: string;
@@ -250,6 +252,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     modelSelectionLocked: props.modelSelectionLocked === true,
     modelOnly: props.mode === "model",
     modelOptions,
+    modelSettingsHref: props.modelSettingsHref,
     onRequestUpdate: props.onRequestUpdate,
     selectedModelValue: currentOverride,
     selectedThinkingValue: thinking.currentOverride,
@@ -268,11 +271,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   });
 }
 
-function formatCombinedPickerModelLabel(label: string): string {
-  const match = /^Default \((.+)\)$/u.exec(label);
-  return match?.[1] ?? label;
-}
-
 function formatCombinedPickerModelOptionLabel(option: ChatModelProviderOption): string {
   const label = option.label;
   const providerPrefixes = [
@@ -287,16 +285,13 @@ function formatCombinedPickerModelOptionLabel(option: ChatModelProviderOption): 
   return label;
 }
 
-function formatCombinedPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
-}
-
 function renderChatModelReasoningSelect(params: {
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
   modelSelectionLocked: boolean;
   modelOnly: boolean;
   modelOptions: ChatModelProviderOption[];
+  modelSettingsHref?: string;
   selectedModelValue: string;
   selectedThinkingValue: string;
   sessionKey: string;
@@ -317,6 +312,7 @@ function renderChatModelReasoningSelect(params: {
     modelSelectionLocked,
     modelOnly,
     modelOptions,
+    modelSettingsHref,
     selectedModelValue,
     selectedThinkingValue,
     sessionKey,
@@ -331,8 +327,8 @@ function renderChatModelReasoningSelect(params: {
     onRequestUpdate,
     onThinkingSelect,
   } = params;
-  const triggerModel = formatCombinedPickerModelLabel(triggerModelLabel);
-  const triggerThinking = formatCombinedPickerThinkingLabel(triggerThinkingLabel);
+  const triggerModel = modelCatalogUi.formatCombinedPickerModelLabel(triggerModelLabel);
+  const triggerThinking = modelCatalogUi.formatCombinedPickerThinkingLabel(triggerThinkingLabel);
   const triggerTitle = modelOnly ? triggerModel : `${triggerModel} · ${triggerThinking}`;
   const triggerLabel = triggerTitle;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
@@ -353,7 +349,7 @@ function renderChatModelReasoningSelect(params: {
   // no reset affordance, overrides render strong with an icon reset. Screen
   // readers keep the verbose default phrasing via aria-valuetext.
   const reasoningValueText = hasThinkingOverride
-    ? formatCombinedPickerThinkingLabel(
+    ? modelCatalogUi.formatCombinedPickerThinkingLabel(
         selectedThinkingOption?.label ?? formatThinkingOverrideLabel(selectedThinkingValue),
       )
     : defaultLevelLabel;
@@ -394,7 +390,10 @@ function renderChatModelReasoningSelect(params: {
     // text here: setting textContent on a Lit-managed span ejects the
     // ChildPart markers and permanently breaks every later menu render.
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    input.setAttribute("aria-valuetext", formatCombinedPickerThinkingLabel(stop.label));
+    input.setAttribute(
+      "aria-valuetext",
+      modelCatalogUi.formatCombinedPickerThinkingLabel(stop.label),
+    );
   };
   const onSliderCommit = (event: Event) => {
     if (thinkingDisabled) {
@@ -599,6 +598,7 @@ function renderChatModelReasoningSelect(params: {
                   )}
                 </div>
               </div>
+              ${modelCatalogUi.renderChatModelCatalogHint(modelSettingsHref)}
             `}
         ${showReasoningPanel
           ? html`

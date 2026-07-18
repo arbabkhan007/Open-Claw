@@ -89,6 +89,7 @@ import {
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
+import { replaceModeModelSettingsHref as modelHref } from "./chat-model-catalog.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -184,7 +185,6 @@ const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
-
 function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
   if (!record) {
@@ -2358,6 +2358,7 @@ class ChatPane extends OpenClawLightDomElement {
               gatewayAvailable: Boolean(state.client),
               loading: state.chatLoading,
               modelCatalog: state.chatModelCatalog,
+              modelSettingsHref: modelHref(state.chatModelCatalogMode, state.basePath),
               modelOverrides: state.sessions.state.modelOverrides,
               modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
               modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
