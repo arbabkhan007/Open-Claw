@@ -217,6 +217,8 @@ describe("user turn transcript persistence", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "display prompt",
+          bareBody: "trusted bare prompt",
+          inboundDecorated: true,
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
         },
@@ -237,6 +239,8 @@ describe("user turn transcript persistence", () => {
         content: "display prompt",
         provenance: { sourceChannel: "telegram" },
         timestamp: 123,
+        inboundDecorated: true,
+        bareBody: "trusted bare prompt",
         MediaPath: "/tmp/image.png",
         MediaType: "image/png",
       });
@@ -544,6 +548,8 @@ describe("user turn transcript persistence", () => {
         ...target,
         input: {
           text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
           idempotencyKey: "chat-run-1:user",
           senderIsOwner: true,
           provenance,
@@ -561,6 +567,8 @@ describe("user turn transcript persistence", () => {
         ...target,
         input: {
           text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
           idempotencyKey: "chat-run-1:user",
           senderIsOwner: true,
           provenance,
@@ -575,7 +583,8 @@ describe("user turn transcript persistence", () => {
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
 
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
+      const persistedMessages = await readTranscriptMessages(target);
+      expect(persistedMessages).toEqual([
         expect.objectContaining({
           role: "user",
           content: "[redacted by hook]",
@@ -593,7 +602,104 @@ describe("user turn transcript persistence", () => {
           },
         }),
       ]);
+      // PR intent (#95279): a redaction hook must not leak the trusted
+      // inbound bare body fields through to persisted storage.
+      expect(persistedMessages[0]).not.toHaveProperty("bareBody");
+      expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
       expect(hookCalls).toBe(1);
+    });
+
+    it("drops trusted bare body when before_message_write spreads and rewrites content", async () => {
+      // A redaction hook that returns `{ ...message, content }` would otherwise
+      // carry the original trusted `bareBody`/`inboundDecorated` through the
+      // spread, so downstream UI/replay/memory consumers would trust text the
+      // hook meant to redact. The persisted turn must clear those trusted
+      // inbound fields whenever the hook rewrites the content.
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const current = (event as { message: Record<string, unknown> }).message;
+              return {
+                message: castAgentMessage({
+                  ...current,
+                  role: "user",
+                  content: "[redacted by hook]",
+                }),
+              };
+            },
+          },
+        ]),
+      );
+      const dir = createTempDir("openclaw-user-turn-redacted-spread-");
+      const target = createSqliteTranscriptTarget({ dir });
+
+      await persistUserTurnTranscript({
+        ...target,
+        input: {
+          text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+
+      const persistedMessages = await readTranscriptMessages(target);
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "[redacted by hook]",
+        }),
+      ]);
+      // PR intent (#95279): a spread-style redaction hook must not leak the
+      // trusted inbound bare body fields into persisted storage.
+      expect(persistedMessages[0]).not.toHaveProperty("bareBody");
+      expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
+    });
+
+    it("drops trusted bare body when before_message_write mutates content in place", async () => {
+      // Some hooks mutate the event message and return the same object instead
+      // of returning a spread copy. Capture the original content before running
+      // the hook so this redaction style also clears stale trusted fields.
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const current = (event as { message: Record<string, unknown> }).message;
+              current.content = "[redacted in place by hook]";
+              return {
+                message: castAgentMessage(current),
+              };
+            },
+          },
+        ]),
+      );
+      const dir = createTempDir("openclaw-user-turn-redacted-in-place-");
+      const target = createSqliteTranscriptTarget({ dir });
+
+      await persistUserTurnTranscript({
+        ...target,
+        input: {
+          text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+
+      const persistedMessages = await readTranscriptMessages(target);
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "[redacted in place by hook]",
+        }),
+      ]);
+      // PR intent (#95279): an in-place redaction hook must not leak the
+      // trusted inbound bare body fields into persisted storage.
+      expect(persistedMessages[0]).not.toHaveProperty("bareBody");
+      expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
     });
   });
 

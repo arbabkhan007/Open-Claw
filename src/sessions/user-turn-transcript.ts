@@ -218,6 +218,10 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
+  const trustedBareBody =
+    params.inboundDecorated === true
+      ? normalizeTranscriptText(params.bareBody ?? params.text)
+      : undefined;
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
   // derived from each message's own `timestamp` field, so the current turn and
@@ -236,6 +240,8 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.inboundDecorated === true ? { inboundDecorated: true } : {}),
+    ...(trustedBareBody !== undefined ? { bareBody: trustedBareBody } : {}),
     ...mediaFields,
     ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
   } as PersistedUserTurnMessage;
@@ -386,6 +392,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     (message as unknown as { provenance?: unknown }).provenance,
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
+  const originalContent = (message as unknown as { content?: unknown }).content;
   const originalTransport = readOpenClawMessageMeta(message)?.transport;
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
@@ -404,19 +411,32 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport) {
-    return nextUserMessage;
-  }
-  const protectedMeta = {
-    ...readOpenClawMessageMeta(nextUserMessage),
-    ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
-    ...(transport ? { transport } : {}),
-  };
-  return {
-    ...(nextUserMessage as unknown as Record<string, unknown>),
+  const nextUserMessageRecord = nextUserMessage as unknown as Record<string, unknown>;
+  const preserved: Record<string, unknown> = {
+    ...nextUserMessageRecord,
     ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(Object.keys(protectedMeta).length > 0 ? { __openclaw: protectedMeta } : {}),
-  } as unknown as PersistedUserTurnMessage;
+    ...(typeof senderIsOwner === "boolean" || transport
+      ? {
+          __openclaw: {
+            ...readOpenClawMessageMeta(nextUserMessage),
+            ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
+            ...(transport ? { transport } : {}),
+          },
+        }
+      : {}),
+  };
+  // A before_message_write hook commonly returns `{ ...message, content }` to
+  // redact or rewrite user content. When the content changed, a spread-style
+  // return still carries the original trusted `bareBody`/`inboundDecorated`,
+  // so downstream UI/replay/memory consumers would trust text the hook meant
+  // to redact. Drop the trusted inbound fields whenever the hook rewrote the
+  // content; hooks that want a trusted bare body must keep the content or
+  // re-decorate it explicitly with a fresh safe body.
+  if (nextUserMessageRecord.content !== originalContent) {
+    delete preserved.inboundDecorated;
+    delete preserved.bareBody;
+  }
+  return preserved as unknown as PersistedUserTurnMessage;
 }
 
 // Store-backed persistence resolves the current session transcript file lazily

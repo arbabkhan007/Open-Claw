@@ -1466,6 +1466,13 @@ export async function runPreparedReply(
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
+  const userTurnBareBody =
+    promptSessionCtx.BareBody ?? sessionCtx.BareBody ?? ctx.BareBody ?? userTurnTranscriptText;
+  const userTurnInboundDecorated =
+    promptSessionCtx.InboundDecorated === true ||
+    sessionCtx.InboundDecorated === true ||
+    ctx.InboundDecorated === true ||
+    Boolean(currentInboundContext?.text);
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
   const transportMessageId =
@@ -1501,6 +1508,10 @@ export async function runPreparedReply(
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
+          ...(userTurnInboundDecorated ? { inboundDecorated: true } : {}),
+          ...(userTurnInboundDecorated && userTurnBareBody !== undefined
+            ? { bareBody: userTurnBareBody }
+            : {}),
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat

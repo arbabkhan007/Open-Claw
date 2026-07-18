@@ -8,7 +8,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../auto-reply/reply/strip-inbound-meta.js";
 import {
   materializeSessionArchiveForRead,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
@@ -2199,7 +2202,8 @@ export async function loadSessionLogs(params: {
       if (!content) {
         continue;
       }
-      content = stripInboundMetadata(content);
+      const trustedBareBody = role === "user" ? resolveTrustedInboundBareBody(message) : undefined;
+      content = trustedBareBody ?? stripInboundMetadata(content);
       if (role === "user") {
         content = stripMessageIdHints(stripEnvelope(content)).trim();
       }
