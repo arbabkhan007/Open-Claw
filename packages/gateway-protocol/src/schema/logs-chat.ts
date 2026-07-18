@@ -189,6 +189,7 @@ export const ChatErrorEventSchema = closedObject({
   state: Type.Literal("error"),
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
+  errorDetails: Type.Optional(Type.String()),
   errorKind: Type.Optional(ChatEventErrorKindSchema),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
