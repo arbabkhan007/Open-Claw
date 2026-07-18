@@ -14,9 +14,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
-
+import { hashStableExecFailure } from "./tool-loop-detection-exec-fingerprint.js";
 const log = createSubsystemLogger("agents/loop-detection");
-
 type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
@@ -202,23 +201,24 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   if (!status) {
     return undefined;
   }
-
   if (status === "running") {
     return digestStable({
       status,
       tail: stringField(details.tail) ?? "",
     });
   }
-
   if (status === "completed" || status === "failed") {
+    const exitCode = typeof details.exitCode === "number" ? details.exitCode : null;
+    if (status === "failed" || (exitCode !== null && exitCode !== 0)) {
+      return hashStableExecFailure(status, details);
+    }
     return digestStable({
       status,
-      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      exitCode,
       timedOut: details.timedOut === true,
       output: nonEmptyStringField(details.aggregated) ?? text,
     });
   }
-
   if (status === "approval-pending" || status === "approval-unavailable") {
     return digestStable({
       status,
