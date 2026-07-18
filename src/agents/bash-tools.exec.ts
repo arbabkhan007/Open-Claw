@@ -2020,6 +2020,7 @@ export function createExecTool(
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
+      let toolAborted = false;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
@@ -2033,6 +2034,14 @@ export function createExecTool(
         run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
+        }
+        toolAborted = true;
+        // Clear the yield timer so it cannot resolve the outer Promise with a
+        // running-session result after the process is killed but before the exit
+        // handler fires. A settled Promise silently ignores later reject.
+        if (yieldTimer) {
+          clearTimeout(yieldTimer);
+          yieldTimer = null;
         }
         run.kill();
       };
@@ -2105,6 +2114,10 @@ export function createExecTool(
         run.promise
           .then((outcome) => {
             cleanupToolRunListeners();
+            if (toolAborted) {
+              reject(new DOMException("Tool execution was aborted", "AbortError"));
+              return;
+            }
             if (yielded || run.session.backgrounded) {
               return;
             }
