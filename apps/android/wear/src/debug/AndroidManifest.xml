@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!-- Debug-only explicit adb target. Release variants never merge this manifest. -->
+        <activity
+            android:name=".WearScreenshotActivity"
+            android:exported="true"
+            tools:ignore="ExportedActivity" />
+    </application>
+</manifest>

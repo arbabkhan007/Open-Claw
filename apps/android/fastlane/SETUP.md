@@ -71,11 +71,21 @@ Generate deterministic Google Play screenshots:
 pnpm android:screenshots
 ```
 
-The script creates and boots a retained `OpenClaw_Screenshots_API36` AVD from
-Android's no-cutout Pixel 2 profile when needed. The API 36 Google APIs system
-image must be installed. Use `ANDROID_SCREENSHOT_AVD` or `--avd <name>` to
-select another AVD, or `--device <adb-serial>` to explicitly capture from a
-connected emulator.
+The command captures both form factors. It creates retained
+`OpenClaw_Screenshots_API36` (no-cutout Pixel 2) and
+`OpenClaw_Wear_Screenshots_API36` (large-round Wear OS) AVDs when needed. Install
+the API 36 Google APIs phone image and API 36 `android-wear-signed` Wear image
+for the host ABI before running it.
+
+Phone overrides use `ANDROID_SCREENSHOT_PHONE_AVD`,
+`ANDROID_SCREENSHOT_PHONE_DEVICE_PROFILE`, `ANDROID_SCREENSHOT_PHONE_SYSTEM_IMAGE`,
+and `ANDROID_SCREENSHOT_PHONE_SIZE`. Wear overrides use the corresponding
+`ANDROID_SCREENSHOT_WEAR_*` variables. The older generic
+`ANDROID_SCREENSHOT_AVD`, `ANDROID_SCREENSHOT_DEVICE_PROFILE`,
+`ANDROID_SCREENSHOT_SYSTEM_IMAGE`, and `ANDROID_SCREENSHOT_SIZE` variables remain
+phone-only fallbacks. For a one-form-factor maintainer capture, invoke
+`scripts/android-screenshots.sh --form-factor phone|wear` and optionally pass
+`--avd <name>` or `--device <emulator-serial>`.
 
 Upload metadata, release notes, and the Play AAB to the configured Google Play track:
 
@@ -112,15 +122,16 @@ Release rules:
 - `pnpm android:release:preflight` validates Google Play auth, Android release signing, synced versioning, release notes, and prints the package/track/version/versionCode that will be uploaded.
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
-- `pnpm android:screenshots` builds and installs the Play debug app, launches deterministic screenshot scenes, and captures raw PNGs.
-- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`.
-- `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:qa`.
+- `pnpm android:screenshots` builds and installs the phone and Wear debug apps, launches deterministic current-screen fixtures, and writes Play-ready JPEGs plus capture manifests.
+- `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`, with checksums and `release-manifest.json` provenance.
+- `pnpm android:release:upload` validates the AAB hashes, Git SHA, version, and phone/Wear version codes from `release-manifest.json`, then commits both bundles, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:qa`. Rerun the archive command if provenance is missing or stale.
 - Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
 - Production promotion remains manual in Google Play Console.
 - If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.
 
 Screenshots:
 
-- Android screenshot capture writes raw Play screenshots under `apps/android/fastlane/metadata/android/<locale>/images/phoneScreenshots/`.
+- Phone captures are written under `apps/android/fastlane/metadata/android/<locale>/images/phoneScreenshots/`; Wear captures use the sibling `wearScreenshots/` directory.
+- Capture evidence and checksums live under `.artifacts/android-screenshots/latest/<locale>/` and `.artifacts/android-wear-screenshots/latest/<locale>/`. Capture requires a clean checkout, and screenshot upload rejects any locale whose phone or Wear files do not exactly match the current Git SHA's manifest.
 - Set `SUPPLY_UPLOAD_SCREENSHOTS=1` to include those screenshots in `fastlane android metadata`.
 - Do not commit generated screenshot captures unless they become intentional store metadata assets.

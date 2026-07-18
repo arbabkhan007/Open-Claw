@@ -277,6 +277,14 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/apple-release-source-check.test.ts"],
     });
+    expect(resolveChangedTestTargetPlan(["scripts/lib/android-release-source.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/android-release-artifacts.test.ts",
+        "test/scripts/android-release-source.test.ts",
+        "test/scripts/android-screenshots.test.ts",
+      ],
+    });
     expect(resolveChangedTestTargetPlan(["scripts/ios-release-prepare.sh"])).toEqual({
       mode: "targets",
       targets: [
@@ -296,7 +304,10 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTestTargetPlan(["apps/android/scripts/build-release-artifacts.ts"]),
     ).toEqual({
       mode: "targets",
-      targets: ["test/scripts/android-release-artifacts.test.ts"],
+      targets: [
+        "test/scripts/android-release-artifact-manifest.test.ts",
+        "test/scripts/android-release-artifacts.test.ts",
+      ],
     });
     expect(resolveChangedTestTargetPlan([".github/workflows/android-release.yml"])).toEqual({
       mode: "targets",

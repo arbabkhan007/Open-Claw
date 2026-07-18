@@ -4,61 +4,58 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/android-screenshots.sh [--device <adb-serial>] [--avd <name>] [--locale en-US] [--skip-build] [--skip-install] [--keep-emulator] [--dry-run]
+  scripts/android-screenshots.sh [--form-factor phone|wear|all] [--device <adb-serial>] [--avd <name>] [--locale en-US] [--skip-build] [--skip-install] [--keep-emulator] [--dry-run]
 
-Builds and installs the Play debug app on an emulator, launches production screens
-with deterministic local fixture state, and writes Google Play screenshots under:
-  apps/android/fastlane/metadata/android/<locale>/images/phoneScreenshots/
+Builds and installs the selected debug app on an emulator, launches current screens
+with deterministic local fixture state, and writes Google Play screenshots under
+the locale's phoneScreenshots/ or wearScreenshots/ directory.
 
-Capture evidence is saved under:
-  .artifacts/android-screenshots/latest/
+Capture evidence is saved under a form-factor- and locale-specific .artifacts directory.
 
-By default, the script creates and boots a retained Pixel 2 AVD with no display
-cutout. Use --avd or ANDROID_SCREENSHOT_AVD to select another AVD, or --device
-to explicitly use a connected emulator.
+Phone capture defaults to a retained Pixel 2 AVD with no display cutout. Wear
+capture defaults to a retained API 36 large-round Wear OS AVD. Use --avd or
+--device to override the selected form factor's target.
 EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/apps/android"
-DEFAULT_SCREENSHOT_AVD="OpenClaw_Screenshots_API36"
-DEFAULT_SCREENSHOT_DEVICE_PROFILE="pixel_2"
 case "$(uname -m)" in
   arm64|aarch64) DEFAULT_SCREENSHOT_ABI="arm64-v8a" ;;
   *) DEFAULT_SCREENSHOT_ABI="x86_64" ;;
 esac
-DEFAULT_SCREENSHOT_SYSTEM_IMAGE="system-images;android-36;google_apis;${DEFAULT_SCREENSHOT_ABI}"
+FORM_FACTOR="${ANDROID_SCREENSHOT_FORM_FACTOR:-phone}"
 LOCALE="en-US"
-DEVICE="${ANDROID_SCREENSHOT_DEVICE:-}"
-AVD="${ANDROID_SCREENSHOT_AVD:-$DEFAULT_SCREENSHOT_AVD}"
-SCREENSHOT_DEVICE_PROFILE="${ANDROID_SCREENSHOT_DEVICE_PROFILE:-$DEFAULT_SCREENSHOT_DEVICE_PROFILE}"
-SCREENSHOT_SYSTEM_IMAGE="${ANDROID_SCREENSHOT_SYSTEM_IMAGE:-$DEFAULT_SCREENSHOT_SYSTEM_IMAGE}"
+DEVICE_OVERRIDE=""
+AVD_OVERRIDE=""
 KEEP_EMULATOR="${ANDROID_SCREENSHOT_KEEP_EMULATOR:-0}"
 SKIP_BUILD=0
 SKIP_INSTALL=0
 DRY_RUN=0
-SCENES=(home chat voice settings gateway voice-wake)
 EMULATOR_PID=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
-ARTIFACT_DIR="${ROOT_DIR}/.artifacts/android-screenshots/latest"
-SCREENSHOT_SIZE="${ANDROID_SCREENSHOT_SIZE:-1440x2560}"
 DISPLAY_OVERRIDDEN=0
 ORIGINAL_WM_SIZE=""
 ORIGINAL_WM_DENSITY=""
 SCREENSHOT_DENSITY=""
+SOURCE_GIT_SHA=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --)
       shift
       ;;
+    --form-factor)
+      FORM_FACTOR="${2:-}"
+      shift 2
+      ;;
     --device)
-      DEVICE="${2:-}"
+      DEVICE_OVERRIDE="${2:-}"
       shift 2
       ;;
     --avd)
-      AVD="${2:-}"
+      AVD_OVERRIDE="${2:-}"
       shift 2
       ;;
     --locale)
@@ -93,6 +90,74 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$FORM_FACTOR" == "all" ]]; then
+  if [[ -n "$DEVICE_OVERRIDE" || -n "$AVD_OVERRIDE" ]]; then
+    echo "--device and --avd require --form-factor phone or wear." >&2
+    echo "Use form-specific ANDROID_SCREENSHOT_PHONE_* and ANDROID_SCREENSHOT_WEAR_* overrides for an all-form-factor capture." >&2
+    exit 1
+  fi
+  all_args=(--locale "$LOCALE")
+  if [[ "$SKIP_BUILD" == "1" ]]; then
+    all_args+=(--skip-build)
+  fi
+  if [[ "$SKIP_INSTALL" == "1" ]]; then
+    all_args+=(--skip-install)
+  fi
+  if [[ "$KEEP_EMULATOR" == "1" ]]; then
+    all_args+=(--keep-emulator)
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    all_args+=(--dry-run)
+  fi
+  bash "${ROOT_DIR}/scripts/android-screenshots.sh" --form-factor phone "${all_args[@]}"
+  bash "${ROOT_DIR}/scripts/android-screenshots.sh" --form-factor wear "${all_args[@]}"
+  exit 0
+fi
+
+case "$FORM_FACTOR" in
+  phone)
+    DEVICE="${DEVICE_OVERRIDE:-${ANDROID_SCREENSHOT_PHONE_DEVICE:-${ANDROID_SCREENSHOT_DEVICE:-}}}"
+    AVD="${AVD_OVERRIDE:-${ANDROID_SCREENSHOT_PHONE_AVD:-${ANDROID_SCREENSHOT_AVD:-OpenClaw_Screenshots_API36}}}"
+    SCREENSHOT_DEVICE_PROFILE="${ANDROID_SCREENSHOT_PHONE_DEVICE_PROFILE:-${ANDROID_SCREENSHOT_DEVICE_PROFILE:-pixel_2}}"
+    SCREENSHOT_SYSTEM_IMAGE="${ANDROID_SCREENSHOT_PHONE_SYSTEM_IMAGE:-${ANDROID_SCREENSHOT_SYSTEM_IMAGE:-system-images;android-36;google_apis;${DEFAULT_SCREENSHOT_ABI}}}"
+    SCREENSHOT_SIZE="${ANDROID_SCREENSHOT_PHONE_SIZE:-${ANDROID_SCREENSHOT_SIZE:-1440x2560}}"
+    SCREENSHOT_SETTLE_SECONDS="${ANDROID_SCREENSHOT_PHONE_SETTLE_SECONDS:-${ANDROID_SCREENSHOT_SETTLE_SECONDS:-0.5}}"
+    SCREENSHOT_EMULATOR_ARGS="${ANDROID_SCREENSHOT_PHONE_EMULATOR_ARGS:-${ANDROID_SCREENSHOT_EMULATOR_ARGS:-}}"
+    ARTIFACT_ROOT="${ROOT_DIR}/.artifacts/android-screenshots/latest"
+    SYSTEM_IMAGE_ENV_VAR="ANDROID_SCREENSHOT_PHONE_SYSTEM_IMAGE"
+    SCREENSHOT_TYPE="phoneScreenshots"
+    GRADLE_TASK=":app:assemblePlayDebug"
+    APK_OUTPUT_DIR="${ANDROID_DIR}/app/build/outputs/apk/play/debug"
+    APK_PATTERN="*-play-debug.apk"
+    ACTIVITY_COMPONENT="ai.openclaw.app/.MainActivity"
+    SCENES=(home chat voice settings gateway voice-wake)
+    ;;
+  wear)
+    DEVICE="${DEVICE_OVERRIDE:-${ANDROID_SCREENSHOT_WEAR_DEVICE:-}}"
+    AVD="${AVD_OVERRIDE:-${ANDROID_SCREENSHOT_WEAR_AVD:-OpenClaw_Wear_Screenshots_API36}}"
+    SCREENSHOT_DEVICE_PROFILE="${ANDROID_SCREENSHOT_WEAR_DEVICE_PROFILE:-wearos_large_round}"
+    SCREENSHOT_SYSTEM_IMAGE="${ANDROID_SCREENSHOT_WEAR_SYSTEM_IMAGE:-system-images;android-36;android-wear-signed;${DEFAULT_SCREENSHOT_ABI}}"
+    SCREENSHOT_SIZE="${ANDROID_SCREENSHOT_WEAR_SIZE:-454x454}"
+    SCREENSHOT_SETTLE_SECONDS="${ANDROID_SCREENSHOT_WEAR_SETTLE_SECONDS:-2}"
+    SCREENSHOT_EMULATOR_ARGS="${ANDROID_SCREENSHOT_WEAR_EMULATOR_ARGS:-}"
+    ARTIFACT_ROOT="${ROOT_DIR}/.artifacts/android-wear-screenshots/latest"
+    SYSTEM_IMAGE_ENV_VAR="ANDROID_SCREENSHOT_WEAR_SYSTEM_IMAGE"
+    SCREENSHOT_TYPE="wearScreenshots"
+    GRADLE_TASK=":wear:assembleDebug"
+    APK_OUTPUT_DIR="${ANDROID_DIR}/wear/build/outputs/apk/debug"
+    APK_PATTERN="*-debug.apk"
+    ACTIVITY_COMPONENT="ai.openclaw.app/ai.openclaw.wear.WearScreenshotActivity"
+    SCENES=(chat voice agents sessions controls)
+    ;;
+  *)
+    echo "Invalid Android screenshot form factor: ${FORM_FACTOR}" >&2
+    echo "Use --form-factor phone, wear, or all." >&2
+    exit 1
+    ;;
+esac
+
+PACKAGE_ID="ai.openclaw.app"
+
 validate_locale() {
   local locale="$1"
   if [[ "$locale" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
@@ -104,6 +169,7 @@ validate_locale() {
 }
 
 validate_locale "$LOCALE"
+ARTIFACT_DIR="${ARTIFACT_ROOT}/${LOCALE}"
 
 if [[ ! "$SCREENSHOT_SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
   echo "Invalid Android screenshot size: ${SCREENSHOT_SIZE}" >&2
@@ -114,10 +180,35 @@ SCREENSHOT_WIDTH=$((10#${SCREENSHOT_SIZE%x*}))
 SCREENSHOT_HEIGHT=$((10#${SCREENSHOT_SIZE#*x}))
 SCREENSHOT_MIN_DIMENSION=$((SCREENSHOT_WIDTH < SCREENSHOT_HEIGHT ? SCREENSHOT_WIDTH : SCREENSHOT_HEIGHT))
 SCREENSHOT_MAX_DIMENSION=$((SCREENSHOT_WIDTH > SCREENSHOT_HEIGHT ? SCREENSHOT_WIDTH : SCREENSHOT_HEIGHT))
-if (( SCREENSHOT_MIN_DIMENSION < 320 || SCREENSHOT_MAX_DIMENSION > 3840 || SCREENSHOT_MAX_DIMENSION > SCREENSHOT_MIN_DIMENSION * 2 )); then
+if [[ "$FORM_FACTOR" == "wear" ]] &&
+  (( SCREENSHOT_WIDTH != SCREENSHOT_HEIGHT || SCREENSHOT_MIN_DIMENSION < 384 || SCREENSHOT_MAX_DIMENSION > 3840 )); then
+  echo "Wear screenshot size ${SCREENSHOT_SIZE} must be square, at least 384x384, and no larger than 3840x3840." >&2
+  exit 1
+fi
+if [[ "$FORM_FACTOR" == "phone" ]] &&
+  (( SCREENSHOT_MIN_DIMENSION < 320 || SCREENSHOT_MAX_DIMENSION > 3840 || SCREENSHOT_MAX_DIMENSION > SCREENSHOT_MIN_DIMENSION * 2 )); then
   echo "Android screenshot size ${SCREENSHOT_SIZE} does not meet Google Play dimension and aspect-ratio limits." >&2
   exit 1
 fi
+
+wait_for_device_disconnect() {
+  local adb="$1"
+  local serial="$2"
+  local timeout_seconds="${ANDROID_SCREENSHOT_SHUTDOWN_TIMEOUT_SECONDS:-30}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local state
+
+  while (( SECONDS < deadline )); do
+    state="$("$adb" -s "$serial" get-state 2>/dev/null || true)"
+    if [[ "$state" != "device" ]]; then
+      return
+    fi
+    sleep 1
+  done
+
+  echo "Timed out waiting for Android emulator ${serial} to disconnect." >&2
+  return 1
+}
 
 cleanup_started_emulator() {
   local stopped=0
@@ -132,6 +223,9 @@ cleanup_started_emulator() {
   fi
   if [[ "$stopped" != "1" && -n "$EMULATOR_PID" ]]; then
     kill "$EMULATOR_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${ADB_BIN:-}" && -n "${ADB_SERIAL:-}" ]]; then
+    wait_for_device_disconnect "$ADB_BIN" "$ADB_SERIAL" || true
   fi
 }
 
@@ -235,14 +329,14 @@ ensure_screenshot_avd() {
   fi
 
   avdmanager="$(avdmanager_bin)"
-  echo "Creating no-cutout screenshot AVD '${avd}' from device profile '${SCREENSHOT_DEVICE_PROFILE}'." >&2
+  echo "Creating ${FORM_FACTOR} screenshot AVD '${avd}' from device profile '${SCREENSHOT_DEVICE_PROFILE}'." >&2
   if ! printf 'no\n' | "$avdmanager" create avd \
     --force \
     --name "$avd" \
     --package "$SCREENSHOT_SYSTEM_IMAGE" \
     --device "$SCREENSHOT_DEVICE_PROFILE"; then
     echo "Could not create Android screenshot AVD '${avd}'." >&2
-    echo "Install SDK package '${SCREENSHOT_SYSTEM_IMAGE}' or set ANDROID_SCREENSHOT_SYSTEM_IMAGE." >&2
+    echo "Install SDK package '${SCREENSHOT_SYSTEM_IMAGE}' or set ${SYSTEM_IMAGE_ENV_VAR}." >&2
     return 1
   fi
 }
@@ -263,24 +357,47 @@ running_avd_name() {
   "$adb" -s "$serial" emu avd name 2>/dev/null | tr -d '\r' | sed -n '1p'
 }
 
-wait_for_single_device() {
+connected_avd_serials() {
   local adb="$1"
+  local avd="$2"
+  local devices
+  local serial
+  local connected_avd
+
+  devices="$(connected_devices "$adb")"
+  while IFS= read -r serial; do
+    [[ -n "$serial" ]] || continue
+    connected_avd="$(running_avd_name "$adb" "$serial" || true)"
+    if [[ "$connected_avd" == "$avd" ]]; then
+      printf '%s\n' "$serial"
+    fi
+  done <<<"$devices"
+}
+
+wait_for_target_avd() {
+  local adb="$1"
+  local avd="$2"
   local timeout_seconds="${ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS:-180}"
   local deadline=$((SECONDS + timeout_seconds))
-  local devices
+  local matches
   local count
 
   while (( SECONDS < deadline )); do
-    devices="$(connected_devices "$adb")"
-    count="$(device_count "$devices")"
+    matches="$(connected_avd_serials "$adb" "$avd")"
+    count="$(device_count "$matches")"
     if [[ "$count" == "1" ]]; then
-      printf '%s\n' "$devices"
+      printf '%s\n' "$matches"
       return
+    fi
+    if (( count > 1 )); then
+      echo "Multiple connected emulators report the target AVD '${avd}':" >&2
+      printf '%s\n' "$matches" >&2
+      return 1
     fi
     sleep 2
   done
 
-  echo "Timed out waiting for exactly one Android emulator device." >&2
+  echo "Timed out waiting for screenshot AVD '${avd}' to connect." >&2
   "$adb" devices -l >&2 || true
   return 1
 }
@@ -353,6 +470,29 @@ require_emulator_device() {
   return 1
 }
 
+require_device_form_factor() {
+  local adb="$1"
+  local serial="$2"
+  local features
+  local is_watch=false
+
+  if ! features="$("$adb" -s "$serial" shell pm list features 2>/dev/null | tr -d '\r')"; then
+    echo "Could not determine the Android form factor for '${serial}'." >&2
+    return 1
+  fi
+  if grep -Fxq "feature:android.hardware.type.watch" <<<"$features"; then
+    is_watch=true
+  fi
+  if [[ "$FORM_FACTOR" == "wear" && "$is_watch" != "true" ]]; then
+    echo "Wear screenshot capture requires a Wear OS emulator; '${serial}' reports a non-watch form factor." >&2
+    return 1
+  fi
+  if [[ "$FORM_FACTOR" == "phone" && "$is_watch" != "false" ]]; then
+    echo "Phone screenshot capture cannot use a Wear OS emulator; '${serial}' reports a watch form factor." >&2
+    return 1
+  fi
+}
+
 configure_screenshot_display() {
   local adb="$1"
   local serial="$2"
@@ -392,17 +532,17 @@ boot_emulator() {
   ensure_screenshot_avd "$avd"
   emulator="$(emulator_bin)"
   EMULATOR_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-android-screenshot-emulator.XXXXXX.log")"
-  echo "No connected Android device found. Booting AVD '${avd}'." >&2
+  echo "Booting screenshot AVD '${avd}'." >&2
   emulator_args=(-avd "$avd" -no-window -no-audio -no-boot-anim)
-  if [[ -n "${ANDROID_SCREENSHOT_EMULATOR_ARGS:-}" ]]; then
-    read -r -a extra_args <<<"$ANDROID_SCREENSHOT_EMULATOR_ARGS"
+  if [[ -n "$SCREENSHOT_EMULATOR_ARGS" ]]; then
+    read -r -a extra_args <<<"$SCREENSHOT_EMULATOR_ARGS"
     emulator_args+=("${extra_args[@]}")
   fi
   "$emulator" "${emulator_args[@]}" >"$EMULATOR_LOG" 2>&1 &
   EMULATOR_PID="$!"
   STARTED_EMULATOR=1
 
-  serial="$(wait_for_single_device "$adb")"
+  serial="$(wait_for_target_avd "$adb" "$avd")"
   wait_for_boot_completed "$adb" "$serial"
   stabilize_device_for_screenshots "$adb" "$serial"
   ADB_SERIAL="$serial"
@@ -410,9 +550,8 @@ boot_emulator() {
 
 resolve_device() {
   local adb="$1"
-  local devices
+  local matches
   local count
-  local connected_avd
 
   if [[ -n "$DEVICE" ]]; then
     wait_for_explicit_device "$adb" "$DEVICE"
@@ -420,45 +559,44 @@ resolve_device() {
     ADB_SERIAL="$DEVICE"
     return
   fi
-  devices="$(connected_devices "$adb")"
-  count="$(device_count "$devices")"
+  matches="$(connected_avd_serials "$adb" "$AVD")"
+  count="$(device_count "$matches")"
   if [[ "$count" == "1" ]]; then
-    connected_avd="$(running_avd_name "$adb" "$devices")"
-    if [[ "$connected_avd" != "$AVD" ]]; then
-      echo "Connected emulator '${connected_avd:-unknown}' is not the screenshot AVD '${AVD}'." >&2
-      echo "Stop it so the script can boot '${AVD}', or pass --device '${devices}' to override the no-cutout profile." >&2
-      return 1
-    fi
-    stabilize_device_for_screenshots "$adb" "$devices"
-    ADB_SERIAL="$devices"
+    stabilize_device_for_screenshots "$adb" "$matches"
+    ADB_SERIAL="$matches"
     return
   fi
   if [[ "$count" == "0" ]]; then
     boot_emulator "$adb" "$AVD"
     return
-  else
-    echo "Multiple Android devices are connected. Pass --device <adb-serial>." >&2
   fi
+  echo "Multiple connected emulators report the screenshot AVD '${AVD}'. Pass --device <adb-serial>." >&2
+  printf '%s\n' "$matches" >&2
   return 1
 }
 
-latest_play_debug_apk() {
-  if [[ ! -d "${ANDROID_DIR}/app/build/outputs/apk/play/debug" ]]; then
+latest_debug_apk() {
+  if [[ ! -d "$APK_OUTPUT_DIR" ]]; then
     return 0
   fi
-  find "${ANDROID_DIR}/app/build/outputs/apk/play/debug" -maxdepth 1 -name '*-play-debug.apk' -print 2>/dev/null | sort | tail -n 1
+  find "$APK_OUTPUT_DIR" -maxdepth 1 -name "$APK_PATTERN" -print 2>/dev/null | sort | tail -n 1
 }
 
 scene_ready_text() {
-  case "$1" in
-    home) printf '%s\n' "Overview" ;;
-    chat) printf '%s\n' "Ready when you are" ;;
-    voice) printf '%s\n' "Ready to talk" ;;
-    settings) printf '%s\n' "OpenClaw mobile" ;;
-    voice-wake) printf '%s\n' "Wake listener" ;;
+  case "${FORM_FACTOR}:$1" in
+    phone:home) printf '%s\n' "Overview" ;;
+    phone:chat) printf '%s\n' "Ready when you are" ;;
+    phone:voice) printf '%s\n' "Ready to talk" ;;
+    phone:settings) printf '%s\n' "OpenClaw mobile" ;;
+    phone:voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so
     # wait for the gateway detail's always-visible subtitle instead.
-    gateway) printf '%s\n' "Connection between this phone and OpenClaw." ;;
+    phone:gateway) printf '%s\n' "Connection between this phone and OpenClaw." ;;
+    wear:chat) printf '%s\n' "CHAT" ;;
+    wear:voice) printf '%s\n' "Dictate" ;;
+    wear:agents) printf '%s\n' "AGENTS" ;;
+    wear:sessions) printf '%s\n' "SESSIONS" ;;
+    wear:controls) printf '%s\n' "CONTROLS" ;;
     *)
       echo "Unknown Android screenshot scene: $1" >&2
       return 1
@@ -487,6 +625,28 @@ wait_for_scene_ready() {
 
   echo "Timed out waiting for scene '${scene}' to expose '${marker}' in the Android UI tree." >&2
   return 1
+}
+
+launch_scene() {
+  local adb="$1"
+  local serial="$2"
+  local scene="$3"
+  local activity_start_path="$4"
+  local launch_args
+
+  launch_args=(
+    -s "$serial" shell am start -W
+    -n "$ACTIVITY_COMPONENT"
+  )
+  if [[ "$FORM_FACTOR" == "phone" ]]; then
+    launch_args+=(--ez openclaw.screenshotMode true)
+  else
+    # Start each debug fixture as a fresh task so saved pager state cannot leak
+    # between store scenes.
+    launch_args+=(--activity-new-task --activity-clear-task)
+  fi
+  launch_args+=(--es openclaw.screenshotScene "$scene")
+  "$adb" "${launch_args[@]}" >"$activity_start_path"
 }
 
 sips_bin() {
@@ -522,11 +682,15 @@ normalize_capture_for_play() {
 write_artifact_manifest() {
   local serial="$1"
   local avd_name
+  local checksum
   local git_sha
   local checksum_command
+  local relative_path
+  local scene
+  local screenshot_path
 
   avd_name="$(running_avd_name "$ADB_BIN" "$serial")"
-  git_sha="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  git_sha="$SOURCE_GIT_SHA"
   if command -v shasum >/dev/null 2>&1; then
     checksum_command=(shasum -a 256)
   else
@@ -535,25 +699,37 @@ write_artifact_manifest() {
 
   {
     printf 'git_sha=%s\n' "$git_sha"
+    printf 'form_factor=%s\n' "$FORM_FACTOR"
     printf 'device=%s\n' "$serial"
     printf 'avd=%s\n' "${avd_name:-unknown}"
+    printf 'component=%s\n' "$ACTIVITY_COMPONENT"
+    printf 'gradle_task=%s\n' "$GRADLE_TASK"
     printf 'locale=%s\n' "$LOCALE"
     printf 'size=%s\n' "$SCREENSHOT_SIZE"
     printf 'density=%s\n' "$SCREENSHOT_DENSITY"
     printf 'format=high-quality JPEG\n'
     printf 'scenes=%s\n' "${SCENES[*]}"
-    printf 'screenshots:\n'
-    "${checksum_command[@]}" "$ARTIFACT_DIR"/screenshots/*.jpg
+    for screenshot_path in "$OUTPUT_DIR"/*.jpg; do
+      scene="$(basename "$screenshot_path" .jpg)"
+      scene="${scene#openclaw-}"
+      relative_path="${screenshot_path#"$ROOT_DIR"/}"
+      checksum="$("${checksum_command[@]}" "$screenshot_path" | awk '{ print $1 }')"
+      printf 'screenshot.%s.path=%s\n' "$scene" "$relative_path"
+      printf 'screenshot.%s.sha256=%s\n' "$scene" "$checksum"
+    done
   } >"$ARTIFACT_DIR/manifest.txt"
 }
 
-OUTPUT_DIR="${ANDROID_DIR}/fastlane/metadata/android/${LOCALE}/images/phoneScreenshots"
+OUTPUT_DIR="${ANDROID_DIR}/fastlane/metadata/android/${LOCALE}/images/${SCREENSHOT_TYPE}"
 ADB_SERIAL=""
 ADB_DISPLAY="${DEVICE:-<auto>}"
 
+echo "Android screenshot form factor: ${FORM_FACTOR}"
 echo "Android screenshot output: ${OUTPUT_DIR}"
 echo "Android screenshot artifacts: ${ARTIFACT_DIR}"
 echo "Android screenshot size: ${SCREENSHOT_SIZE}"
+echo "Android screenshot component: ${ACTIVITY_COMPONENT}"
+echo "Android screenshot Gradle task: ${GRADLE_TASK}"
 echo "Scenes: ${SCENES[*]}"
 echo "ADB device: ${ADB_DISPLAY}"
 echo "Screenshot AVD: ${AVD}"
@@ -565,9 +741,15 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+SOURCE_GIT_SHA="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+node --import tsx "${ROOT_DIR}/scripts/lib/android-release-source.ts" \
+  --root "$ROOT_DIR" \
+  --expected-commit "$SOURCE_GIT_SHA"
+
 ADB_BIN="$(adb_bin)"
 resolve_device "$ADB_BIN"
 require_emulator_device "$ADB_BIN" "$ADB_SERIAL"
+require_device_form_factor "$ADB_BIN" "$ADB_SERIAL"
 configure_screenshot_display "$ADB_BIN" "$ADB_SERIAL"
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
@@ -578,24 +760,26 @@ if [[ "$SKIP_INSTALL" != "1" ]]; then
   if [[ "$SKIP_BUILD" != "1" ]]; then
     (
       cd "$ANDROID_DIR"
-      ./gradlew :app:assemblePlayDebug
+      ./gradlew "$GRADLE_TASK"
     )
   fi
-  APK_PATH="$(latest_play_debug_apk)"
+  APK_PATH="$(latest_debug_apk)"
   if [[ -z "$APK_PATH" ]]; then
-    echo "No existing Play debug APK found. Run without --skip-build first." >&2
+    echo "No existing ${FORM_FACTOR} debug APK found. Run without --skip-build first." >&2
     exit 1
   fi
   "$ADB_BIN" -s "$ADB_SERIAL" install -r "$APK_PATH" >/dev/null
 elif [[ "$SKIP_BUILD" != "1" ]]; then
   (
     cd "$ANDROID_DIR"
-    ./gradlew :app:assemblePlayDebug
+    ./gradlew "$GRADLE_TASK"
   )
 fi
 
-"$ADB_BIN" -s "$ADB_SERIAL" shell pm clear ai.openclaw.app >/dev/null
-"$ADB_BIN" -s "$ADB_SERIAL" shell pm grant ai.openclaw.app android.permission.RECORD_AUDIO >/dev/null
+"$ADB_BIN" -s "$ADB_SERIAL" shell pm clear "$PACKAGE_ID" >/dev/null
+if [[ "$FORM_FACTOR" == "phone" ]]; then
+  "$ADB_BIN" -s "$ADB_SERIAL" shell pm grant "$PACKAGE_ID" android.permission.RECORD_AUDIO >/dev/null
+fi
 "$ADB_BIN" -s "$ADB_SERIAL" logcat -c >/dev/null 2>&1 || true
 
 for scene in "${SCENES[@]}"; do
@@ -604,13 +788,10 @@ for scene in "${SCENES[@]}"; do
   artifact_path="${ARTIFACT_DIR}/screenshots/openclaw-${scene}.jpg"
   ui_dump_path="${ARTIFACT_DIR}/ui-dumps/openclaw-${scene}.xml"
   activity_start_path="${ARTIFACT_DIR}/activity-start/openclaw-${scene}.txt"
-  "$ADB_BIN" -s "$ADB_SERIAL" shell am force-stop ai.openclaw.app >/dev/null
-  "$ADB_BIN" -s "$ADB_SERIAL" shell am start -W \
-    -n ai.openclaw.app/.MainActivity \
-    --ez openclaw.screenshotMode true \
-    --es openclaw.screenshotScene "$scene" >"$activity_start_path"
+  "$ADB_BIN" -s "$ADB_SERIAL" shell am force-stop "$PACKAGE_ID" >/dev/null
+  launch_scene "$ADB_BIN" "$ADB_SERIAL" "$scene" "$activity_start_path"
   wait_for_scene_ready "$ADB_BIN" "$ADB_SERIAL" "$scene" "$ui_dump_path"
-  sleep "${ANDROID_SCREENSHOT_SETTLE_SECONDS:-0.5}"
+  sleep "$SCREENSHOT_SETTLE_SECONDS"
   "$ADB_BIN" -s "$ADB_SERIAL" exec-out screencap -p >"$raw_path"
   normalize_capture_for_play "$raw_path" "$output_path"
   cp "$output_path" "$artifact_path"

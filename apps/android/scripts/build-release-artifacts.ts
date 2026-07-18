@@ -18,7 +18,17 @@ import {
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
+import {
+  resolveAndroidVersion,
+  syncAndroidVersioning,
+} from "../../../scripts/lib/android-version.ts";
+import { verifyAndroidReleaseSource } from "../../../scripts/lib/android-release-source.ts";
+import {
+  type AndroidReleaseArtifactRecord,
+  writeAndroidReleaseArtifactManifest,
+} from "../../../scripts/android-release-artifact-manifest.ts";
+
+export { verifyAndroidReleaseSource };
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -123,38 +133,6 @@ export function androidBuildMetadataGradleArgs(metadata: AndroidBuildMetadata): 
   ];
 }
 
-export function verifyAndroidReleaseSource(
-  expectedCommit: string,
-  options: {
-    rootDir?: string;
-    runGit?: (args: string[], cwd: string) => string;
-  } = {},
-): void {
-  const cwd = options.rootDir ?? rootDir;
-  const runGit =
-    options.runGit ??
-    ((args: string[], gitCwd: string) =>
-      execFileSync("git", args, {
-        cwd: gitCwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }));
-  let head: string;
-  let status: string;
-  try {
-    head = normalizeFullGitCommit(runGit(["rev-parse", "HEAD"], cwd));
-    status = runGit(["status", "--porcelain", "--untracked-files=all"], cwd).trim();
-  } catch {
-    throw new Error("Android release builds require a readable Git checkout");
-  }
-  if (head !== expectedCommit) {
-    throw new Error(`Android release commit mismatch: metadata ${expectedCommit}, checkout ${head}`);
-  }
-  if (status) {
-    throw new Error("Android release builds require a clean Git checkout");
-  }
-}
-
 function parseArgs(argv: string[]): CliOptions {
   let artifact: CliOptions["artifact"] = "all";
   let dryRun = false;
@@ -226,7 +204,15 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
       flavorName: "wear",
       kind: "aab",
       gradleTask: ":wear:bundleRelease",
-      sourcePath: join(androidDir, "wear", "build", "outputs", "bundle", "release", "wear-release.aab"),
+      sourcePath: join(
+        androidDir,
+        "wear",
+        "build",
+        "outputs",
+        "bundle",
+        "release",
+        "wear-release.aab",
+      ),
     },
     {
       flavorName: "play",
@@ -412,7 +398,7 @@ function main() {
     return;
   }
 
-  verifyAndroidReleaseSource(buildMetadata.commit);
+  verifyAndroidReleaseSource(buildMetadata.commit, { rootDir });
   mkdirSync(releaseOutputDir, { recursive: true });
   execFileSync(
     "./gradlew",
@@ -426,6 +412,7 @@ function main() {
     },
   );
 
+  const builtArtifacts: AndroidReleaseArtifactRecord[] = [];
   for (const artifact of artifacts) {
     const outputPath = join(
       releaseOutputDir,
@@ -435,13 +422,30 @@ function main() {
     copyArtifact(artifact.sourcePath, outputPath);
     verifyArtifactSignature(artifact, outputPath, expectedCertificateSha256);
     const hash = writeSha256File(outputPath);
+    builtArtifacts.push({
+      file: basename(outputPath),
+      flavor: artifact.flavorName,
+      sha256: hash,
+    });
 
     console.log(`Signed ${artifact.kind.toUpperCase()} (${artifact.flavorName}): ${outputPath}`);
     console.log(`SHA-256 (${artifact.flavorName}): ${hash}`);
   }
+  const manifestPath = writeAndroidReleaseArtifactManifest({
+    artifacts: builtArtifacts,
+    buildTimestamp: buildMetadata.timestamp,
+    gitCommit: buildMetadata.commit,
+    phoneVersionCode: version.versionCode,
+    rootDir,
+    versionName: version.canonicalVersion,
+    wearVersionCode: version.versionCode + 50,
+  });
+  console.log(`Android release artifact manifest: ${manifestPath}`);
 }
 
-const isMain = process.argv[1] ? resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
+const isMain = process.argv[1]
+  ? resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 if (isMain) {
   main();
 }

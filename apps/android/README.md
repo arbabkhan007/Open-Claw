@@ -93,19 +93,39 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
-The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
-created from Android's no-cutout Pixel 2 profile. It creates the AVD when
-missing, boots it headlessly, waits for Android to finish booting, disables
-animations, captures the screenshots, then shuts down the emulator it started.
-The API 36 Google APIs system image must be installed in the local Android SDK.
-Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
-explicitly use a connected emulator.
+The command captures phone and Wear store images in sequence. It defaults to the
+retained `OpenClaw_Screenshots_API36` no-cutout Pixel 2 AVD and the retained
+`OpenClaw_Wear_Screenshots_API36` large-round Wear OS AVD. It creates missing
+AVDs, boots each target headlessly, waits for Android, disables animations,
+captures current deterministic screens, then waits for any emulator it started
+to disconnect before moving to the other form factor. Install both the API 36
+Google APIs phone image and API 36 `android-wear-signed` Wear image for the host
+ABI.
 
-`pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
+Form-specific overrides use `ANDROID_SCREENSHOT_PHONE_*` and
+`ANDROID_SCREENSHOT_WEAR_*`. Existing generic `ANDROID_SCREENSHOT_*` AVD,
+profile, image, and size overrides remain phone-only fallbacks. For a focused
+maintainer capture, run `scripts/android-screenshots.sh --form-factor phone|wear`
+with optional `--avd` or `--device` selection. Output is written to the locale's
+`images/phoneScreenshots/` and `images/wearScreenshots/` directories; current-SHA
+capture manifests are stored at
+`.artifacts/android-screenshots/latest/<locale>/manifest.txt` and
+`.artifacts/android-wear-screenshots/latest/<locale>/manifest.txt`. Capture
+rejects a dirty checkout so those manifests describe the bytes at their recorded
+commit.
+
+`pnpm android:release:archive` builds signed release artifacts into
+`apps/android/build/release-artifacts/`, writes `.sha256` checksum files, and
+writes `release-manifest.json` binding the archived bytes to their Git commit,
+version, and phone/Wear version codes:
 
 - Play build: `openclaw-<version>-play-release.aab`
 - Wear build: `openclaw-<version>-wear-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
+
+Play upload validates both AABs against `release-manifest.json`; if the manifest
+is missing or stale, rerun `pnpm android:release:archive` from the intended clean
+commit before retrying the release lane.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
@@ -200,15 +220,15 @@ Hotspot script behavior:
 
 ## Run on a Real Android Phone (USB)
 
-1) On phone, enable **Developer options** + **USB debugging**.
-2) Connect by USB and accept the debugging trust prompt on phone.
-3) Verify ADB can see the device:
+1. On phone, enable **Developer options** + **USB debugging**.
+2. Connect by USB and accept the debugging trust prompt on phone.
+3. Verify ADB can see the device:
 
 ```bash
 adb devices -l
 ```
 
-4) Install + launch debug build:
+4. Install + launch debug build:
 
 ```bash
 pnpm android:install
@@ -250,18 +270,18 @@ This app is native Kotlin + Jetpack Compose.
 
 ## Connect / Pair
 
-1) Start the gateway (on your main machine):
+1. Start the gateway (on your main machine):
 
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+2. In the Android app:
 
 - Open the **Connect** tab.
 - Use **Setup Code** or **Manual** mode to connect.
 
-3) Approve pairing (on the gateway machine):
+3. Approve pairing (on the gateway machine):
 
 ```bash
 openclaw devices list
@@ -333,15 +353,15 @@ This suite assumes setup is already done manually. It does **not** install/run/p
 
 Pre-req checklist:
 
-1) Gateway is running and reachable from the Android app.
-2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
-3) App stays unlocked and in foreground for the whole run.
-4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
-5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
-6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
+1. Gateway is running and reachable from the Android app.
+2. Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
+3. App stays unlocked and in foreground for the whole run.
+4. Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
+5. Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
+6. No interactive system dialogs should be pending before test start.
+7. Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+8. Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
+9. For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
 
 ```bash
 openclaw devices list
