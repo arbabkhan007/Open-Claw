@@ -21,11 +21,12 @@ import {
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 import {
-  isExistingWorkspaceSkillMountSource,
-  resolveMaterializedSandboxSkillsWorkspaceDir,
-} from "./workspace-mounts.js";
-
-type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
+  buildRemoteProtectedSkillMounts,
+  compareRemoteMountsByContainerPath,
+  compareRemoteMountsByLocalPath,
+  type MountInfo,
+  type RemoteMountSource,
+} from "./remote-fs-bridge-mounts.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
@@ -40,13 +41,6 @@ function hasMultipleHardlinks(raw: string): boolean {
   }
   return /^\d+$/.test(raw);
 }
-
-type MountInfo = {
-  localRoot: string;
-  containerRoot: string;
-  writable: boolean;
-  source: RemoteMountSource;
-};
 
 /** Minimal remote shell contract used by the SSH filesystem bridge. */
 export type RemoteShellSandboxHandle = {
@@ -135,6 +129,43 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     await this.runMutation({
       args: [
         "write",
+        pinned.mountRootPath,
+        pinned.relativeParentPath,
+        pinned.basename,
+        params.mkdir !== false ? "1" : "0",
+      ],
+      stdin: buffer,
+      signal: params.signal,
+    });
+  }
+
+  async appendFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const target = this.resolveTarget(params);
+    await this.ensureRemoteWritable(target, "append to files", params.signal);
+    const pinned = await this.resolvePinnedParent({
+      containerPath: target.containerPath,
+      action: "append to files",
+      requireWritable: true,
+      signal: params.signal,
+    });
+    await this.assertNoHardlinkedFile({
+      containerPath: target.containerPath,
+      action: "append to files",
+      signal: params.signal,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    await this.runMutation({
+      args: [
+        "append",
         pinned.mountRootPath,
         pinned.relativeParentPath,
         pinned.basename,
@@ -631,102 +662,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       allowFailure: params.allowFailure,
     });
   }
-}
-
-function buildRemoteProtectedSkillMounts(params: {
-  localRoot: string;
-  skillsWorkspaceDir?: string;
-  workspaceContainerRoot: string;
-  agentContainerRoot: string;
-  includeAgentMount: boolean;
-}): MountInfo[] {
-  const materializedSkillsWorkspaceDir = path.resolve(
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.localRoot),
-  );
-  const mounts: Array<MountInfo & { allowedRoot: string }> = [
-    {
-      localRoot: path.join(params.localRoot, "skills"),
-      containerRoot: path.posix.join(params.workspaceContainerRoot, "skills"),
-      writable: false,
-      source: "protectedSkill",
-      allowedRoot: params.localRoot,
-    },
-    {
-      localRoot: path.join(params.localRoot, ".agents", "skills"),
-      containerRoot: path.posix.join(params.workspaceContainerRoot, ".agents", "skills"),
-      writable: false,
-      source: "protectedSkill",
-      allowedRoot: params.localRoot,
-    },
-    {
-      localRoot: path.join(materializedSkillsWorkspaceDir, "skills"),
-      containerRoot: path.posix.join(
-        params.workspaceContainerRoot,
-        ".openclaw",
-        "sandbox-skills",
-        "skills",
-      ),
-      writable: false,
-      source: "protectedSkill",
-      allowedRoot: materializedSkillsWorkspaceDir,
-    },
-  ];
-  if (params.includeAgentMount) {
-    mounts.push(
-      {
-        localRoot: path.join(params.localRoot, "skills"),
-        containerRoot: path.posix.join(params.agentContainerRoot, "skills"),
-        writable: false,
-        source: "protectedSkill",
-        allowedRoot: params.localRoot,
-      },
-      {
-        localRoot: path.join(params.localRoot, ".agents", "skills"),
-        containerRoot: path.posix.join(params.agentContainerRoot, ".agents", "skills"),
-        writable: false,
-        source: "protectedSkill",
-        allowedRoot: params.localRoot,
-      },
-      {
-        localRoot: path.join(materializedSkillsWorkspaceDir, "skills"),
-        containerRoot: path.posix.join(
-          params.agentContainerRoot,
-          ".openclaw",
-          "sandbox-skills",
-          "skills",
-        ),
-        writable: false,
-        source: "protectedSkill",
-        allowedRoot: materializedSkillsWorkspaceDir,
-      },
-    );
-  }
-  return mounts
-    .filter((mount) =>
-      isExistingWorkspaceSkillMountSource({
-        rootDir: mount.allowedRoot,
-        hostPath: mount.localRoot,
-      }),
-    )
-    .map(({ allowedRoot: _allowedRoot, ...mount }) => mount);
-}
-
-function compareRemoteMountsByContainerPath(a: MountInfo, b: MountInfo): number {
-  return b.containerRoot.length - a.containerRoot.length || mountPriority(b) - mountPriority(a);
-}
-
-function compareRemoteMountsByLocalPath(a: MountInfo, b: MountInfo): number {
-  return b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a);
-}
-
-function mountPriority(mount: MountInfo): number {
-  if (mount.source === "protectedSkill") {
-    return 2;
-  }
-  if (mount.source === "agent") {
-    return 1;
-  }
-  return 0;
 }
 
 function normalizeContainerPath(value: string): string {

@@ -768,6 +768,7 @@ describe("openshell fs bridges", () => {
 
     const { createOpenShellFsBridge } = await import("./fs-bridge.js");
     const bridge = createOpenShellFsBridge({ sandbox, backend });
+    expect("appendFile" in bridge).toBe(false);
     await bridge.writeFile({
       filePath: "nested/file.txt",
       data: "hello",
