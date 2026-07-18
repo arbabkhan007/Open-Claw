@@ -234,6 +234,7 @@ function resolveRuntimeNodeInvokeSyntheticScopes(params: {
 }
 
 type DispatchGatewayMethodInProcessOptions = {
+  allowInternalModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
   agentRunTracking?: "plugin_subagent";
@@ -275,8 +276,10 @@ export async function dispatchGatewayMethodInProcessRaw(
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
+  const allowInternalModelOverride =
+    options?.allowInternalModelOverride === true || options?.allowSyntheticModelOverride === true;
   const syntheticClient = createSyntheticPluginRuntimeClient({
-    allowModelOverride: options?.allowSyntheticModelOverride === true,
+    allowModelOverride: allowInternalModelOverride,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
@@ -289,8 +292,9 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
+    allowInternalModelOverride || pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
       ? {
+          ...(allowInternalModelOverride ? { allowModelOverride: true } : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,

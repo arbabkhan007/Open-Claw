@@ -889,6 +889,40 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "ok" });
   });
 
+  test("preserves scoped client metadata while granting internal model override", async () => {
+    const scope = {
+      context: createTestContext("scoped-internal-model-override"),
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+        },
+        internal: {
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "memory-core",
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      serverPluginsModule.dispatchGatewayMethodInProcessRaw(
+        "agent",
+        {
+          message: "hello",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+        },
+        { allowInternalModelOverride: true },
+      ),
+    );
+
+    const internal = getLastDispatchedClientInternal();
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(internal.allowModelOverride).toBe(true);
+    expect(internal.agentRunTracking).toBe("plugin_subagent");
+    expect(internal.pluginRuntimeOwnerId).toBe("memory-core");
+  });
+
   test("carries scoped delivery media only in the synthetic client context", async () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("scoped-delivery-media"));
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
