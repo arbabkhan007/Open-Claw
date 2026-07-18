@@ -78,7 +78,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -302,6 +301,10 @@ fun ChatScreen(
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
   val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
   val voiceNoteLevel by voiceNoteRecorder.inputLevel.collectAsState()
+  val dictationController = rememberChatDictationController(viewModel)
+  val dictationState by dictationController.state.collectAsState()
+  val dictationActive =
+    dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
@@ -334,6 +337,10 @@ fun ChatScreen(
           }
       }
     }
+
+  LaunchedEffect(composerOwner) {
+    dictationController.cancel()
+  }
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
@@ -591,7 +598,7 @@ fun ChatScreen(
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
       voiceNoteLevel = voiceNoteLevel,
-      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !sendInFlight,
+      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !dictationActive && !sendInFlight,
       onStartVoiceNote = {
         scope.launch {
           val ownerSnapshot = composerOwner
@@ -623,6 +630,28 @@ fun ChatScreen(
         voiceNoteRecorder.cancel()
       },
       onFinishVoiceNote = voiceNoteRecorder::finish,
+      dictationState = dictationState,
+      dictationEnabled =
+        pendingRunCount == 0 &&
+          !micCaptureActive &&
+          !sendInFlight &&
+          (voiceNoteState is VoiceNoteRecorderState.Idle || voiceNoteState is VoiceNoteRecorderState.Failure),
+      onToggleDictation = {
+        if (dictationActive) {
+          dictationController.finish()
+        } else {
+          scope.launch {
+            val ownerSnapshot = composerOwner
+            val transcript = dictationController.start()
+            // Recognition can finish after navigation. Only the composer that started
+            // dictation may receive its transcript; otherwise a late result crosses drafts.
+            if (transcript != null && viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
+              inputDrafts[ownerSnapshot] =
+                appendChatDictationTranscript(inputDrafts[ownerSnapshot], transcript)
+            }
+          }
+        }
+      },
       onVoice = onVoice,
       onFixConnection = onOpenGatewaySettings,
       onCopyDiagnostics = {
@@ -1553,6 +1582,9 @@ private fun ChatComposer(
   onStartVoiceNote: () -> Unit,
   onCancelVoiceNote: () -> Unit,
   onFinishVoiceNote: () -> Unit,
+  dictationState: ChatDictationState,
+  dictationEnabled: Boolean,
+  onToggleDictation: () -> Unit,
   onVoice: () -> Unit,
   onFixConnection: () -> Unit,
   onCopyDiagnostics: () -> Unit,
@@ -1568,6 +1600,8 @@ private fun ChatComposer(
     if (!thinkingSupported) thinkingSelectorExpanded = false
   }
 
+  val dictationActive =
+    dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
   // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
   // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
@@ -1577,6 +1611,7 @@ private fun ChatComposer(
       hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,
+      dictationActive = dictationActive,
     )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1639,7 +1674,7 @@ private fun ChatComposer(
       )
     }
 
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       if (voiceNoteState is VoiceNoteRecorderState.Recording) {
         VoiceNoteRecordingControls(
           elapsedMs = voiceNoteElapsedMs,
@@ -1657,19 +1692,19 @@ private fun ChatComposer(
           onPickImages = onPickImages,
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
+          dictationActive = dictationActive,
+          dictationEnabled = dictationEnabled,
+          onToggleDictation = onToggleDictation,
           onVoice = onVoice,
           sendEnabled = sendEnabled,
           onSend = onSend,
           modifier = Modifier.weight(1f),
         )
       }
-      SendButton(
-        enabled = sendEnabled,
-        onClick = onSend,
-      )
     }
 
     VoiceNoteRecorderError(voiceNoteState)
+    ChatDictationError(dictationState)
 
     if (!healthOk && gatewayOffline) {
       ChatOfflineNotice(
@@ -2022,6 +2057,9 @@ private fun ChatInputPill(
   onPickImages: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
+  dictationActive: Boolean,
+  dictationEnabled: Boolean,
+  onToggleDictation: () -> Unit,
   onVoice: () -> Unit,
   sendEnabled: Boolean,
   onSend: () -> Unit,
@@ -2031,7 +2069,7 @@ private fun ChatInputPill(
 
   Surface(
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.control),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
@@ -2043,13 +2081,9 @@ private fun ChatInputPill(
     ) {
       Surface(onClick = onPickImages, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attach image"), modifier = Modifier.size(16.dp))
+          Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Attach image"), modifier = Modifier.size(20.dp))
         }
       }
-      VoiceNoteRecordButton(
-        enabled = recordVoiceNoteEnabled,
-        onClick = onStartVoiceNote,
-      )
       Box(modifier = Modifier.weight(1f)) {
         ChatTextFieldValueAdapter(
           value = value,
@@ -2086,17 +2120,33 @@ private fun ChatInputPill(
           )
         }
       }
-      Surface(
-        onClick = onVoice,
-        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-        shape = CircleShape,
-        color = ClawTheme.colors.surfaceRaised,
-        contentColor = ClawTheme.colors.text,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = nativeString("Open voice"), modifier = Modifier.size(18.dp))
-        }
+      ChatComposerMicButton(
+        dictationActive = dictationActive,
+        dictationEnabled = dictationEnabled,
+        voiceNoteEnabled = recordVoiceNoteEnabled,
+        onToggleDictation = onToggleDictation,
+        onStartVoiceNote = onStartVoiceNote,
+      )
+      if (sendEnabled) {
+        SendButton(enabled = true, onClick = onSend)
+      } else {
+        LiveTalkButton(onClick = onVoice)
       }
+    }
+  }
+}
+
+@Composable
+private fun LiveTalkButton(onClick: () -> Unit) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = ClawTheme.colors.danger,
+    contentColor = Color.White,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = Icons.Default.GraphicEq, contentDescription = nativeString("Open voice"), modifier = Modifier.size(20.dp))
     }
   }
 }
