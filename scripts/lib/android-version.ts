@@ -8,6 +8,7 @@ const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
 const ANDROID_VERSION_PROPERTIES_FILE = "apps/android/Config/Version.properties";
 const ANDROID_RELEASE_NOTES_FILE = "apps/android/fastlane/metadata/android/en-US/release_notes.txt";
 const ANDROID_VERSION_CODE_MAX = 2_100_000_000;
+const ANDROID_PHONE_BUILD_NUMBER_MAX = 49;
 
 type AndroidVersionManifest = {
   version: string;
@@ -104,10 +105,10 @@ export function normalizeAndroidVersionCode(rawVersionCode: number, version: str
     raw.length !== prefix.length + 2 ||
     !Number.isInteger(suffix) ||
     suffix < 1 ||
-    suffix > 99
+    suffix > ANDROID_PHONE_BUILD_NUMBER_MAX
   ) {
     throw new Error(
-      `Invalid Android versionCode '${rawVersionCode}'. Expected ${prefix}01 through ${prefix}99 for version ${version}.`,
+      `Invalid Android versionCode '${rawVersionCode}'. Expected ${prefix}01 through ${prefix}49 for version ${version}.`,
     );
   }
 

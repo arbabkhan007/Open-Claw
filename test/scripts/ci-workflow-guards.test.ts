@@ -78,7 +78,7 @@ function runCiManifestFixture(options: {
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
   iosBuildCapability?: boolean;
-  androidCiCapabilities?: boolean;
+  androidCiContract?: "v2" | "v3" | false;
   nativeI18nCapabilities?: boolean;
   protocolCoverage?: boolean;
   qaSmokePlan?: boolean;
@@ -192,15 +192,14 @@ function runCiManifestFixture(options: {
     }
     const targetWorkflow = path.join(root, ".github", "workflows", "ci.yml");
     mkdirSync(path.dirname(targetWorkflow), { recursive: true });
+    const androidCiContract = options.androidCiContract ?? (options.bundledPlanner ? "v3" : false);
     writeFileSync(
       targetWorkflow,
       [
         ...((options.formatCheck ?? options.bundledPlanner)
           ? ["pnpm format:check", "pnpm format:check"]
           : []),
-        ...((options.androidCiCapabilities ?? options.bundledPlanner)
-          ? ["android-ci-contract-v2"]
-          : []),
+        ...(androidCiContract ? [`android-ci-contract-${androidCiContract}`] : []),
       ].join("\n"),
     );
     const outputPath = path.join(root, "manifest.out");
@@ -1842,6 +1841,18 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain(":app:lintPlayDebug");
     expect(runStep.run).toContain(":app:lintThirdPartyDebug");
     expect(runStep.run).toContain(":benchmark:assembleDebug");
+  });
+
+  it("keeps root Android validation scripts covering the Wear app", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts["android:assemble"]).toContain(":wear:assembleDebug");
+    expect(packageJson.scripts["android:format"]).toContain(":wear:ktlintFormat");
+    expect(packageJson.scripts["android:lint"]).toContain(":wear:ktlintCheck");
+    expect(packageJson.scripts["android:lint:android"]).toContain(":wear:lintDebug");
+    expect(packageJson.scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
   it("runs canonical main CI single-flight while coalescing the pending tip", () => {
@@ -3622,8 +3633,22 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
 
+    const frozenV2 = runCiManifestFixture({
+      androidCiContract: "v2",
+      bundledPlanner: true,
+    });
+    expect(frozenV2.status, frozenV2.output).toBe(0);
+    expect(
+      JSON.parse(expectDefined(frozenV2.outputs.android_matrix, "v2 Android matrix output"))
+        .include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play-compat" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play-compat" },
+    ]);
+
     const currentMissingAndroidCapabilities = runCiManifestFixture({
-      androidCiCapabilities: false,
+      androidCiContract: false,
       bundledPlanner: true,
       eventName: "pull_request",
     });
