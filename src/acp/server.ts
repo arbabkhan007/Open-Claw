@@ -25,6 +25,7 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
+import { AcpSessionNewOrdering } from "./session-new-ordering.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
 
@@ -162,13 +163,21 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
+  const sessionNewOrdering = new AcpSessionNewOrdering();
   const readable = stream.readable.pipeThrough(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
+        sessionNewOrdering.observeInbound(message);
         controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
       },
     }),
   );
+  const orderedOutbound = new TransformStream<AnyMessage, AnyMessage>({
+    transform(message, controller) {
+      sessionNewOrdering.transformOutbound(message, controller);
+    },
+  });
+  void orderedOutbound.readable.pipeTo(stream.writable);
   const eventLedger = createSqliteAcpEventLedger();
 
   void new AgentSideConnection(
@@ -177,7 +186,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       agent.start();
       return agent;
     },
-    { ...stream, readable },
+    { writable: orderedOutbound.writable, readable },
   );
 
   return closed;
