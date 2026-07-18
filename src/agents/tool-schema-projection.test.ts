@@ -29,6 +29,22 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("returns default empty object schema when input is null", () => {
+    // Regression test for #106277: codex_app__automation_update tool with no
+    // user automations configured has parameters: null, which caused DeepSeek
+    // to reject the entire tool list with HTTP 400. Null semantically means
+    // "no parameters" and maps to an empty object schema without violations,
+    // so the tool passes through to the provider without being quarantined.
+    const result = projectRuntimeToolInputSchema(null, "codex_app__automation_update.inputSchema");
+    expect(result.schema).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(result.violations).toEqual([]);
+  });
+
   it("reports non-object dynamic tool input schemas", () => {
     expect(
       inspectRuntimeToolInputSchemas([

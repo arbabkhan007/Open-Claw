@@ -160,8 +160,26 @@ export function projectRuntimeToolInputSchema(
   const projection = serializeToolInputSchema(schema, path);
   const violations = [...projection.violations];
   if (!isJsonObject(projection.schema)) {
-    violations.push(`${path} must be a JSON object schema`);
-  } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
+    // Return a default empty object schema when the input is not a JSON object
+    // (e.g., null, primitive, array). This prevents strict providers (DeepSeek,
+    // OpenAI Responses) from rejecting the entire tool list with HTTP 400.
+    // Only report a violation for types that indicate a genuine schema problem
+    // (array, string, number, boolean) — not for null which semantically means
+    // "no parameters" and maps cleanly to an empty object schema.
+    if (projection.schema !== null) {
+      violations.push(`${path} must be a JSON object schema`);
+    }
+    return {
+      schema: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      violations,
+    };
+  }
+  if (projection.schema.type !== undefined && projection.schema.type !== "object") {
     violations.push(`${path}.type must be "object"`);
   }
   violations.push(...findDynamicSchemaKeywordViolations(projection.schema, path));

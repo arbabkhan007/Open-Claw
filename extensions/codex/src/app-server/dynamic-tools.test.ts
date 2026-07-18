@@ -678,6 +678,80 @@ describe("createCodexDynamicToolBridge", () => {
     expect(badExecute).not.toHaveBeenCalled();
   });
 
+  it("corrects null parameters to valid empty object schema (regression test for #106277)", async () => {
+    // Regression test for #106277: codex_app__automation_update tool with no
+    // user automations configured has parameters: null, which caused DeepSeek
+    // to reject the entire tool list with HTTP 400 before the fix in
+    // packages/ai/src/providers/tool-schema-json-projection.ts.
+    // Null semantically means "no parameters" and maps to an empty object
+    // schema without violations, so the tool passes through to the provider
+    // instead of being quarantined.
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    const nullParamTool = createTool({
+      name: "codex_app__automation_update",
+      execute: vi.fn(async () => textToolResult("No user automations")),
+    });
+    Object.defineProperty(nullParamTool, "parameters", {
+      value: null,
+      writable: true,
+      configurable: true,
+    });
+    let bridge!: ReturnType<typeof createCodexDynamicToolBridge>;
+    try {
+      bridge = createCodexDynamicToolBridge({
+        tools: [createTool({ name: "message" }), nullParamTool],
+        signal: new AbortController().signal,
+        hookContext: {
+          agentId: "agent-null-schema",
+          runId: "run-1",
+          sessionId: "session-1",
+          sessionKey: "global",
+        },
+      });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    // The tool should be available (not quarantined) — null parameters are
+    // corrected to a valid empty object schema so the provider accepts the
+    // tool list without HTTP 400.
+    expect(specNames(bridge.availableSpecs)).toContain("codex_app__automation_update");
+    expect(bridge.telemetry.quarantinedTools).toEqual([]);
+
+    // No quarantine-related warning should have been logged
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("codex_app__automation_update"),
+      expect.anything(),
+    );
+
+    // No blocked diagnostic events should have been emitted
+    const blockedEvents = diagnosticEvents.filter(
+      (event): event is Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }> =>
+        event.type === "tool.execution.blocked",
+    );
+    expect(blockedEvents).not.toContainEqual(
+      expect.objectContaining({ toolName: "codex_app__automation_update" }),
+    );
+
+    // Calling the corrected tool should succeed (empty args → valid call)
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "codex_app__automation_update",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
+    expect(nullParamTool.execute).toHaveBeenCalledTimes(1);
+  });
+
   it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const poisonedName = createTool({
