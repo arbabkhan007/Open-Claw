@@ -81,6 +81,10 @@ public final class OpenClawChatViewModel {
     public var attachments: [OpenClawPendingAttachment] = []
     /// Setter is module-internal for the health/outbox extension only.
     public internal(set) var healthOK: Bool = false
+    /// Bumped after every successful group-catalog mutation so views keyed on it
+    /// refetch; catalog-only changes (e.g. creating an empty group) alter no
+    /// session rows and would otherwise stay stale until reconnect.
+    public internal(set) var sessionGroupsRevision = 0
 
     /// True when this view model owns a gateway-scoped durable text outbox.
     public var supportsOfflineTextOutbox: Bool {
@@ -1166,37 +1170,78 @@ extension OpenClawChatViewModel {
         self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
-    func performStartNewSession(worktree: Bool) async {
+    /// Returns true only when a session switch happened (create or reset
+    /// fallback); callers keep UI like the new-session popover open on failure.
+    @discardableResult
+    func performStartNewSession(
+        agentID: String? = nil,
+        worktree: Bool,
+        worktreeBaseRef: String? = nil,
+        routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
+    {
         guard !self.blocksAttachmentOwnerChange else {
             self.errorText = String(
                 localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return
+            return false
         }
-        let requested = self.generatedNewSessionKey()
-        let parentSessionKey = self.sessionKey
+        let normalizedAgentID = agentID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
+        // Only authoritative identities decide agent ownership; scanning the roster
+        // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
+        let currentAgentID = (
+            OpenClawChatSessionKey.agentID(from: self.sessionKey) ??
+                self.activeAgentId ??
+                OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
+            .lowercased()
+        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+            ? self.sessionKey
+            : nil
         let next: String
         do {
-            let created = try await transport.createSession(
-                key: requested,
-                label: nil,
-                parentSessionKey: parentSessionKey,
-                worktree: worktree ? true : nil)
+            let created = if let routeLease {
+                try await routeLease.createSession(
+                    key: requested,
+                    label: nil,
+                    agentID: requestedAgentID,
+                    parentSessionKey: parentSessionKey,
+                    worktree: worktree ? true : nil,
+                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            } else {
+                try await self.transport.createSession(
+                    key: requested,
+                    label: nil,
+                    agentID: requestedAgentID,
+                    parentSessionKey: parentSessionKey,
+                    worktree: worktree ? true : nil,
+                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            }
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
             if Self.isUnsupportedCreateSessionError(error) {
+                // Reset only mimics a plain new chat; agent/worktree selections were
+                // not honored, so advanced requests surface the error instead of
+                // silently resetting the current session.
+                guard requestedAgentID == nil, !worktree else {
+                    chatUILogger.error("sessions.create unsupported; advanced options not honored")
+                    self.errorText = error.localizedDescription
+                    return false
+                }
                 chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
                 await self.performReset()
-                return
+                return true
             }
             chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
             self.errorText = error.localizedDescription
-            return
+            return false
         }
         guard !self.blocksAttachmentOwnerChange else {
             self.errorText = String(
                 localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return
+            return false
         }
         self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
@@ -1206,6 +1251,7 @@ extension OpenClawChatViewModel {
         self.clearSessionOwnedState()
         self.errorText = nil
         self.startBootstrap()
+        return true
     }
 
     /// Clears state owned by the current session/agent before a new identity can consume events.
@@ -1562,9 +1608,10 @@ extension OpenClawChatViewModel {
         return normalized
     }
 
-    private func generatedNewSessionKey() -> String {
+    private func generatedNewSessionKey(agentID explicitAgentID: String? = nil) -> String {
         let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = OpenClawChatSessionKey.agentID(from: sessionKey) ??
+        guard let agentID = explicitAgentID ??
+            OpenClawChatSessionKey.agentID(from: sessionKey) ??
             activeAgentId ??
             OpenClawChatSessionKey.agentID(from: resolvedMainSessionKey) ??
             sessions.lazy.compactMap({ OpenClawChatSessionKey.agentID(from: $0.key) }).first
