@@ -191,12 +191,15 @@ export {
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  readSessionTranscriptVisibleMessagePage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 export type {
   SessionTranscriptMessageAnchorPage,
   SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
+  SessionTranscriptVisibleMessageEvent,
+  SessionTranscriptVisibleMessagePageResult,
 } from "./session-accessor.sqlite-active-events.js";
 export {
   resolveSessionTranscriptReadTarget,
