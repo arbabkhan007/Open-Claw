@@ -14,6 +14,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -179,9 +180,26 @@ describe("buildGatewayReloadPlan", () => {
       noopPrefixes: ["channels.whatsapp"],
     },
   };
+  const mattermostPlugin: ChannelPlugin = {
+    id: "mattermost",
+    meta: {
+      id: "mattermost",
+      label: "Mattermost",
+      selectionLabel: "Mattermost",
+      docsPath: "/channels/mattermost",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+  };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
   registry.reloads = [
     {
@@ -371,6 +389,36 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("targets only changed non-default channel accounts", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.mattermost.accounts.alpha.enabled",
+      "channels.mattermost.accounts.beta.commands",
+    ]);
+
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.restartChannelAccounts).toEqual(
+      new Map([["mattermost", new Set(["alpha", "beta"])]]),
+    );
+  });
+
+  it("keeps non-isolated channel account changes on the wholesale path", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.accounts.alpha.enabled"]);
+
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
+  });
+
+  it("keeps default account and channel-wide changes on the wholesale path", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.mattermost.accounts.alpha.enabled",
+      "channels.mattermost.accounts.default.commands",
+      "channels.mattermost.botToken",
+    ]);
+
+    expect(plan.restartChannels).toEqual(new Set(["mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
   });
 
   it("restarts every channel whose config prefix matches", () => {
@@ -1659,6 +1707,53 @@ describe("startGatewayConfigReloader", () => {
       harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     await harness.reloader.stop();
+  });
+
+  it("runs account-scoped channel changes through hot reload", async () => {
+    const channelRegistry = createTestRegistry([
+      {
+        pluginId: "mattermost",
+        plugin: {
+          id: "mattermost",
+          meta: {
+            id: "mattermost",
+            label: "Mattermost",
+            selectionLabel: "Mattermost",
+            docsPath: "/channels/mattermost",
+            blurb: "test",
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: { listAccountIds: () => ["default", "alpha"], resolveAccount: () => ({}) },
+          reload: { configPrefixes: ["channels.mattermost"], accountScopedRestart: true },
+        } satisfies ChannelPlugin,
+        source: "test",
+      },
+    ]);
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { mattermost: { accounts: { alpha: { enabled: false } } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { mattermost: { accounts: { alpha: { enabled: true } } } },
+    } as OpenClawConfig;
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "account-reload" })),
+      { initialConfig },
+    );
+
+    pinActivePluginChannelRegistry(channelRegistry);
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      const [plan] = getOnlyHotReloadCall(harness);
+      expect(plan.restartChannelAccounts).toEqual(new Map([["mattermost", new Set(["alpha"])]]));
+      expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
+    } finally {
+      releasePinnedPluginChannelRegistry(channelRegistry);
+      await harness.reloader.stop();
+    }
   });
 
   it("plans one immutable runtime override snapshot per candidate", async () => {

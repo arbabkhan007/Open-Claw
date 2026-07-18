@@ -65,7 +65,16 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
       debounceMs?: number;
     };
   };
-  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  reload?: {
+    configPrefixes: string[];
+    noopPrefixes?: string[];
+    /**
+     * Opt into restarting only the changed non-default named account.
+     * Set only when sibling account resolution and runtime lifecycle are isolated;
+     * default, shared, removed, or unresolved account changes still restart the channel.
+     */
+    accountScopedRestart?: boolean;
+  };
   setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
