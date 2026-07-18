@@ -22,6 +22,7 @@ import { FULL_INTENTS, RATE_LIMIT_DELAY, GatewayOp } from "./constants.js";
 import { dispatchEvent } from "./event-dispatcher.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
+import { SeqWatermark } from "./seq-watermark.js";
 import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
 import { createQQWSClient } from "./ws-client.js";
 
@@ -45,7 +46,9 @@ export class GatewayConnection {
   private currentWs: WebSocket | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private sessionId: string | null = null;
-  private lastSeq: number | null = null;
+  // Resumable seq lives behind a watermark: message frames commit only after
+  // their queued handler settles, so RESUME replays anything still in flight.
+  private readonly seqWatermark = new SeqWatermark();
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldRefreshToken = false;
@@ -61,7 +64,12 @@ export class GatewayConnection {
       accountId: ctx.account.accountId,
       log: ctx.log,
       isAborted: () => this.isAborted,
+      onMessageSettled: (msg) => this.settleMessage(msg),
     });
+  }
+
+  private get lastSeq(): number | null {
+    return this.seqWatermark.value();
   }
 
   async start(): Promise<void> {
@@ -78,9 +86,25 @@ export class GatewayConnection {
     const saved = loadSession(account.accountId, account.appId);
     if (saved) {
       this.sessionId = saved.sessionId;
-      this.lastSeq = saved.lastSeq;
+      this.seqWatermark.reset(saved.lastSeq);
       log?.info(`Restored session: sessionId=${this.sessionId}, lastSeq=${this.lastSeq}`);
     }
+  }
+
+  /**
+   * Commit a message's seq once its handler finished or the message was
+   * intentionally dropped. Merged group turns settle every source seq.
+   */
+  private settleMessage(msg: QueuedMessage): void {
+    for (const source of msg.merge?.messages ?? []) {
+      if (source.gatewaySeq !== undefined) {
+        this.seqWatermark.settle(source.gatewaySeq);
+      }
+    }
+    if (msg.gatewaySeq !== undefined) {
+      this.seqWatermark.settle(msg.gatewaySeq);
+    }
+    this.saveCurrentSession();
   }
 
   private saveCurrentSession(): void {
@@ -202,8 +226,10 @@ export class GatewayConnection {
           const peerId = this.msgQueue.getMessagePeerId(msg);
           this.msgQueue.clearUserQueue(peerId);
           this.msgQueue.executeImmediate(msg);
+        } else {
+          // "handled" — command executed to completion, nothing to queue.
+          this.settleMessage(msg);
         }
-        // "handled" — command executed, nothing to queue.
       };
 
       // ---- WebSocket: open ----
@@ -222,10 +248,11 @@ export class GatewayConnection {
           const payload = JSON.parse(rawData) as WSPayload;
           const { op, d, s, t } = payload;
 
-          if (s) {
-            this.lastSeq = s;
-            this.saveCurrentSession();
-          }
+          // Message-event seqs are registered (committed only after the
+          // handler settles); every other frame's seq commits immediately.
+          // Committing message seqs at receipt would let RESUME skip queued
+          // or in-flight messages after a restart or handler failure.
+          let messageSeqRegistered = false;
 
           switch (op) {
             case GatewayOp.HELLO:
@@ -235,6 +262,11 @@ export class GatewayConnection {
             case GatewayOp.DISPATCH: {
               log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
               const result = dispatchEvent(t ?? "", d, account.accountId, log);
+              if (result.action === "message" && s) {
+                result.msg.gatewaySeq = s;
+                this.seqWatermark.register(s);
+                messageSeqRegistered = true;
+              }
               if (result.action === "ready") {
                 this.sessionId = result.sessionId;
                 this.saveCurrentSession();
@@ -245,7 +277,14 @@ export class GatewayConnection {
               } else if (result.action === "interaction") {
                 this.ctx.onInteraction?.(result.event);
               } else if (result.action === "message") {
-                void trySlashCommandOrEnqueue(result.msg);
+                const msg = result.msg;
+                void trySlashCommandOrEnqueue(msg).catch((err: unknown) => {
+                  // Keep the seq pending so RESUME replays the message the
+                  // slash-command gate failed to route.
+                  log?.error(
+                    `Message routing error for ${msg.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                });
               }
               break;
             }
@@ -270,7 +309,7 @@ export class GatewayConnection {
               });
               if (!canResume) {
                 this.sessionId = null;
-                this.lastSeq = null;
+                this.seqWatermark.reset(null);
                 clearSession(account.accountId);
                 this.shouldRefreshToken = true;
               }
@@ -278,6 +317,13 @@ export class GatewayConnection {
               this.scheduleReconnect(3000);
               break;
             }
+          }
+
+          if (s) {
+            if (!messageSeqRegistered) {
+              this.seqWatermark.observe(s);
+            }
+            this.saveCurrentSession();
           }
         } catch (err) {
           log?.error(`Message parse error: ${err instanceof Error ? err.message : String(err)}`);
@@ -347,7 +393,11 @@ export class GatewayConnection {
     }
     this.heartbeatInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.lastSeq }));
+        // Heartbeats report the latest received frame seq (receive cursor);
+        // only RESUME and persistence use the settlement watermark. Sending
+        // the watermark here would look like the client fell behind while a
+        // handler is still running and provoke reconnect/replay churn.
+        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.seqWatermark.latest() }));
       }
     }, interval);
   }
@@ -358,7 +408,7 @@ export class GatewayConnection {
 
     if (action.clearSession) {
       this.sessionId = null;
-      this.lastSeq = null;
+      this.seqWatermark.reset(null);
       clearSession(account.accountId);
     }
     if (action.refreshToken) {
