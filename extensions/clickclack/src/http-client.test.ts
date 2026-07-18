@@ -124,6 +124,36 @@ function streamedErrorResponse(body: string, limit: number) {
   };
 }
 
+function createSignalAbortedJsonResponse(signal: AbortSignal): {
+  response: Response;
+  wasAborted: () => boolean;
+} {
+  let aborted = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const abortBody = () => {
+        aborted = true;
+        controller.error(signal.reason ?? new Error("body aborted"));
+      };
+      if (signal.aborted) {
+        abortBody();
+        return;
+      }
+      signal.addEventListener("abort", abortBody, { once: true });
+    },
+    async pull() {
+      await new Promise<void>(() => {});
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    wasAborted: () => aborted,
+  };
+}
+
 describe("ClickClack HTTP client", () => {
   it("replaces the authenticated bot command menu", async () => {
     const botCommand = {
@@ -273,6 +303,37 @@ describe("ClickClack HTTP client", () => {
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the REST request deadline active while reading a hanging response body", async () => {
+    vi.useFakeTimers();
+    let body: ReturnType<typeof createSignalAbortedJsonResponse> | undefined;
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("expected ClickClack client to pass an AbortSignal");
+      }
+      const responseBody = createSignalAbortedJsonResponse(signal);
+      body = responseBody;
+      return responseBody.response;
+    });
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    try {
+      const pending = client.me().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const error = await pending;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("request timed out");
+      expect(body?.wasAborted()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("POSTs durable activity rows with kind and turn_id", async () => {
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
@@ -357,7 +418,7 @@ describe("ClickClack HTTP client", () => {
     expect(persisted.attachments).toEqual([{ id: "upl_1" }]);
   });
 
-  it("uploads multipart bytes with filename and MIME, then attaches by id", async () => {
+  it("uploads multipart bytes without the JSON REST deadline, then attaches by id", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -402,6 +463,7 @@ describe("ClickClack HTTP client", () => {
     const uploadInit = uploadRequest?.[1] as RequestInit;
     expect(uploadInit.method).toBe("POST");
     expect(uploadInit.body).toBeInstanceOf(FormData);
+    expect(uploadInit.signal).toBeUndefined();
     const uploadHeaders = new Headers(uploadInit.headers);
     expect(uploadHeaders.get("Authorization")).toBe("Bearer fake");
     expect(uploadHeaders.has("Content-Type")).toBe(false);
