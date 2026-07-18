@@ -14,7 +14,7 @@ function installRelativeFetchBridge(serverUrl: string): void {
   const base = serverUrl.replace(/\/$/, "");
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : String(input);
     const absolute = url.startsWith("http") ? url : `${base}${url}`;
     return realFetch(absolute, init);
   });
@@ -39,7 +39,9 @@ describe("refreshChatAvatar fetch bounding", () => {
     // fetch's internal body stream rejects on abort; swallow the benign
     // AbortError so Vitest does not flag it as an unhandled rejection.
     onUnhandled = (reason: unknown) => {
-      if (reason instanceof Error && reason.name === "AbortError") return;
+      if (reason instanceof Error && reason.name === "AbortError") {
+        return;
+      }
       process.emit("uncaughtExceptionMonitor", reason as Error);
     };
     process.on("unhandledRejection", onUnhandled);
@@ -62,7 +64,9 @@ describe("refreshChatAvatar fetch bounding", () => {
       res.writeHead(200, { "content-type": "image/png" });
       res.end(Buffer.from("fake-image-bytes"));
     });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     serverUrl = `http://127.0.0.1:${port}`;
@@ -132,7 +136,9 @@ describe("refreshChatAvatar fetch bounding", () => {
         imageDelay = Date.now();
       }, 10);
     });
-    await new Promise<void>((resolve) => server.listen(0, resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     serverUrl = `http://127.0.0.1:${port}`;
