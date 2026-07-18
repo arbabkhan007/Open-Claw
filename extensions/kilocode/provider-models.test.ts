@@ -1,4 +1,5 @@
 // Kilocode tests cover provider models plugin behavior.
+import { createServer, type Server } from "node:http";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -116,6 +117,21 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected local server to listen on a TCP port");
+  }
+  return `http://127.0.0.1:${address.port}/models`;
+}
+
 async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
   const release = vi.fn(async () => {});
   vi.stubEnv("NODE_ENV", "");
@@ -221,11 +237,46 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("falls back to static catalog on HTTP error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
-    await withFetchPathTest(mockFetch, async () => {
-      const models = await discoverKilocodeModels();
-      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+    let serverClosedFailedResponse = false;
+    let writeCount = 0;
+    let resolveResponseClosed!: () => void;
+    const responseClosed = new Promise<void>((resolve) => {
+      resolveResponseClosed = resolve;
     });
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { "Content-Type": "text/plain" });
+      response.write("temporary failure\n");
+      writeCount += 1;
+      const interval = setInterval(() => {
+        writeCount += 1;
+        response.write("stream body that should not be fully read\n");
+      }, 10);
+      response.on("close", () => {
+        clearInterval(interval);
+        serverClosedFailedResponse = true;
+        resolveResponseClosed();
+      });
+    });
+    const localModelsUrl = await listenOnLoopback(server);
+    const mockFetch = vi.fn(async (_url: string, init?: RequestInit) =>
+      fetch(localModelsUrl, init),
+    );
+    try {
+      await withFetchPathTest(mockFetch, async () => {
+        const models = await discoverKilocodeModels();
+        expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      });
+      await Promise.race([
+        responseClosed,
+        new Promise<void>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("timed out waiting for failed response close")), 500);
+        }),
+      ]);
+      expect(serverClosedFailedResponse).toBe(true);
+      expect(writeCount).toBeGreaterThan(0);
+    } finally {
+      server.close();
+    }
   });
 
   it("falls back to static catalog for malformed successful model list payloads", async () => {
