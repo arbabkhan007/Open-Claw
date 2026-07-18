@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assignTransportErrorDetails,
+  extractTransportErrorDetails,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -113,5 +114,24 @@ describe("transport stream shared helpers", () => {
       expect(output.stopReason).toBe("error");
       expect(output.errorMessage).toBeTruthy();
     }
+  });
+
+  it("extracts error code from cause.code for Undici network errors", () => {
+    // Simulates a "fetch failed" error where Undici wraps a SocketError with
+    // code ECONNRESET in the cause chain.
+    const details = extractTransportErrorDetails({
+      message: "fetch failed",
+      cause: { code: "ECONNRESET" },
+    });
+    expect(details.errorCode).toBe("ECONNRESET");
+  });
+
+  it("prefers top-level errorCode over cause.code", () => {
+    const details = extractTransportErrorDetails({
+      errorCode: "TOP_LEVEL",
+      code: "MIDDLE",
+      cause: { code: "CAUSE_CODE" },
+    });
+    expect(details.errorCode).toBe("TOP_LEVEL");
   });
 });
