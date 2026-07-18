@@ -2,10 +2,12 @@ package ai.openclaw.wear
 
 import android.app.Application
 import android.content.ComponentName
+import android.view.WindowManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
@@ -50,5 +52,18 @@ class WearScreenshotFixtureTest {
 
     assertTrue(activity.exported)
     assertEquals("${application.packageName}.screenshot", activity.taskAffinity)
+  }
+
+  @Test
+  fun screenshotActivityKeepsTheDisplayActiveDuringCapture() {
+    Robolectric
+      .buildActivity(WearScreenshotActivity::class.java)
+      .setup()
+      .use { controller ->
+        val activity = controller.get()
+        val attributes = activity.window.attributes
+
+        assertTrue((attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0)
+      }
   }
 }
