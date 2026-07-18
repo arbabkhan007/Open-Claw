@@ -1074,6 +1074,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
       sandboxToolPolicy: sandbox?.tools,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
     const toolsRaw = toolsEnabled
