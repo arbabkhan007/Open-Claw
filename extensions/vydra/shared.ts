@@ -10,6 +10,7 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
@@ -132,6 +133,9 @@ export async function resolveVydraRequestContext(params: {
       },
       provider: "vydra",
       capability: params.capability,
+      request: sanitizeConfiguredModelProviderRequest(
+        params.cfg?.models?.providers?.vydra?.request,
+      ),
       transport: "http",
     });
   return {
