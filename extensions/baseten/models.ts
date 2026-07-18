@@ -147,12 +147,23 @@ type BasetenLiveModelRow = {
 };
 
 function readPositiveInteger(value: unknown): number | undefined {
-  const number = typeof value === "number" ? value : Number(value);
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^(?:0|[1-9]\d*)$/.test(value)
+        ? Number(value)
+        : undefined;
+  if (number === undefined) {
+    return undefined;
+  }
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
 function readPerTokenPrice(value: unknown): number | undefined {
-  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) {
+  if (
+    typeof value !== "number" &&
+    (typeof value !== "string" || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))
+  ) {
     return undefined;
   }
   const number = typeof value === "number" ? value : Number(value);
