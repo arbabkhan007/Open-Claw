@@ -23,12 +23,7 @@ import {
   syncAndroidVersioning,
 } from "../../../scripts/lib/android-version.ts";
 import { verifyAndroidReleaseSource } from "../../../scripts/lib/android-release-source.ts";
-import {
-  type AndroidReleaseArtifactRecord,
-  writeAndroidReleaseArtifactManifest,
-} from "../../../scripts/android-release-artifact-manifest.ts";
-
-export { verifyAndroidReleaseSource };
+import { writeAndroidReleaseArtifactManifest } from "../../../scripts/android-release-artifact-manifest.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -412,7 +407,7 @@ function main() {
     },
   );
 
-  const builtArtifacts: AndroidReleaseArtifactRecord[] = [];
+  const builtArtifacts: Parameters<typeof writeAndroidReleaseArtifactManifest>[0]["artifacts"] = [];
   for (const artifact of artifacts) {
     const outputPath = join(
       releaseOutputDir,

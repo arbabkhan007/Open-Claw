@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 export type AndroidReleaseArtifactFlavor = "play" | "third-party" | "wear";
 
-export type AndroidReleaseArtifactRecord = {
+type AndroidReleaseArtifactRecord = {
   file: string;
   flavor: AndroidReleaseArtifactFlavor;
   sha256: string;
