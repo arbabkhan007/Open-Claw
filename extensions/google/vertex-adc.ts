@@ -158,7 +158,12 @@ function readGoogleAdcCredentials(adcPath: string): GoogleAdcConfig {
     maxBytes: GOOGLE_VERTEX_ADC_FILE_MAX_BYTES,
     rejectHardlinks: false,
   });
-  const parsed = JSON.parse(text) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`Google Vertex ADC credentials must be valid JSON: ${adcPath}`);
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`Google Vertex ADC credentials must be a JSON object: ${adcPath}`);
   }

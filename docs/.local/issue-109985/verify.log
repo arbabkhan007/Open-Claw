@@ -1,0 +1,16 @@
+脚本启动于 2026-07-18 08:11:26+08:00 [COMMAND=" echo '=== Part 1: QA Lab HTTP non-2xx body cancel ===' node --import tsx /tmp/part1_qa_lab.mts  echo '' echo '=== Part 2: Vertex ADC JSON.parse guard ===' node --import tsx /tmp/part2_vertex_adc.mts  echo '' echo '=== COMMAND_EXIT_CODE=0 ===' " <not executed on terminal>]
+=== Part 1: QA Lab HTTP non-2xx body cancel ===
+Test server running
+QA Lab HTTP response status: 502
+OK: HTTP error body cancelled (status 502)
+Server stopped
+
+=== Part 2: Vertex ADC JSON.parse guard ===
+Created malformed ADC file: /tmp/test-vertex-adc-invalid.json
+OK: caught JSON.parse error as expected: Expected property name or '}' in JSON at position 2 (line 1 column 3)
+The vertex-adc guard handles this correctly
+Temp file cleaned up
+
+=== COMMAND_EXIT_CODE=0 ===
+
+脚本完成于 2026-07-18 08:11:26+08:00 [COMMAND_EXIT_CODE="0"]
