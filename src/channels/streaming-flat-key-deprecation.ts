@@ -1,7 +1,3 @@
-// Flat-key compatibility resolvers and warn-once state. This module keeps the
-// test-only reset and warning helpers off the public SDK wildcard surface
-// (openclaw/plugin-sdk/channel-outbound re-exports all of streaming.ts) and
-// bounds the deletion scope when the fallback window closes next release train.
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -11,6 +7,10 @@ import type {
 import { createDedupeCache } from "../infra/dedupe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asBoolean } from "../utils/boolean.js";
+// Flat-key compatibility resolvers and warn-once state. This module keeps the
+// test-only reset and warning helpers off the public SDK wildcard surface
+// (openclaw/plugin-sdk/channel-outbound re-exports all of streaming.ts) and
+// bounds the deletion scope when the fallback window closes next release train.
 import type { StreamingCompatEntry } from "./streaming-compat-entry.js";
 
 const log = createSubsystemLogger("channels/streaming");
