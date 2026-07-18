@@ -142,7 +142,6 @@ export function broadcastChatError(params: {
   sessionKey: string;
   agentId?: string;
   errorMessage?: string;
-  errorDetails?: string;
 }): void {
   const seq = nextChatSeq(params.context, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
@@ -154,7 +153,6 @@ export function broadcastChatError(params: {
     seq,
     state: "error" as const,
     errorMessage: params.errorMessage,
-    ...(params.errorDetails?.trim() ? { errorDetails: params.errorDetails } : {}),
     ...(errorText
       ? {
           message: {

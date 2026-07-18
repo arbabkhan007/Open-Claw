@@ -36,12 +36,8 @@ type AssistantMessageNormalizationOptions = {
   allowTextField?: boolean;
 };
 
-function setChatRunError(state: ChatState, summary: string, details?: string | null) {
-  const trimmedDetails = details?.trim();
-  state.chatRunError = {
-    summary,
-    ...(trimmedDetails ? { details: trimmedDetails } : {}),
-  };
+function setChatRunError(state: ChatState, summary: string) {
+  state.chatRunError = { summary };
 }
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
@@ -373,7 +369,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           ? resolveGatewayErrorText(payload)
           : resolveChatErrorText(payload)
         : payload.errorMessage?.trim() || "chat error",
-      payload.errorDetails,
     );
   }
   return payload.state;

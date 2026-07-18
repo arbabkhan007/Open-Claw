@@ -115,7 +115,7 @@ export type ChatProps = {
   canSend: boolean;
   disabledReason: string | null;
   error: string | null;
-  runError?: { summary: string; details?: string } | null;
+  runError?: { summary: string } | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -564,21 +564,17 @@ export function renderChat(props: ChatProps) {
                         >
                         <span class="chat-run-error__content">${props.runError.summary}</span>
                       </div>
-                      ${props.runError.details
-                        ? html`
-                            <details class="chat-run-error__details">
-                              <summary>
-                                <span class="chat-run-error__details-show"
-                                  >${t("chat.actions.showErrorDetails")}</span
-                                >
-                                <span class="chat-run-error__details-hide"
-                                  >${t("chat.actions.hideErrorDetails")}</span
-                                >
-                              </summary>
-                              <pre>${props.runError.details}</pre>
-                            </details>
-                          `
-                        : nothing}
+                      <details class="chat-run-error__details">
+                        <summary>
+                          <span class="chat-run-error__details-show"
+                            >${t("chat.actions.showErrorDetails")}</span
+                          >
+                          <span class="chat-run-error__details-hide"
+                            >${t("chat.actions.hideErrorDetails")}</span
+                          >
+                        </summary>
+                        <pre>${t("chat.actions.errorLogsCommand")}</pre>
+                      </details>
                     </div>
                   `
                 : nothing}

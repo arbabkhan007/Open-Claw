@@ -153,8 +153,7 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toContain("Something went wrong while processing your request");
       expect(result.payload.text).not.toContain("INVALID_ARGUMENT: some other failure");
-      expect(result.payload.errorDetails).toContain("INVALID_ARGUMENT: some other failure");
-      expect(result.payload.errorDetails).toContain("Logs: openclaw logs --follow");
+      expect(result.payload).not.toHaveProperty("errorDetails");
     }
   });
 });

@@ -12,7 +12,6 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
-import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isFallbackSummaryError } from "../../agents/model-fallback.js";
@@ -37,7 +36,6 @@ import {
 import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
-  buildControlUiErrorDetails,
   buildRateLimitCooldownMessage,
   hasBillingAttemptSummary,
   isNonDirectConversationContext,
@@ -439,9 +437,6 @@ export async function handleAgentExecutionError(params: {
           failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
-  const trimmedMessage = (
-    isTransientHttp ? sanitizeUserFacingText(message, { errorContext: true }) : message
-  ).replace(/\.\s*$/, "");
   const externalRunFailureReply =
     !isBilling &&
     !(isRateLimit && !isOverloaded) &&
@@ -509,11 +504,6 @@ export async function handleAgentExecutionError(params: {
   await params.modelPatch.fail(err);
   return {
     kind: "final",
-    payload: markAgentRunFailureReplyPayload({
-      text: userVisibleFallbackText,
-      ...(params.shouldSurfaceToControlUi
-        ? { errorDetails: buildControlUiErrorDetails(trimmedMessage) }
-        : {}),
-    }),
+    payload: markAgentRunFailureReplyPayload({ text: userVisibleFallbackText }),
   };
 }

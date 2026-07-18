@@ -2021,7 +2021,6 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       state: "error",
       errorMessage: "raw gateway error",
-      errorDetails: "raw gateway error\nprovider trace",
       message,
     };
 
@@ -2030,7 +2029,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.lastError).toBeNull();
     expect(state.chatRunError).toEqual({
       summary: "Configure provider auth, then try again.",
-      details: "raw gateway error\nprovider trace",
     });
   });
 

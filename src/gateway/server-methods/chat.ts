@@ -1433,11 +1433,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                   .map((payload) => payload.text?.trim())
                   .filter((text): text is string => Boolean(text))
                   .join(" | ") || undefined;
-              const returnedAgentErrorDetails =
-                returnedAgentErrorPayloads
-                  .map((payload) => payload.errorDetails?.trim())
-                  .filter((details): details is string => Boolean(details))
-                  .join("\n\n") || undefined;
               if (
                 agentRunStarted &&
                 returnedAgentErrorPayloads.length > 0 &&
@@ -1490,7 +1485,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                   sessionKey,
                   agentId,
                   errorMessage: returnedAgentErrorMessage,
-                  errorDetails: returnedAgentErrorDetails,
                 });
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {

@@ -2368,7 +2368,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         kind: "final",
         payload: {
           text: "tool warning",
-          errorDetails: "provider trace\nLogs: openclaw logs --follow",
           isError: true,
         },
       },
@@ -2398,7 +2397,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       sessionKey: "main",
       state: "error",
       errorMessage: "tool warning",
-      errorDetails: "provider trace\nLogs: openclaw logs --follow",
     });
     const dedupe = context.dedupe.get("chat:idem-agent-source-reply-error");
     expect(dedupe?.ok).toBe(false);
@@ -2423,7 +2421,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         payload: setReplyPayloadMetadata(
           {
             text: "Model login expired. Re-authenticate, then try again.",
-            errorDetails: "refresh_token_reused",
             isError: true,
           },
           {
@@ -2452,7 +2449,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(broadcasts[0]).toMatchObject({
       state: "error",
       errorMessage: "Model login expired. Re-authenticate, then try again.",
-      errorDetails: "refresh_token_reused",
     });
     const assistantEntries = await readActiveAssistantTranscriptMessages();
     expect(assistantEntries).toHaveLength(1);

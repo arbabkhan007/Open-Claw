@@ -1952,10 +1952,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const gatewayErrorText =
         "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
       const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
-      const errorDetails =
-        'OAuth token refresh failed for openai: {"code":"refresh_token_reused"}\nLogs: openclaw logs --follow';
       await gateway.emitGatewayEvent("chat", {
-        errorDetails,
         errorMessage: gatewayErrorText,
         message: {
           content: [{ text: gatewayErrorText, type: "text" }],
@@ -2010,7 +2007,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await details.locator("summary").click();
       expect(await details.getAttribute("open")).not.toBeNull();
-      await details.locator("pre").getByText("refresh_token_reused").waitFor();
+      await details.locator("pre").getByText("openclaw logs --follow").waitFor();
       const expandedScreenshotPath =
         process.env.OPENCLAW_CHAT_RUN_ERROR_EXPANDED_SCREENSHOT?.trim();
       if (expandedScreenshotPath) {

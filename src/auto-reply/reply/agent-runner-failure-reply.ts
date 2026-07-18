@@ -165,13 +165,6 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
-export function buildControlUiErrorDetails(message: string): string {
-  const details = sanitizeUserFacingText(collapseRepeatedFailureDetail(message), {
-    errorContext: true,
-  }).trim();
-  return `${details || "Agent run failed."}\nLogs: openclaw logs --follow`;
-}
-
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";

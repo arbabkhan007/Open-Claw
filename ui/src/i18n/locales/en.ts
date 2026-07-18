@@ -3599,6 +3599,7 @@ export const en: TranslationMap = {
       dismissError: "Dismiss error",
       showErrorDetails: "Show details",
       hideErrorDetails: "Hide details",
+      errorLogsCommand: "Logs: openclaw logs --follow",
       exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
     },

@@ -937,7 +937,6 @@ describe("validateChatEvent", () => {
         seq: 3,
         state: "error",
         errorMessage: "Model login expired. Sign in again, then retry.",
-        errorDetails: "OAuth token refresh failed: refresh_token_reused",
       }),
     ).toBe(true);
   });
