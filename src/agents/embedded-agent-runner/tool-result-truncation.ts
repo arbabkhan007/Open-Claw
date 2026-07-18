@@ -935,6 +935,7 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   if (remainingReduction > 0) {
+    let hasClaimedElisionReserve = false;
     for (const candidate of recoveryCandidates) {
       if (remainingReduction <= 0) {
         break;
@@ -944,8 +945,16 @@ function buildAggregateToolResultReplacements(params: {
       );
       const baseMessage = existingReplacement?.message ?? candidate.message;
       const baseTextLength = getToolResultTextLength(baseMessage);
-      const targetTextChars = Math.max(0, baseTextLength - remainingReduction);
+      let targetTextChars = Math.max(0, baseTextLength - remainingReduction);
       const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
+      // Shared aggregate-cap accounting: when the aggregate budget is
+      // exhausted and no spill markers exist, only the first eligible
+      // result claims 1 char from the shared elision reserve. Subsequent
+      // results get 0 — the reserve is a single shared pool, not per-result.
+      if (targetTextChars <= 0 && !spillMarkers && !hasClaimedElisionReserve) {
+        targetTextChars = 1;
+        hasClaimedElisionReserve = true;
+      }
       const emptyMessage = clearToolResultText(candidate.message, targetTextChars, spillMarkers);
       const actualReduction = Math.max(0, baseTextLength - getToolResultTextLength(emptyMessage));
       if (actualReduction <= 0 && !spillMarkers) {
