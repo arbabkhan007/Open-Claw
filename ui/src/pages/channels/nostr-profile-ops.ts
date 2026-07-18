@@ -37,9 +37,8 @@ export async function putNostrProfile(params: {
 }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), NOSTR_PROFILE_FETCH_TIMEOUT_MS);
-  let response: Response;
   try {
-    response = await fetch(buildNostrProfileUrl(params.accountId), {
+    const response = await fetch(buildNostrProfileUrl(params.accountId), {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -48,16 +47,16 @@ export async function putNostrProfile(params: {
       body: JSON.stringify(params.values),
       signal: controller.signal,
     });
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      details?: unknown;
+      persisted?: boolean;
+    } | null;
+    return { data, response };
   } finally {
     clearTimeout(timeout);
   }
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    persisted?: boolean;
-  } | null;
-  return { data, response };
 }
 
 export async function importNostrProfile(params: {
@@ -66,9 +65,8 @@ export async function importNostrProfile(params: {
 }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), NOSTR_PROFILE_FETCH_TIMEOUT_MS);
-  let response: Response;
   try {
-    response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
+    const response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -77,15 +75,15 @@ export async function importNostrProfile(params: {
       body: JSON.stringify({ autoMerge: true }),
       signal: controller.signal,
     });
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      imported?: NostrProfile;
+      merged?: NostrProfile;
+      saved?: boolean;
+    } | null;
+    return { data, response };
   } finally {
     clearTimeout(timeout);
   }
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  } | null;
-  return { data, response };
 }
