@@ -37,6 +37,7 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  readWorkspaceFileWithGuards,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   WORKSPACE_VANISHED_ERROR_CODE,
@@ -54,6 +55,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();
   resetLegacyWorkspaceStateCheckForTest();
   await testState?.cleanup();
@@ -1003,30 +1006,42 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n\nkeep me\n",
     });
 
-    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
-    let readFileSyncCalls = 0;
+    const originalRead = syncFs.read.bind(syncFs);
+    let readCalls = 0;
     let threwTransient = false;
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
-      target: unknown,
-      options: unknown,
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
     ) => {
-      readFileSyncCalls += 1;
+      readCalls += 1;
       if (!threwTransient) {
         threwTransient = true;
-        throw Object.assign(new Error("Unknown system error -11: read"), {
-          code: "EAGAIN",
-          errno: -11,
-        });
+        // Surface the transient failure through the async fd read callback the
+        // way the bootstrap reader consumes it, so the retry path re-opens a
+        // fresh fd and reads again on the next attempt.
+        callback(
+          Object.assign(new Error("Unknown system error -11: read"), {
+            code: "EAGAIN",
+            errno: -11,
+          }),
+          0,
+          buffer,
+        );
+        return;
       }
-      return originalReadFileSync(target as never, options as never);
-    }) as typeof syncFs.readFileSync);
+      originalRead(fd, buffer, offset, length, position, callback);
+    }) as typeof syncFs.read);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
-      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      expect(readCalls).toBeGreaterThanOrEqual(2);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
       expect(agents?.missing).toBe(false);
       expect(agents?.content).toContain("keep me");
@@ -1043,12 +1058,28 @@ describe("loadWorkspaceBootstrapFiles", () => {
       content: "# AGENTS.md\n",
     });
 
-    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
-      throw Object.assign(new Error("Unknown system error -11: read"), {
-        code: "EAGAIN",
-        errno: -11,
-      });
-    }) as typeof syncFs.readFileSync);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
+    ) => {
+      void fd;
+      void offset;
+      void length;
+      void position;
+      // Keep failing every async fd read so all retry attempts are exhausted.
+      callback(
+        Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        }),
+        0,
+        buffer,
+      );
+    }) as typeof syncFs.read);
 
     try {
       // Unlike the template check, this reader returns an io failure (not a
@@ -1131,6 +1162,104 @@ describe("loadWorkspaceBootstrapFiles", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+});
+
+describe("readWorkspaceFileWithGuards", () => {
+  it("reads workspace file content through the async fd path", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "workspace rules", "utf-8");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "workspace rules" });
+  });
+
+  it("returns cached content when the file identity still matches", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-cache-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "cached rules", "utf-8");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "cached rules" });
+    const readSpy = vi.spyOn(syncFs, "read");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "cached rules" });
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("closes the fd when an async read fails", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-error-");
+    const filePath = path.join(tempDir, DEFAULT_TOOLS_FILENAME);
+    await fs.writeFile(filePath, "tool notes", "utf-8");
+    const readError = new Error("read failed");
+    vi.spyOn(syncFs, "read").mockImplementation(((
+      fd,
+      buffer,
+      offset,
+      length,
+      position,
+      callback,
+    ) => {
+      void fd;
+      void buffer;
+      void offset;
+      void length;
+      void position;
+      callback(readError, 0, buffer);
+    }) as typeof syncFs.read);
+    const closeSpy = vi.spyOn(syncFs, "close");
+
+    const result = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: tempDir,
+    });
+
+    expect(result).toStrictEqual({ ok: false, reason: "io", error: readError });
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("assembles full content when fs.read returns short reads", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-short-read-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const fullContent = "ABCDEFGHIJ";
+    await fs.writeFile(filePath, fullContent, "utf-8");
+
+    // Simulate short reads: yield 3 bytes at a time
+    const originalRead = syncFs.read.bind(syncFs);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
+    ) => {
+      const chunk = Math.min(length, 3);
+      originalRead(fd, buffer, offset, chunk, position, callback);
+    }) as typeof syncFs.read);
+
+    const result = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: tempDir,
+    });
+
+    expect(result).toStrictEqual({ ok: true, content: fullContent });
+    // Must have called read more than once to reassemble full content
+    expect(readSpy.mock.calls.length).toBeGreaterThan(1);
   });
 });
 

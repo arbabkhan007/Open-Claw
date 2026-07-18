@@ -4,6 +4,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
@@ -298,15 +299,40 @@ export async function resolveBootstrapFilesForRun(params: {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFilesForRunWithTiming(params);
+}
+
+/**
+ * Timing-aware variant used only by the embedded runner to record bootstrap
+ * substage durations. Kept off the plugin SDK surface (not re-exported by
+ * `src/plugin-sdk/agent-harness-runtime.ts`) so the public
+ * `resolveBootstrapFilesForRun` signature stays callback-free.
+ */
+export async function resolveBootstrapFilesForRunWithTiming(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  warn?: (message: string) => void;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
+  onBootstrapSubstageTiming?: (
+    name: "workspace-file-load" | "hook-overrides",
+    durationMs: number,
+  ) => void;
+}): Promise<WorkspaceBootstrapFile[]> {
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
+  const fileLoadStartedAt = performance.now();
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  params.onBootstrapSubstageTiming?.("workspace-file-load", performance.now() - fileLoadStartedAt);
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
       filterBootstrapFilesForSession(rawFiles, sessionKey),
@@ -317,6 +343,7 @@ export async function resolveBootstrapFilesForRun(params: {
     runKind: params.runKind,
   });
 
+  const hookOverridesStartedAt = performance.now();
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
     workspaceDir: params.workspaceDir,
@@ -325,6 +352,7 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
+  params.onBootstrapSubstageTiming?.("hook-overrides", performance.now() - hookOverridesStartedAt);
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     updated,
     workspaceSetupCompleted,
