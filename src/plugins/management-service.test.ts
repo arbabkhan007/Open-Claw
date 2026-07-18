@@ -880,6 +880,8 @@ describe("plugin management service", () => {
       },
     });
     mocks.persistInstall.mockRejectedValue(persistenceError);
+    // Same record is in both the pre-install snapshot and the post-failure read,
+    // so cleanup correctly preserves a previously committed install.
     mocks.installRecords.mockResolvedValue({
       demo: { source: "clawhub", installPath: targetDir },
     });
@@ -896,6 +898,47 @@ describe("plugin management service", () => {
     });
     expect(mocks.planUninstall).not.toHaveBeenCalled();
     expect(mocks.applyUninstall).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a stale install target when the post-failure record comes from the current failed transaction", async () => {
+    const persistenceError = new Error("post-commit refresh failed");
+    const targetDir = "/tmp/extensions/demo";
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(persistenceError);
+    // Simulate the double-fault scenario:
+    //   Call 1 — pre-persist snapshot (no previous install).
+    //   Call 2 — post-failure read sees the stale record written by the
+    //            current transaction that survived the failed rollback.
+    mocks.installRecords
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ demo: { source: "clawhub", installPath: targetDir } });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toBe(persistenceError);
+    // The stale target is removed because the record was created by the current
+    // failed transaction, not by a prior committed install.
+    expect(mocks.applyUninstall).toHaveBeenCalledWith({
+      kind: "package-dir",
+      target: targetDir,
+      cleanup: undefined,
+    });
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {

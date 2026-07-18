@@ -901,11 +901,15 @@ function installRecordOwnsTarget(
   );
 }
 
-async function cleanupFailedManagedPluginInstall(params: {
+export async function cleanupFailedManagedPluginInstall(params: {
   pluginId: string;
   install: PluginInstallRecord;
   targetDir: string;
   extensionsDir: string;
+  /** Install records snapshot taken before the persistence attempt; used to
+   *  detect whether a surviving record is a stale left-over from the current
+   *  failed transaction (not a prior committed install that should be kept). */
+  previousInstallRecords?: Record<string, PluginInstallRecord>;
 }): Promise<string[]> {
   let installRecords: Record<string, PluginInstallRecord>;
   try {
@@ -916,6 +920,34 @@ async function cleanupFailedManagedPluginInstall(params: {
     ];
   }
   if (installRecordOwnsTarget(installRecords[params.pluginId], params.targetDir)) {
+    // When we have a pre-persist snapshot we can distinguish a stale
+    // left-over from the current failed transaction (no prior record)
+    // from a genuinely previously committed install (prior record
+    // already owned the target).  Without a snapshot we fall back to
+    // conservative behaviour and retain the target.
+    if (params.previousInstallRecords !== undefined) {
+      const installedBefore = installRecordOwnsTarget(
+        params.previousInstallRecords[params.pluginId],
+        params.targetDir,
+      );
+      if (!installedBefore) {
+        // The record was written by the current failed transaction and
+        // survived the rollback — this is a stale left-over.  Remove
+        // the target so retries aren't permanently blocked.
+        try {
+          await applyPluginUninstallDirectoryRemoval({
+            kind: "package-dir",
+            target: params.targetDir,
+            cleanup: undefined,
+          });
+        } catch (removalError) {
+          return [
+            `Failed to remove the stale managed install target after an incomplete install of ${params.pluginId}: ${formatErrorMessage(removalError)}`,
+          ];
+        }
+        return [];
+      }
+    }
     return [
       `Plugin install persistence reported an error after ${params.targetDir} was recorded; retained the managed target.`,
     ];
@@ -980,6 +1012,16 @@ async function persistManagedPluginInstall(params: {
   targetDir: string;
   extensionsDir: string;
 }): Promise<OpenClawConfig> {
+  // Snapshot install records before persistence so the cleanup path can
+  // tell a stale left-over from the current failed transaction apart from
+  // a previously committed install for the same plugin id.
+  let previousInstallRecords: Record<string, PluginInstallRecord> | undefined;
+  try {
+    previousInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  } catch {
+    // If we can't load the previous state we fall back to conservative
+    // cleanup — the target will be retained rather than removed.
+  }
   try {
     return await persistPluginInstall({
       snapshot: params.snapshot,
@@ -994,6 +1036,7 @@ async function persistManagedPluginInstall(params: {
       install: params.install,
       targetDir: params.targetDir,
       extensionsDir: params.extensionsDir,
+      previousInstallRecords,
     });
     return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
   }
