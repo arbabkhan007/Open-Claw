@@ -370,7 +370,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         ? payloadMessageProjectsStream && !legacyErrorMessageProjectsStream
           ? resolveGatewayErrorText(payload)
           : resolveChatErrorText(payload)
-        : payload.errorMessage?.trim() || "chat error",
+        : payload.message
+          ? resolveChatErrorText(payload)
+          : payload.errorMessage?.trim() || "chat error",
     );
   }
   return payload.state;

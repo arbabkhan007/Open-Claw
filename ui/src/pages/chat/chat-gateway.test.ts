@@ -2056,6 +2056,46 @@ describe("handleChatGatewayEvent", () => {
     });
   });
 
+  it("uses server guidance when an error follows a source-reply final", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Source reply delivered." }],
+          timestamp: 9,
+        },
+      }),
+    ).toBe("final");
+    expect(state.chatRunId).toBeNull();
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "raw provider failure",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Configure provider auth, then try again." }],
+          timestamp: 10,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
+    expect(state.chatRunError).toEqual({
+      summary: "Configure provider auth, then try again.",
+    });
+  });
+
   it("does not append an orphan error bubble when no run was active", () => {
     const existingMessage = {
       role: "assistant",
