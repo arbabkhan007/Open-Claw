@@ -34,18 +34,20 @@ export function listRunsForRequesterFromRuns(
   const lowerBound = requesterRunMatchesScope?.startedAt ?? requesterRunMatchesScope?.createdAt;
   const upperBound = requesterRunMatchesScope?.endedAt;
 
-  return [...runs.values()].filter((entry) => {
+  const results: SubagentRunRecord[] = [];
+  for (const entry of runs.values()) {
     if (entry.requesterSessionKey !== key) {
-      return false;
+      continue;
     }
     if (typeof lowerBound === "number" && entry.createdAt < lowerBound) {
-      return false;
+      continue;
     }
     if (typeof upperBound === "number" && entry.createdAt > upperBound) {
-      return false;
+      continue;
     }
-    return true;
-  });
+    results.push(entry);
+  }
+  return results;
 }
 
 /** Lists runs controlled by the normalized controller session key. */
@@ -57,7 +59,13 @@ export function listRunsForControllerFromRuns(
   if (!key) {
     return [];
   }
-  return [...runs.values()].filter((entry) => resolveControllerSessionKey(entry) === key);
+  const results: SubagentRunRecord[] = [];
+  for (const entry of runs.values()) {
+    if (resolveControllerSessionKey(entry) === key) {
+      results.push(entry);
+    }
+  }
+  return results;
 }
 
 type LatestRunPair = {
