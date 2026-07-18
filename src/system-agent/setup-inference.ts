@@ -3256,6 +3256,10 @@ async function runSetupInferenceTest(params: {
         messageProvider: "openclaw",
         executionMode: "side-question",
         disableTools: true,
+        // Defense-in-depth: an explicit empty allowlist forces the Codex
+        // app-server native tool surface to fail closed even if a caller ever
+        // drops the disableTools gate. The setup probe never needs tools.
+        toolsAllow: [],
         cleanupCliLiveSessionOnRunEnd: true,
         onSuccessfulAuthBinding: (binding) => {
           successfulAuth = binding;
@@ -3299,6 +3303,10 @@ async function runSetupInferenceTest(params: {
           ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
           : {}),
         disableTools: true,
+        // Defense-in-depth: an explicit empty allowlist forces the Codex
+        // app-server native tool surface to fail closed even if a caller ever
+        // drops the disableTools gate. The setup probe never needs tools.
+        toolsAllow: [],
         modelRun: true,
         messageChannel: "openclaw",
         messageProvider: "openclaw",
