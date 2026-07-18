@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import { parse } from "yaml";
 import { resolveGitHubRepoFromOrigin } from "./lib/github-repo.ts";
 
+const SYNC_LABELS_TIMEOUT_MS = 120_000;
+
 type RepoLabel = {
   name: string;
   color?: string;
@@ -77,7 +79,7 @@ for (const label of missing) {
   if (metadata.description) {
     args.push("-f", `description=${metadata.description}`);
   }
-  execFileSync("gh", args, { stdio: "inherit" });
+  execFileSync("gh", args, { stdio: "inherit", timeout: SYNC_LABELS_TIMEOUT_MS, killSignal: "SIGKILL" });
   console.log(`Created label: ${label}`);
 }
 
