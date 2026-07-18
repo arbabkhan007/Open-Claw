@@ -109,4 +109,45 @@ describe("refreshChatAvatar fetch bounding", () => {
     expect(host.chatAvatarUrl).toBe("blob:fake");
     vi.useFakeTimers();
   });
+
+  it("resolves slow metadata + fast image within independent timeouts", async () => {
+    vi.useRealTimers();
+    let metadataDelay = 0;
+    let imageDelay = 0;
+
+    server.close();
+    server = createServer((req, res) => {
+      const url = req.url ?? "";
+      if (url.includes("meta=1")) {
+        setTimeout(() => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ avatarUrl: "/avatar/blob/abc123" }));
+          metadataDelay = Date.now();
+        }, 100);
+        return;
+      }
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "image/png" });
+        res.end(Buffer.from("fake-image-bytes"));
+        imageDelay = Date.now();
+      }, 10);
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    serverUrl = `http://127.0.0.1:${port}`;
+    installRelativeFetchBridge(serverUrl);
+
+    const host: Host = {
+      connected: true,
+      sessionKey: "agent:abc123:session",
+      basePath: "",
+      chatAvatarUrl: null,
+    };
+    await refreshChatAvatar(host as never);
+    expect(host.chatAvatarUrl).toBe("blob:fake");
+    expect(metadataDelay).toBeGreaterThan(0);
+    expect(imageDelay).toBeGreaterThan(0);
+    expect(imageDelay).toBeGreaterThanOrEqual(metadataDelay);
+  });
 });
