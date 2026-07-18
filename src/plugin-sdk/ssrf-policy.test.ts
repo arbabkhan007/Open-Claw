@@ -290,6 +290,60 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       }),
     ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
+
+  it("rejects malformed URLs with a stable error", async () => {
+    const err = await assertHttpUrlTargetsPrivateNetwork("not-a-url", {
+      dangerouslyAllowPrivateNetwork: true,
+    }).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(TypeError);
+    expect((err as Error).message).toBe("Invalid URL");
+    expect((err as TypeError & { code?: string }).code).toBe("ERR_INVALID_URL");
+  });
+
+  it("does not reflect credential-bearing malformed URLs in errors", async () => {
+    const secretUser = "matrix-user";
+    const secretPass = "matrix-fixture";
+    const malformed = `http://${secretUser}:${secretPass}@${["invalid", "host"].join(" ")}`;
+
+    const error = await assertHttpUrlTargetsPrivateNetwork(malformed, {
+      dangerouslyAllowPrivateNetwork: true,
+    }).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(TypeError);
+
+    // Preserve the ERR_INVALID_URL code for caller classification.
+    expect((error as TypeError & { code?: unknown }).code).toBe("ERR_INVALID_URL");
+
+    // Outer message must be stable and non-disclosing.
+    const message = (error as Error).message;
+    expect(message).toBe("Invalid URL");
+    expect(message).not.toContain(secretUser);
+    expect(message).not.toContain(secretPass);
+
+    // No native parser error cause that could retain the malformed input.
+    const err = error as Error & { cause?: unknown };
+    expect(err.cause).toBeUndefined();
+
+    // Complete error serialization must not expose credentials.
+    const serialized = JSON.stringify(
+      Object.fromEntries(
+        Object.entries(Object.getOwnPropertyDescriptors(error)).map(([k, d]) => [k, d.value]),
+      ),
+    );
+    expect(serialized).not.toContain(secretUser);
+    expect(serialized).not.toContain(secretPass);
+  });
 });
 
 describe("normalizeHostnameSuffixAllowlist", () => {
