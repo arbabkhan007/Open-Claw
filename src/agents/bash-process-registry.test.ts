@@ -245,6 +245,55 @@ describe("bash process registry", () => {
     expect(createSessionSlug()).toBe("amber-atlas");
   });
 
+  it("kills child process and destroys streams on deleteSession", () => {
+    const kill = vi.fn();
+    const stdinDestroy = vi.fn();
+    const stdoutDestroy = vi.fn();
+    const stderrDestroy = vi.fn();
+    const removeAllListeners = vi.fn();
+    const session = createProcessSessionFixture({
+      id: "zombie-leak-test",
+      command: "sleep 999",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+      child: {
+        pid: 42,
+        kill,
+        stdin: { destroy: stdinDestroy },
+        stdout: { destroy: stdoutDestroy },
+        stderr: { destroy: stderrDestroy },
+        removeAllListeners,
+      } as unknown as ChildProcessWithoutNullStreams,
+    });
+
+    addSession(session);
+    deleteSession(session.id);
+
+    expect(kill).toHaveBeenCalled();
+    expect(stdinDestroy).toHaveBeenCalled();
+    expect(stdoutDestroy).toHaveBeenCalled();
+    expect(stderrDestroy).toHaveBeenCalled();
+    expect(removeAllListeners).toHaveBeenCalled();
+    expect(session.child).toBeUndefined();
+    expect(listRunningSessions()).toHaveLength(0);
+  });
+
+  it("does not throw when deleteSession targets a finished session without a child", () => {
+    const session = createRegistrySession({
+      id: "no-child-finished",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    markExited(session, 0, null, "completed");
+    deleteSession(session.id);
+
+    expect(listFinishedSessions()).toHaveLength(0);
+  });
+
   it("clears background activity in the test reset", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
