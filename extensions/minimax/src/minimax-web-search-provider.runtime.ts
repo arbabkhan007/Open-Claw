@@ -10,9 +10,7 @@ import {
   formatCliCommand,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
   readPositiveIntegerParam,
-  readProviderEnvValue,
   readStringParam,
   MAX_SEARCH_COUNT,
   resolveProviderWebSearchPluginConfig,
@@ -20,6 +18,7 @@ import {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
+  resolveWebSearchProviderCredential,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
@@ -56,10 +55,11 @@ type MiniMaxSearchResponse = {
 };
 
 function resolveMiniMaxApiKey(searchConfig?: SearchConfigRecord): string | undefined {
-  return (
-    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
-    readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
-  );
+  return resolveWebSearchProviderCredential({
+    credentialValue: searchConfig?.apiKey,
+    path: "tools.web.search.apiKey",
+    envVars: [...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"],
+  });
 }
 
 function isMiniMaxCnHost(value: string | undefined): boolean {
