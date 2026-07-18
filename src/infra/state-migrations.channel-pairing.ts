@@ -105,18 +105,38 @@ function parseAllowFromFilename(
       continue;
     }
     const accountKey = stem.slice(channel.length + 1);
-    const matchingAccountIds = (accountIds[channel] ?? []).filter(
-      (accountId) => safeAccountKey(accountId) === accountKey,
-    );
-    if (matchingAccountIds.length === 1 && matchingAccountIds[0]) {
-      targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
-    } else if (matchingAccountIds.length > 1) {
-      hasAccountCollision = true;
-    } else if (accountKey === DEFAULT_ACCOUNT_ID && CHANNEL_IDS.includes(channel)) {
-      // "default" is canonical, so bundled `<channel>-default` files resolve without config.
-      // Keep this on CHANNEL_IDS: knownChannelIds also includes configured and pairing-file ids.
-      // After safeAccountKey finds no match, those other channels must remain unresolved.
-      targets.push({ channel: channel as PairingChannel, accountId: DEFAULT_ACCOUNT_ID });
+    // Normalize the filename segment the same way as configured account ids
+    // so that raw spellings (e.g. HY_RIN_Bot) match their canonical safe key.
+    let normalizedAccountKey: string | undefined;
+    try {
+      normalizedAccountKey = safeAccountKey(accountKey);
+    } catch {
+      // Pathological filename segment; skip this channel safely.
+    }
+    if (normalizedAccountKey) {
+      // A non-canonical DEFAULT segment (e.g. "DEFAULT") must not match a
+      // configured or plugin-provided "default" account via safe-key
+      // normalization; it must remain unresolved. Only the literal lowercase
+      // "default" suffix may resolve to the implicit bundled default account.
+      const isNonCanonicalDefault =
+        normalizedAccountKey === DEFAULT_ACCOUNT_ID && accountKey !== DEFAULT_ACCOUNT_ID;
+      const matchingAccountIds = isNonCanonicalDefault
+        ? []
+        : (accountIds[channel] ?? []).filter(
+            (accountId) => safeAccountKey(accountId) === normalizedAccountKey,
+          );
+      if (matchingAccountIds.length === 1 && matchingAccountIds[0]) {
+        targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
+      } else if (matchingAccountIds.length > 1) {
+        hasAccountCollision = true;
+      } else if (accountKey === DEFAULT_ACCOUNT_ID && CHANNEL_IDS.includes(channel)) {
+        // Bundled <channel>-default files resolve without config.
+        // Keep this on the literal canonical suffix: an uppercase DEFAULT
+        // filename (e.g. telegram-DEFAULT-allowFrom.json) must remain
+        // unresolved rather than being attributed to the implicit default
+        // account and deleted.
+        targets.push({ channel: channel as PairingChannel, accountId: DEFAULT_ACCOUNT_ID });
+      }
     }
   }
   if (hasAccountCollision || targets.length > 1) {
