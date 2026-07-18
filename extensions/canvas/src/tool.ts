@@ -158,7 +158,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             required: true,
           });
           const raw = (await invoke("canvas.eval", { javaScript })) as {
-            payload?: { result?: string };
+            payload?: { result?: unknown; error?: string };
           };
           const result = raw?.payload?.result;
           if (typeof result === "string") {
@@ -167,7 +167,13 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
               details: { result },
             };
           }
-          return jsonResult({ ok: true });
+          // Non-string results or errors should not be silently swallowed.
+          const error = typeof raw?.payload?.error === "string" ? raw.payload.error : undefined;
+          return jsonResult({
+            ok: false,
+            ...(error ? { error } : {}),
+            ...(result !== undefined && result !== null ? { result } : {}),
+          });
         }
         case "snapshot": {
           const formatRaw =
