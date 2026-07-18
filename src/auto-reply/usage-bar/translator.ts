@@ -122,6 +122,11 @@ function parseFixedDigits(raw: string | undefined): number | undefined {
   return digits !== undefined && digits >= 0 && digits <= 100 ? digits : undefined;
 }
 
+function parseMeterWidth(raw: string | undefined): number | undefined {
+  const width = raw === undefined ? 5 : parseStrictInteger(raw);
+  return width !== undefined && width >= 0 && width <= 100 ? width : undefined;
+}
+
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
   switch (name) {
     case "num":
@@ -148,9 +153,9 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
+      const width = parseMeterWidth(args[0]);
       const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
-      return meter(value, width, scale);
+      return width === undefined ? "" : meter(value, width, scale);
     }
     default:
       return String(value);
