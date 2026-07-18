@@ -1205,6 +1205,98 @@ describe("wildcard peer bindings (peer.id=*)", () => {
     expect(route.agentId).toBe("grp");
     expect(route.matchedBy).toBe("binding.peer.wildcard");
   });
+
+  test("does not reuse a cached route when peer and guild fields contain cache separators", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "whole-peer" }, { id: "guild-room" }] },
+      bindings: [
+        {
+          agentId: "whole-peer",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "group", id: "room\t-\tguild-1" },
+          },
+        },
+        {
+          agentId: "guild-room",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "group", id: "room" },
+            guildId: "guild-1",
+          },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "group", id: "room\t-\tguild-1" },
+      }),
+      { agentId: "whole-peer", matchedBy: "binding.peer" },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        guildId: "guild-1",
+        peer: { kind: "group", id: "room" },
+      }),
+      { agentId: "guild-room", matchedBy: "binding.peer" },
+    );
+  });
+
+  test("does not reuse a cached route when role IDs contain cache separators", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "comma-role" }, { id: "suffix-role" }] },
+      bindings: [
+        {
+          agentId: "comma-role",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            guildId: "guild-1",
+            roles: ["a,b"],
+          },
+        },
+        {
+          agentId: "suffix-role",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            guildId: "guild-1",
+            roles: ["b,c"],
+          },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        guildId: "guild-1",
+        memberRoleIds: ["a,b", "c"],
+      }),
+      { agentId: "comma-role", matchedBy: "binding.guild+roles" },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "default",
+        guildId: "guild-1",
+        memberRoleIds: ["a", "b,c"],
+      }),
+      { agentId: "suffix-role", matchedBy: "binding.guild+roles" },
+    );
+  });
 });
 
 describe("binding evaluation cache scalability", () => {
