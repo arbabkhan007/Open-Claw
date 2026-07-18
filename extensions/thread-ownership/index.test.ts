@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
-import register from "./index.js";
+import register, { resetMentionedThreadsForTests } from "./index.js";
 
 describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
@@ -53,6 +53,7 @@ describe("thread-ownership plugin", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetMentionedThreadsForTests();
     for (const key of Object.keys(hooks)) {
       delete hooks[key];
     }
@@ -504,6 +505,44 @@ describe("thread-ownership plugin", () => {
       );
 
       expect(globalThis.fetch).toHaveBeenCalled();
+    });
+
+    it("evicts oldest mention cache entries once the cache exceeds its cap", async () => {
+      await requireHook("message_received")(
+        {
+          content: "hey @TestBot help",
+          threadId: "1111.0001",
+          metadata: { channelId: "C000" },
+        },
+        { channelId: "slack", conversationId: "C000" },
+      );
+
+      for (let i = 1; i <= 1000; i += 1) {
+        await requireHook("message_received")(
+          {
+            content: "hey @TestBot help",
+            threadId: `2222.${i.toString().padStart(4, "0")}`,
+            metadata: { channelId: `C${i.toString().padStart(3, "0")}` },
+          },
+          { channelId: "slack", conversationId: `C${i.toString().padStart(3, "0")}` },
+        );
+      }
+
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      await requireHook("message_sending")(
+        {
+          content: "On it!",
+          replyToId: "1111.0001",
+          metadata: { channelId: "C000" },
+          to: "C000",
+        },
+        { channelId: "slack", conversationId: "C000" },
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
   });
 });
