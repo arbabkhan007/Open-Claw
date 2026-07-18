@@ -1217,6 +1217,46 @@ export async function executePreparedCliRun(
         beginGatewayCapture(initialGatewayCaptureKey);
         let observedCliActivity = false;
         const emitLiveEvents = params.executionMode !== "side-question";
+        const emitCliToolCardStart = (event: {
+          toolCallId: string;
+          name: string;
+          args: Record<string, unknown>;
+        }) => {
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: event.name,
+              toolCallId: event.toolCallId,
+              args: sanitizeToolArgs(event.args),
+            },
+          });
+        };
+        const emitCliToolCardResult = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          result?: unknown;
+        }) => {
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: event.name,
+              toolCallId: event.toolCallId,
+              isError: event.isError,
+              result: sanitizeToolResult(event.result),
+            },
+          });
+        };
         const activeParsedTools = new Map<
           string,
           { startedAt: number; toolName: string; kind: CliToolUseStartDelta["kind"] }
@@ -1277,19 +1317,7 @@ export async function executePreparedCliRun(
               target: extractCliMessagingTarget(context, toolName, event.args),
             });
           }
-          if (!emitLiveEvents) {
-            return;
-          }
-          emitAgentEvent({
-            runId: params.runId,
-            stream: "tool",
-            data: {
-              phase: "start",
-              name: event.name,
-              toolCallId: event.toolCallId,
-              args: sanitizeToolArgs(event.args),
-            },
-          });
+          emitCliToolCardStart(event);
         };
         const emitCliToolResult = (event: {
           toolCallId: string;
@@ -1312,20 +1340,24 @@ export async function executePreparedCliRun(
               isError: event.isError,
             });
           }
-          if (!emitLiveEvents) {
-            return;
-          }
-          emitAgentEvent({
-            runId: params.runId,
-            stream: "tool",
-            data: {
-              phase: "result",
-              name: event.name,
-              toolCallId: event.toolCallId,
-              isError: event.isError,
-              result: sanitizeToolResult(event.result),
-            },
-          });
+          emitCliToolCardResult(event);
+        };
+        const emitCliDisplayToolUseStart = (event: {
+          toolCallId: string;
+          name: string;
+          args: Record<string, unknown>;
+        }) => {
+          observedCliActivity = true;
+          emitCliToolCardStart(event);
+        };
+        const emitCliDisplayToolResult = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          result?: unknown;
+        }) => {
+          observedCliActivity = true;
+          emitCliToolCardResult(event);
         };
         const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
           const startedAt = Date.now();
@@ -1616,12 +1648,15 @@ export async function executePreparedCliRun(
             ? createCliJsonlStreamingParser({
                 backend,
                 providerId: context.backendResolved.id,
+                parseJsonlEvent: context.backendResolved.parseJsonlEvent,
                 onAssistantDelta: emitCliAssistantDelta,
                 onThinkingDelta: emitCliThinkingDelta,
                 onThinkingProgress: emitCliThinkingProgress,
                 onPlanUpdate: emitCliPlanUpdate,
                 onToolUseStart: emitParsedToolUseStart,
                 onToolResult: emitParsedToolResult,
+                onDisplayToolUseStart: emitCliDisplayToolUseStart,
+                onDisplayToolResult: emitCliDisplayToolResult,
                 onCommentaryText:
                   emitLiveEvents && context.params.emitCommentaryText
                     ? emitCliCommentaryText

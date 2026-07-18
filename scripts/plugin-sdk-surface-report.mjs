@@ -265,7 +265,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
       // +1: async memory prompt preparation registration.
-      8153,
+      // +4: CliBackendPlugin re-export and parseJsonlEvent hook types
+      // (CliBackendParseJsonlEvent/Context/ParsedJsonlEvent) for native JSONL parsing (#95351).
+      8157,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
