@@ -642,8 +642,8 @@ launch_scene() {
     launch_args+=(--ez openclaw.screenshotMode true)
   else
     # Start each debug fixture as a fresh task so saved pager state cannot leak
-    # between store scenes.
-    launch_args+=(--activity-new-task --activity-clear-task)
+    # between store scenes. am accepts the stable bitmask across Android versions.
+    launch_args+=(-f 0x10008000)
   fi
   launch_args+=(--es openclaw.screenshotScene "$scene")
   "$adb" "${launch_args[@]}" >"$activity_start_path"

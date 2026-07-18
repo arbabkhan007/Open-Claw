@@ -276,7 +276,11 @@ describe("android screenshots script", () => {
         call.includes("ai.openclaw.app/ai.openclaw.wear.WearScreenshotActivity"),
       ),
     ).toBe(true);
-    expect(starts.every((call) => call.includes("--activity-clear-task"))).toBe(true);
+    expect(
+      starts.every((call) =>
+        call.some((arg, index) => arg === "-f" && call[index + 1] === "0x10008000"),
+      ),
+    ).toBe(true);
     expect(starts.every((call) => !call.includes("openclaw.screenshotMode"))).toBe(true);
     const outputDir = path.join(
       root,
