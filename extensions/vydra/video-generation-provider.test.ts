@@ -5,8 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   binaryResponse,
   jsonResponse,
+  startLocalHttpForwardProxy,
+  startLocalVydraHttpServer,
   stubFetch,
   stubVydraApiKey,
+  writeBinaryResponse,
+  writeJsonResponse,
 } from "./provider-test-helpers.test.js";
 import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -30,6 +34,7 @@ describe("vydra video-generation provider", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -78,6 +83,123 @@ describe("vydra video-generation provider", () => {
       videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
       status: "completed",
     });
+  });
+
+  it("applies configured request policy to the video creation request", async () => {
+    stubVydraApiKey();
+    const fetchMock = stubFetch(
+      jsonResponse({
+        jobId: "job-policy",
+        status: "completed",
+        videoUrl: "https://cdn.vydra.ai/generated/policy.mp4",
+      }),
+      binaryResponse("mp4-data", "video/mp4"),
+    );
+
+    const provider = buildVydraVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "vydra",
+      model: "veo3",
+      prompt: "tiny city at sunrise",
+      cfg: {
+        models: {
+          providers: {
+            vydra: {
+              baseUrl: "http://127.0.0.1:11434/api/v1",
+              models: [],
+              request: {
+                allowPrivateNetwork: true,
+                headers: { "X-Vydra-Policy": "video" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const createCall = fetchCall(fetchMock, 0);
+    expect(createCall[0]).toBe("http://127.0.0.1:11434/api/v1/models/veo3");
+    const createInit = createCall[1] as { headers?: HeadersInit } | undefined;
+    const headers = new Headers(createInit?.headers);
+    expect(headers.get("x-vydra-policy")).toBe("video");
+  });
+
+  it("routes the full local Vydra-compatible video flow through the configured proxy", async () => {
+    stubVydraApiKey();
+    let assetUrl = "";
+    const server = await startLocalVydraHttpServer((_req, res, request) => {
+      if (request.method === "POST" && request.url === "/api/v1/models/veo3") {
+        writeJsonResponse(res, { jobId: "job-local-video", status: "processing" });
+        return;
+      }
+      if (request.method === "GET" && request.url === "/api/v1/jobs/job-local-video") {
+        writeJsonResponse(res, {
+          jobId: "job-local-video",
+          status: "completed",
+          videoUrl: assetUrl,
+        });
+        return;
+      }
+      if (request.method === "GET" && request.url === "/generated/local-video.mp4") {
+        writeBinaryResponse(res, "local-mp4", "video/mp4");
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    assetUrl = `${server.baseUrl.replace(/\/api\/v1$/u, "")}/generated/local-video.mp4`;
+    const proxy = await startLocalHttpForwardProxy();
+    vi.stubEnv("HTTP_PROXY", proxy.proxyUrl);
+    vi.stubEnv("http_proxy", proxy.proxyUrl);
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("ALL_PROXY", "");
+    vi.stubEnv("all_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+
+    try {
+      const provider = buildVydraVideoGenerationProvider();
+      const result = await provider.generateVideo({
+        provider: "vydra",
+        model: "veo3",
+        prompt: "local proof video",
+        cfg: {
+          models: {
+            providers: {
+              vydra: {
+                baseUrl: server.baseUrl,
+                models: [],
+                request: {
+                  allowPrivateNetwork: true,
+                  headers: { "X-Vydra-Policy": "local-video" },
+                  proxy: { mode: "env-proxy" },
+                },
+              },
+            },
+          },
+        },
+        timeoutMs: 5_000,
+      });
+
+      expect(result.videos.map((video) => video.fileName)).toEqual(["video-1.mp4"]);
+      expect(result.videos.map((video) => video.mimeType)).toEqual(["video/mp4"]);
+      expect(server.requests.map((request) => `${request.method} ${request.url}`)).toEqual([
+        "POST /api/v1/models/veo3",
+        "GET /api/v1/jobs/job-local-video",
+        "GET /generated/local-video.mp4",
+      ]);
+      const [createRequest, pollRequest, assetRequest] = server.requests;
+      expect(createRequest?.headers["x-vydra-policy"]).toBe("local-video");
+      expect(pollRequest?.headers["x-vydra-policy"]).toBe("local-video");
+      expect(assetRequest?.headers["x-vydra-policy"]).toBe("local-video");
+      expect(assetRequest?.headers.authorization).toBe("Bearer vydra-test-key");
+      const target = new URL(server.baseUrl).host;
+      expect(proxy.tunnels).toEqual([target, target, target]);
+    } finally {
+      await proxy.close();
+      await server.close();
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
