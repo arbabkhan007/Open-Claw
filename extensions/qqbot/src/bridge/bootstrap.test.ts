@@ -1,4 +1,7 @@
 // Qqbot tests cover the built-in platform adapter boundary.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
@@ -64,6 +67,7 @@ describe("QQBot built-in platform adapter", () => {
       maxRedirects: 2,
       timeoutMs: 5_000,
       responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
       ssrfPolicy: { hostnameAllowlist: ["*.qq.com"] },
       requestInit: { headers: { accept: "image/png" } },
     });
@@ -76,9 +80,35 @@ describe("QQBot built-in platform adapter", () => {
       maxRedirects: 2,
       timeoutMs: 5_000,
       responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
       ssrfPolicy: { hostnameAllowlist: ["*.qq.com"] },
       requestInit: { headers: { accept: "image/png" } },
     });
+  });
+
+  it("applies header and idle timeouts on adapter downloadFile", async () => {
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      fileName: "remote.png",
+    });
+    const destDir = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-bootstrap-download-"));
+
+    try {
+      const destPath = await getPlatformAdapter().downloadFile(
+        "https://media.qq.com/assets/photo.png",
+        destDir,
+        "photo.png",
+      );
+      expect(destPath.endsWith("photo.png")).toBe(true);
+      expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith({
+        url: "https://media.qq.com/assets/photo.png",
+        filePathHint: "photo.png",
+        responseHeaderTimeoutMs: 120_000,
+        readIdleTimeoutMs: 30_000,
+      });
+    } finally {
+      await fs.rm(destDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves plugin ownership and the canonical first-answer result", async () => {

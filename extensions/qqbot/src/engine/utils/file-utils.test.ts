@@ -107,6 +107,7 @@ describe("qqbot file-utils downloadFile", () => {
         allowRfc2544BenchmarkRange: true,
       },
       responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
     });
   });
 
