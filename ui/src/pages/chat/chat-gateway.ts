@@ -141,6 +141,22 @@ function resolveGatewayErrorText(payload: ChatEventPayload): string {
     : `Error: ${errorText}`;
 }
 
+function payloadMessageMatchesGatewayError(
+  payload: ChatEventPayload,
+  message: Record<string, unknown>,
+): boolean {
+  const messageText = extractText(message)?.trim();
+  const errorText = payload.errorMessage?.trim();
+  if (!messageText || !errorText) {
+    return false;
+  }
+  const projectedErrorText =
+    errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+      ? errorText
+      : `Error: ${errorText}`;
+  return stripChatErrorMarker(messageText) === stripChatErrorMarker(projectedErrorText);
+}
+
 function resolveChatErrorText(payload: ChatEventPayload): string {
   const message = normalizeFinalAssistantMessage(payload.message);
   if (message && !shouldHideAssistantChatMessage(message)) {
@@ -174,7 +190,11 @@ function resolveExtendedErrorAssistantMessage(
   payload: ChatEventPayload,
 ): Record<string, unknown> | null {
   const message = normalizeFinalAssistantMessage(payload.message);
-  if (!message || shouldHideAssistantChatMessage(message)) {
+  if (
+    !message ||
+    shouldHideAssistantChatMessage(message) ||
+    payloadMessageMatchesGatewayError(payload, message)
+  ) {
     return null;
   }
   const streamedText = assembledVisibleChatStreamText(state);

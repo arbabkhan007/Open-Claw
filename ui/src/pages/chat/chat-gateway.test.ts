@@ -1789,6 +1789,32 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
+  it("does not append an error projection that extends a short stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Error",
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "provider unavailable",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Error: provider unavailable" }],
+          timestamp: 101,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Error");
+    expect(state.chatRunError).toEqual({ summary: "Error: provider unavailable" });
+  });
+
   it("preserves terminal assistant content that extends the streamed text", () => {
     const message = {
       role: "assistant",
