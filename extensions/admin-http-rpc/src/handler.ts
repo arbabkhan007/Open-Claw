@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
@@ -79,6 +80,16 @@ function sendError(res: ServerResponse, status: number, error: { type: string; m
   sendJson(res, status, { ok: false, error });
 }
 
+function declaredContentLengthExceeds(req: IncomingMessage, maxBytes: number): boolean {
+  const header = req.headers["content-length"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const declaredLength = parseStrictNonNegativeInteger(raw);
+  return declaredLength !== undefined && declaredLength > maxBytes;
+}
+
 async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
@@ -86,7 +97,7 @@ async function readJsonBody(
   const chunks: Buffer[] = [];
   let totalBytes = 0;
   try {
-    for await (const chunk of req) {
+    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalBytes += buffer.byteLength;
       if (totalBytes > maxBytes) {
@@ -202,8 +213,25 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
+  if (declaredContentLengthExceeds(req, DEFAULT_RPC_BODY_BYTES)) {
+    res.setHeader("Connection", "close");
+    sendError(res, 413, {
+      type: "invalid_request",
+      message: "Payload too large",
+    });
+    return true;
+  }
+
   const body = await readJsonBody(req, DEFAULT_RPC_BODY_BYTES);
   if (!body.ok) {
+    if (body.status === 413) {
+      res.setHeader("Connection", "close");
+      res.once("finish", () => {
+        if (!req.destroyed) {
+          req.destroy();
+        }
+      });
+    }
     sendError(res, body.status, {
       type: "invalid_request",
       message: body.message,

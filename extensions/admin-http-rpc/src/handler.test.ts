@@ -1,4 +1,6 @@
 // Admin Http Rpc tests cover handler plugin behavior.
+import { createServer, request } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
@@ -18,13 +20,14 @@ type CapturedResponse = {
   body: string;
 };
 
-function createRequest(body: unknown, method = "POST") {
+function createRequest(body: unknown, method = "POST", headers?: Record<string, string>) {
   const req = Readable.from([typeof body === "string" ? body : JSON.stringify(body)]);
   Object.assign(req, {
     method,
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
+      ...headers,
     },
   });
   return req as import("node:http").IncomingMessage;
@@ -36,6 +39,7 @@ function createResponse() {
     headers: {},
     body: "",
   };
+  let onFinish: (() => void) | undefined;
   const res = {
     get statusCode() {
       return captured.statusCode;
@@ -46,21 +50,137 @@ function createResponse() {
     setHeader(name: string, value: string | number | readonly string[]) {
       captured.headers[name.toLowerCase()] = value;
     },
+    once(event: string, listener: () => void) {
+      if (event === "finish") {
+        onFinish = listener;
+      }
+      return res;
+    },
     end(chunk?: string | Buffer) {
       captured.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk ?? "");
+      onFinish?.();
     },
   } as import("node:http").ServerResponse;
   return { res, captured };
 }
 
-async function invoke(body: unknown, method = "POST") {
+async function invoke(body: unknown, method = "POST", headers?: Record<string, string>) {
   const { res, captured } = createResponse();
-  const handled = await handleAdminHttpRpcRequest(createRequest(body, method), res);
+  const handled = await handleAdminHttpRpcRequest(createRequest(body, method, headers), res);
   return {
     handled,
     captured,
     json: captured.body ? (JSON.parse(captured.body) as unknown) : undefined,
   };
+}
+
+function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function requestRealAdminRpc(
+  port: number,
+  options: { body?: Buffer | string; contentLength?: number },
+): Promise<CapturedResponse> {
+  return await new Promise((resolve, reject) => {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (options.contentLength !== undefined) {
+      headers["content-length"] = String(options.contentLength);
+    }
+
+    const clientReq = request(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "POST",
+        path: "/api/v1/admin/rpc",
+        headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const responseHeaders: CapturedResponse["headers"] = {};
+          for (const [name, value] of Object.entries(res.headers)) {
+            if (value !== undefined) {
+              responseHeaders[name] = value;
+            }
+          }
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            headers: responseHeaders,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    clientReq.setTimeout(2_000, () => {
+      clientReq.destroy(new Error("timed out waiting for Admin RPC response"));
+    });
+    clientReq.on("error", reject);
+    clientReq.end(options.body);
+  });
+}
+
+async function requestContinuingStream(
+  port: number,
+): Promise<CapturedResponse & { closed: boolean; writesAfterLimit: number }> {
+  return await new Promise((resolve, reject) => {
+    let response: CapturedResponse | undefined;
+    let writesAfterLimit = 0;
+    const clientReq = request(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "POST",
+        path: "/api/v1/admin/rpc",
+        headers: { "content-type": "application/json" },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const headers: CapturedResponse["headers"] = {};
+          for (const [name, value] of Object.entries(res.headers)) {
+            if (value !== undefined) {
+              headers[name] = value;
+            }
+          }
+          response = {
+            statusCode: res.statusCode ?? 0,
+            headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          };
+        });
+      },
+    );
+    const timer = setTimeout(() => {
+      clientReq.destroy(new Error("timed out waiting for Admin RPC connection close"));
+    }, 2_000);
+    clientReq.on("close", () => {
+      clearTimeout(timer);
+      if (!response) {
+        reject(new Error("Admin RPC connection closed before its 413 response"));
+        return;
+      }
+      resolve({ ...response, closed: true, writesAfterLimit });
+    });
+    clientReq.on("error", (error) => {
+      if (!response) {
+        reject(error);
+      }
+    });
+
+    clientReq.write(Buffer.alloc(1024 * 1024 + 1, "x"));
+    for (let index = 0; index < 4; index += 1) {
+      clientReq.write("x");
+      writesAfterLimit += 1;
+    }
+  });
 }
 
 describe("admin-http-rpc plugin handler", () => {
@@ -197,6 +317,106 @@ describe("admin-http-rpc plugin handler", () => {
       },
     });
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("rejects declared oversized request bodies before dispatch", async () => {
+    const result = await invoke("", "POST", {
+      "content-length": String(1024 * 1024 + 1),
+    });
+
+    expect(result.captured.statusCode).toBe(413);
+    expect(result.json).toEqual({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: "Payload too large",
+      },
+    });
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("delivers 413 to a real HTTP client for declared oversized request bodies", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const result = await requestRealAdminRpc(address.port, {
+        contentLength: 1024 * 1024 + 1,
+      });
+
+      expect(result.statusCode).toBe(413);
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("delivers 413 to a real HTTP client for streamed oversized request bodies", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const result = await requestRealAdminRpc(address.port, {
+        body: Buffer.alloc(1024 * 1024 + 1, "x"),
+      });
+
+      expect(result.statusCode).toBe(413);
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("closes a continuing streamed request after delivering its 413 response", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address() as AddressInfo;
+      const result = await requestContinuingStream(address.port);
+
+      expect(result.statusCode).toBe(413);
+      expect(result.closed).toBe(true);
+      expect(result.writesAfterLimit).toBeGreaterThan(0);
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("only accepts POST", async () => {
