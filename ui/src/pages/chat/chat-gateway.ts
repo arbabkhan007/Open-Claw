@@ -5,6 +5,7 @@ import { parseChatSideResult, type ChatSideResult } from "../../lib/chat/side-re
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
+  assembledVisibleChatStreamText,
   chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
   isSilentReplyStream,
@@ -159,13 +160,15 @@ function resolveExtendedErrorAssistantMessage(
   if (!message || shouldHideAssistantChatMessage(message)) {
     return null;
   }
-  const streamedText = state.chatStream?.trim();
+  const streamedText = assembledVisibleChatStreamText(state);
   const messageText = extractText(message)?.trim();
+  const normalizedStreamedText = streamedText?.replace(/\s+/gu, " ").trim();
+  const normalizedMessageText = messageText?.replace(/\s+/gu, " ").trim();
   if (
-    !streamedText ||
-    !messageText ||
-    messageText.length <= streamedText.length ||
-    !messageText.startsWith(streamedText)
+    !normalizedStreamedText ||
+    !normalizedMessageText ||
+    normalizedMessageText.length <= normalizedStreamedText.length ||
+    !normalizedMessageText.startsWith(normalizedStreamedText)
   ) {
     return null;
   }
@@ -315,9 +318,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (extendedAssistantMessage) {
       // A terminal payload may complete genuine prose that only partially
       // streamed. Preserve that fuller answer before presenting the run error.
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-        replacementMessages: [extendedAssistantMessage],
-      });
       state.chatMessages = appendTerminalAssistantMessage(
         state.chatMessages,
         extendedAssistantMessage,

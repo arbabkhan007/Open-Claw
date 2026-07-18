@@ -1792,6 +1792,40 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
+  it("preserves terminal extensions after a tool splits the stream", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "First thought. After tool. Final detail." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "After tool.",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "First thought.", ts: 90, toolCallId: "call-1" }];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message,
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "First thought. After tool. Final detail.",
+    );
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
+  });
+
   it("keeps stream segments visible when an error ends after a tool event", () => {
     const existingMessage = {
       role: "user",

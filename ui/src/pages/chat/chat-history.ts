@@ -69,6 +69,7 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import {
+  assembledVisibleAssistantStreamText,
   clearToolStreamSegments,
   currentLiveToolCallIds,
   hasVisibleStreamParts,
@@ -258,6 +259,10 @@ export function materializeVisibleAssistantStreamMessages(
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
+}
+
+export function assembledVisibleChatStreamText(state: ChatState): string | null {
+  return assembledVisibleAssistantStreamText(state, isHiddenAssistantStreamText);
 }
 
 function chatPersistCommentaryEnabled(state: ChatState): boolean {
