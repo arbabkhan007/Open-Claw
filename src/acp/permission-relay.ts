@@ -109,6 +109,8 @@ export function parseGatewayExecApprovalRequestEventPayload(
     command:
       readNonEmptyString(requestRecord.command) ?? readNonEmptyString(requestRecord.commandPreview),
     host: readNonEmptyString(requestRecord.host),
+    title: readNonEmptyString(requestRecord.title),
+    toolCallId: readNonEmptyString(requestRecord.toolCallId),
   };
 }
 

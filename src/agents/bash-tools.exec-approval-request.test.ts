@@ -176,6 +176,27 @@ describe("exec approval requests", () => {
     expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
   });
 
+  it("passes approval metadata into host approval registration payloads", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHostOrThrow({
+      approvalId: "approval-id",
+      command: "echo hi",
+      title: "Run echo hi",
+      toolCallId: "tool-raw",
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload).toMatchObject({
+      title: "Run echo hi",
+      toolCallId: "tool-raw",
+    });
+  });
+
   it("does not generate command spans by default", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 

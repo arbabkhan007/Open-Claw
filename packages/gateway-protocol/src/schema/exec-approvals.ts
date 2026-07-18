@@ -235,6 +235,8 @@ const ExecApprovalPolicySnapshotSchema = closedObject({
 export const ExecApprovalRequestParamsSchema = closedObject({
   id: Type.Optional(NonEmptyString),
   command: Type.Optional(NonEmptyString),
+  title: Type.Optional(NonEmptyString),
+  toolCallId: Type.Optional(NonEmptyString),
   commandArgv: Type.Optional(Type.Array(Type.String())),
   systemRunPlan: Type.Optional(
     closedObject({

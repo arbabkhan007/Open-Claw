@@ -53,6 +53,7 @@ import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { resolveExecApprovalMetadata } from "./bash-tools.exec-approval-request.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
@@ -135,14 +136,9 @@ function buildChannelContextEnv(
   const serialized = safeJsonStringify(subprocessContext);
   return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
 }
-type ResolvedExecEnvPreparedState = {
-  host?: ExecHost;
-  pluginEnv?: Record<string, string>;
-};
+type ResolvedExecEnvPreparedState = { host?: ExecHost; pluginEnv?: Record<string, string> };
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
-type DeferredResolveExecEnvPreparedState = {
-  hookContext?: HookContext;
-};
+type DeferredResolveExecEnvPreparedState = { hookContext?: HookContext };
 const deferredResolveExecEnvPreparedStates = new WeakMap<
   ExecToolArgs,
   DeferredResolveExecEnvPreparedState
@@ -1576,7 +1572,7 @@ export function createExecTool(
       }
       return execParams;
     },
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
@@ -1876,6 +1872,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            approvalMetadata: resolveExecApprovalMetadata(params, toolCallId),
             workdir,
             env,
             requestedEnv,
@@ -1917,6 +1914,7 @@ export function createExecTool(
         if (host === "gateway" && !bypassApprovals) {
           const gatewayResult = await processGatewayAllowlist({
             command: params.command,
+            approvalMetadata: resolveExecApprovalMetadata(params, toolCallId),
             workdir,
             env,
             pathPrepend: defaultPathPrepend,

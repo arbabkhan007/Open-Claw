@@ -29,6 +29,7 @@ import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
+import { resolveExecDetail } from "./tool-display-exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
@@ -38,10 +39,24 @@ const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   { cacheRejections: true },
 );
 
+export type ExecApprovalMetadata = {
+  title?: string;
+  toolCallId?: string;
+};
+
+export function resolveExecApprovalMetadata(
+  args: unknown,
+  toolCallId: unknown,
+): ExecApprovalMetadata {
+  return { title: resolveExecDetail(args), toolCallId: parseString(toolCallId) };
+}
+
 /** Gateway payload fields used to register or wait for an exec approval decision. */
 type RequestExecApprovalDecisionParams = {
   id: string;
   command?: string;
+  title?: string;
+  toolCallId?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
@@ -76,6 +91,8 @@ function buildExecApprovalRequestToolParams(
   return {
     id: params.id,
     ...(params.command ? { command: params.command } : {}),
+    ...(params.title ? { title: params.title } : {}),
+    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
     ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
     systemRunPlan: params.systemRunPlan,
     env: params.env,
@@ -184,6 +201,8 @@ export async function resolveRegisteredExecApprovalDecision(params: {
 type HostExecApprovalParams = {
   approvalId: string;
   command?: string;
+  title?: string;
+  toolCallId?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
@@ -294,6 +313,8 @@ async function buildHostApprovalDecisionParams(
   return {
     id: params.approvalId,
     command: params.command,
+    title: params.title,
+    toolCallId: params.toolCallId,
     commandArgv: params.commandArgv,
     systemRunPlan: params.systemRunPlan,
     env: params.env,

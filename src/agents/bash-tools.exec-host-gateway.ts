@@ -46,6 +46,7 @@ import {
 import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
+  type ExecApprovalMetadata,
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
@@ -77,9 +78,9 @@ import type {
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-/** Full input bundle for gateway-host allowlist and approval processing. */
 type ProcessGatewayAllowlistParams = {
   command: string;
+  approvalMetadata?: ExecApprovalMetadata;
   workdir: string;
   env: Record<string, string>;
   pathPrepend?: string[];
@@ -121,7 +122,6 @@ type ProcessGatewayAllowlistParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
-/** Gateway allowlist outcome before command execution continues. */
 type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
@@ -462,7 +462,6 @@ async function resolveGatewayExecApprovalFollowupText(params: {
   }
 }
 
-/** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -812,6 +811,7 @@ export async function processGatewayAllowlist(
       await registerExecApprovalRequestForHostOrThrow({
         approvalId,
         command: params.command,
+        ...params.approvalMetadata,
         env: params.requestedEnv,
         workdir: params.workdir,
         host: "gateway",

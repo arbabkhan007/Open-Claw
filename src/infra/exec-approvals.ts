@@ -211,13 +211,12 @@ export type SystemRunApprovalPlan = {
   mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
-export type ExecApprovalCommandSpan = {
-  startIndex: number;
-  endIndex: number;
-};
+export type ExecApprovalCommandSpan = { startIndex: number; endIndex: number };
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  title?: string;
+  toolCallId?: string;
   commandPreview?: string | null;
   commandArgv?: string[];
   // Optional UI-safe env key preview for approval prompts.

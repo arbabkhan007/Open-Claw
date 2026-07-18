@@ -32,6 +32,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import type { createExecApprovalIosPushDelivery } from "../exec-approval-ios-push.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   handleApprovalWaitDecision,
@@ -53,17 +54,6 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
 } as const;
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
-
-type ExecApprovalIosPushDelivery = {
-  handleRequested?: (
-    request: ExecApprovalRequest,
-    opts?: {
-      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-    },
-  ) => Promise<boolean>;
-  handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
-  handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
-};
 
 function normalizeCommandSpans(
   spans: { startIndex: number; endIndex: number }[] | undefined,
@@ -96,7 +86,10 @@ function normalizeCommandSpans(
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
-  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    iosPushDelivery?: ReturnType<typeof createExecApprovalIosPushDelivery>;
+  },
 ): GatewayRequestHandlers {
   return {
     "exec.approval.get": async ({ params, respond, client }) => {
@@ -162,6 +155,8 @@ export function createExecApprovalHandlers(
       const p = params as {
         id?: string;
         command: string;
+        title?: string;
+        toolCallId?: string;
         commandArgv?: string[];
         env?: Record<string, string>;
         cwd?: string;
@@ -195,6 +190,8 @@ export function createExecApprovalHandlers(
       const explicitId = normalizeOptionalString(p.id) ?? null;
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
+      const title = normalizeOptionalString(p.title);
+      const toolCallId = normalizeOptionalString(p.toolCallId);
       const approvalContext = resolveSystemRunApprovalRequestContext({
         host,
         command: p.command,
@@ -308,6 +305,8 @@ export function createExecApprovalHandlers(
       );
       const request = {
         command: sanitizedCommandText,
+        title: title ? sanitizeExecApprovalDisplayText(title) : undefined,
+        toolCallId,
         commandPreview:
           host === "node" || !approvalContext.commandPreview
             ? undefined

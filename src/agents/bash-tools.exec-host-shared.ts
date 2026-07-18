@@ -56,7 +56,7 @@ function rememberExecApprovalFollowupFailureKey(key: string): boolean {
 }
 
 /** Effective approval policy after caller config and approvals file are merged. */
-type ExecHostApprovalContext = {
+export type ExecHostApprovalContext = {
   approvals: ExecApprovalsResolved;
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
