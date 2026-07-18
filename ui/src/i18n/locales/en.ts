@@ -3597,6 +3597,8 @@ export const en: TranslationMap = {
     switchedSession: "Switched to {session}",
     actions: {
       dismissError: "Dismiss error",
+      showErrorDetails: "Show details",
+      hideErrorDetails: "Hide details",
       exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
     },

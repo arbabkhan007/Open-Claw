@@ -1077,13 +1077,13 @@ openclaw-chat-page {
 }
 
 .chat-run-error {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
   box-sizing: border-box;
   width: calc(100% - 36px);
   max-width: 48rem;
-  margin: 0 auto;
+  margin: 16px auto 0;
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1092,13 +1092,22 @@ openclaw-chat-page {
   font-size: var(--control-ui-text-md);
   line-height: 1.45;
   box-shadow: var(--shadow-sm);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.chat-run-error__summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 88px;
 }
 
 .chat-run-error__icon {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
   color: var(--muted);
 }
 
@@ -1116,6 +1125,51 @@ openclaw-chat-page {
   min-width: 0;
   flex: 1;
   overflow-wrap: anywhere;
+}
+
+.chat-run-error__details {
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: 32px;
+}
+
+.chat-run-error__details summary {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  min-height: 18px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-run-error__details summary:hover {
+  color: var(--text);
+}
+
+.chat-run-error__details:not([open]) .chat-run-error__details-hide,
+.chat-run-error__details[open] .chat-run-error__details-show {
+  display: none;
+}
+
+.chat-run-error__details pre {
+  max-height: 18rem;
+  margin: 12px 0 2px;
+  padding: 0;
+  overflow: auto;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .task-suggestions {
@@ -1657,6 +1711,11 @@ openclaw-chat-page {
 
 .agent-chat__composer-combobox > textarea::placeholder {
   color: var(--muted);
+}
+
+.agent-chat__composer-combobox > textarea:placeholder-shown {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -3823,7 +3882,7 @@ openclaw-chat-page {
 @media (max-width: 768px) {
   .chat-run-error {
     width: calc(100% - 8px);
-    margin: 0 4px;
+    margin: 16px 4px 0;
   }
 
   .agent-chat__talk-options--settings .agent-chat__talk-options-primary,

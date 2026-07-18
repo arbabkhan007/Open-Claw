@@ -722,14 +722,25 @@ describe("chat conversation width", () => {
   });
 
   it("renders chat errors as a neutral alert immediately above the composer", () => {
-    const errorText = "The agent run failed before producing a reply.";
+    const errorText = "Model login expired for OpenAI. Sign in again, then retry.";
+    const errorDetails = "INVALID_ARGUMENT: upstream rejected the request";
     const container = renderChatView({
-      runError: { summary: errorText },
+      runError: { summary: errorText, details: errorDetails },
     });
     const alert = requireElement(container, ".chat-run-error", "chat run error");
+    const details = requireElement(alert, "details", "chat error details");
+    const summary = requireElement(details, "summary", "chat error details summary");
 
     expect(alert.getAttribute("role")).toBe("alert");
     expect(alert.textContent).toContain(errorText);
+    expect(details.hasAttribute("open")).toBe(false);
+    expect(summary.querySelector(".chat-run-error__details-show")?.textContent?.trim()).toBe(
+      "Show details",
+    );
+    expect(summary.querySelector(".chat-run-error__details-hide")?.textContent?.trim()).toBe(
+      "Hide details",
+    );
+    expect(details.textContent).toContain(errorDetails);
     expect(alert.classList.contains("danger")).toBe(false);
     expect(alert.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
     expect(container.querySelector(".chat-thread .chat-run-error")).toBeNull();

@@ -37,6 +37,7 @@ import {
 import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
+  buildControlUiErrorDetails,
   buildRateLimitCooldownMessage,
   hasBillingAttemptSummary,
   isNonDirectConversationContext,
@@ -445,8 +446,7 @@ export async function handleAgentExecutionError(params: {
     !isBilling &&
     !(isRateLimit && !isOverloaded) &&
     !rateLimitOrOverloadedCopy &&
-    !isContextOverflow &&
-    !params.shouldSurfaceToControlUi
+    !isContextOverflow
       ? buildExternalRunFailureReply(
           { message, error: err },
           {
@@ -465,12 +465,10 @@ export async function handleAgentExecutionError(params: {
         ? rateLimitOrOverloadedCopy
         : isContextOverflow
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : params.shouldSurfaceToControlUi
-            ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-            : (externalRunFailureReply?.text ??
-              (turn.isHeartbeat
-                ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-                : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
+          : (externalRunFailureReply?.text ??
+            (turn.isHeartbeat
+              ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+              : GENERIC_EXTERNAL_RUN_FAILURE_TEXT));
   const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
     text: fallbackText,
     sessionCtx: turn.sessionCtx,
@@ -511,6 +509,11 @@ export async function handleAgentExecutionError(params: {
   await params.modelPatch.fail(err);
   return {
     kind: "final",
-    payload: markAgentRunFailureReplyPayload({ text: userVisibleFallbackText }),
+    payload: markAgentRunFailureReplyPayload({
+      text: userVisibleFallbackText,
+      ...(params.shouldSurfaceToControlUi
+        ? { errorDetails: buildControlUiErrorDetails(trimmedMessage) }
+        : {}),
+    }),
   };
 }

@@ -118,7 +118,7 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     }
   });
 
-  it("keeps raw generic errors on internal control surfaces", async () => {
+  it("separates internal control-surface error guidance from raw details", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
@@ -151,9 +151,10 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("Agent failed before reply");
-      expect(result.payload.text).toContain("INVALID_ARGUMENT: some other failure");
-      expect(result.payload.text).toContain("Logs: openclaw logs --follow");
+      expect(result.payload.text).toContain("Something went wrong while processing your request");
+      expect(result.payload.text).not.toContain("INVALID_ARGUMENT: some other failure");
+      expect(result.payload.errorDetails).toContain("INVALID_ARGUMENT: some other failure");
+      expect(result.payload.errorDetails).toContain("Logs: openclaw logs --follow");
     }
   });
 });

@@ -1789,7 +1789,7 @@ describe("handleChatGatewayEvent", () => {
       "assistant",
       "Partial answer before gateway error. Final detail.",
     );
-    expect(state.chatRunError).toEqual({ summary: "gateway disconnected" });
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
   it("keeps stream segments visible when an error ends after a tool event", () => {
@@ -1924,7 +1924,7 @@ describe("handleChatGatewayEvent", () => {
     });
     const message = {
       role: "assistant",
-      content: [{ type: "text", text: "Configure provider auth, then try again." }],
+      content: [{ type: "text", text: "⚠️ Configure provider auth, then try again." }],
       timestamp: 10,
     };
     const payload: ChatEventPayload = {
@@ -1932,13 +1932,17 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       state: "error",
       errorMessage: "raw gateway error",
+      errorDetails: "raw gateway error\nprovider trace",
       message,
     };
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Configure provider auth, then try again." });
+    expect(state.chatRunError).toEqual({
+      summary: "Configure provider auth, then try again.",
+      details: "raw gateway error\nprovider trace",
+    });
   });
 
   it("does not append an orphan error bubble when no run was active", () => {

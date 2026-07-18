@@ -35,8 +35,12 @@ type AssistantMessageNormalizationOptions = {
   allowTextField?: boolean;
 };
 
-function setChatRunError(state: ChatState, summary: string) {
-  state.chatRunError = { summary };
+function setChatRunError(state: ChatState, summary: string, details?: string | null) {
+  const trimmedDetails = details?.trim();
+  state.chatRunError = {
+    summary,
+    ...(trimmedDetails ? { details: trimmedDetails } : {}),
+  };
 }
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
@@ -122,21 +126,29 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function stripChatErrorMarker(text: string): string {
+  return text.replace(/^⚠️\s*/u, "");
+}
+
+function resolveGatewayErrorText(payload: ChatEventPayload): string {
+  const errorText = payload.errorMessage?.trim();
+  if (!errorText) {
+    return "chat error";
+  }
+  return errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+    ? stripChatErrorMarker(errorText)
+    : `Error: ${errorText}`;
+}
+
 function resolveChatErrorText(payload: ChatEventPayload): string {
   const message = normalizeFinalAssistantMessage(payload.message);
   if (message && !shouldHideAssistantChatMessage(message)) {
     const messageText = extractText(message)?.trim();
     if (messageText) {
-      return messageText;
+      return stripChatErrorMarker(messageText);
     }
   }
-  const errorText = payload.errorMessage?.trim();
-  if (errorText) {
-    return errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-      ? errorText
-      : `Error: ${errorText}`;
-  }
-  return "chat error";
+  return resolveGatewayErrorText(payload);
 }
 
 function resolveExtendedErrorAssistantMessage(
@@ -318,9 +330,10 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state,
       hadActiveRunBeforeEvent
         ? extendedAssistantMessage
-          ? payload.errorMessage?.trim() || "chat error"
+          ? resolveGatewayErrorText(payload)
           : resolveChatErrorText(payload)
         : payload.errorMessage?.trim() || "chat error",
+      payload.errorDetails,
     );
   }
   return payload.state;

@@ -1949,11 +1949,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await page.locator(".chat-thread-inner").getByText(partialText).waitFor({ timeout: 10_000 });
 
-      const errorText = "The agent run failed before producing a reply.";
+      const gatewayErrorText =
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
+      const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
+      const errorDetails =
+        'OAuth token refresh failed for openai: {"code":"refresh_token_reused"}\nLogs: openclaw logs --follow';
       await gateway.emitGatewayEvent("chat", {
-        errorMessage: errorText,
+        errorDetails,
+        errorMessage: gatewayErrorText,
         message: {
-          content: [{ text: errorText, type: "text" }],
+          content: [{ text: gatewayErrorText, type: "text" }],
           role: "assistant",
           timestamp: Date.now(),
         },
@@ -1965,6 +1970,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread-inner").getByText(partialText).waitFor({ timeout: 10_000 });
       const alert = page.locator(".chat-run-error");
       await alert.getByText(errorText).waitFor({ timeout: 10_000 });
+      const details = alert.locator("details");
+      expect(await details.getAttribute("open")).toBeNull();
+      expect(await details.locator("pre").isVisible()).toBe(false);
       expect(await alert.locator("button").count()).toBe(0);
       expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
       expect(
@@ -1997,6 +2005,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
             height: bottom - y + padding,
           },
           path: screenshotPath,
+        });
+      }
+
+      await details.locator("summary").click();
+      expect(await details.getAttribute("open")).not.toBeNull();
+      await details.locator("pre").getByText("refresh_token_reused").waitFor();
+      const expandedScreenshotPath =
+        process.env.OPENCLAW_CHAT_RUN_ERROR_EXPANDED_SCREENSHOT?.trim();
+      if (expandedScreenshotPath) {
+        await page.screenshot({
+          animations: "disabled",
+          caret: "hide",
+          path: expandedScreenshotPath,
         });
       }
 

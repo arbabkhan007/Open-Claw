@@ -120,7 +120,7 @@ export type ChatHost = ChatInputHistoryState &
     chatRunId: string | null;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
-    chatRunError?: { summary: string } | null;
+    chatRunError?: { summary: string; details?: string } | null;
     lastError?: string | null;
     chatError?: string | null;
     hello: GatewayHelloOk | null;

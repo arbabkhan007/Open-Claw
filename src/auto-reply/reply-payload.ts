@@ -52,6 +52,8 @@ export type ReplyPayload = {
    */
   ttsSupplement?: ReplyPayloadTtsSupplement;
   isError?: boolean;
+  /** Internal diagnostic text for Control UI error disclosures. */
+  errorDetails?: string;
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;

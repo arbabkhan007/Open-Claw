@@ -338,7 +338,7 @@ export type ChatState = {
   planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
-  chatRunError?: { summary: string } | null;
+  chatRunError?: { summary: string; details?: string } | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
   chatSideChatTurns?: ChatSideResult[];
   chatSideResultPending?: ChatSideResultPending | null;
@@ -532,6 +532,7 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  errorDetails?: string;
   stopReason?: string;
   yielded?: true;
 };
