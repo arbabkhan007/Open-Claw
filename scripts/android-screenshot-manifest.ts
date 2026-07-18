@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 export type AndroidScreenshotFormFactor = "phone" | "wear";
 
-export type ValidateAndroidScreenshotSetOptions = {
+type ValidateAndroidScreenshotSetOptions = {
   expectedGitSha: string;
   formFactor: AndroidScreenshotFormFactor;
   rootDir: string;
@@ -48,7 +48,7 @@ function screenshotFiles(directory: string, entries: Dirent[]): string[] {
       files.push(path.resolve(directory, entry.name));
     }
   }
-  return files.sort();
+  return files.toSorted();
 }
 
 function uploadedScreenshotsByLocale(
@@ -61,7 +61,7 @@ function uploadedScreenshotsByLocale(
   }
 
   const locales = new Map<string, string[]>();
-  const localeEntries = readdirSync(metadataRoot, { withFileTypes: true }).sort((left, right) =>
+  const localeEntries = readdirSync(metadataRoot, { withFileTypes: true }).toSorted((left, right) =>
     left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   );
   for (const localeEntry of localeEntries) {
@@ -182,7 +182,7 @@ function validateLocaleManifest(options: {
     options.config.screenshotType,
   );
   const capturedPaths: string[] = [];
-  for (const scene of [...pathScenes].sort()) {
+  for (const scene of [...pathScenes].toSorted()) {
     const relativePath = manifest.get(`screenshot.${scene}.path`) ?? "";
     if (path.isAbsolute(relativePath)) {
       throw new Error(
@@ -214,7 +214,7 @@ function validateLocaleManifest(options: {
     capturedPaths.push(absolutePath);
   }
 
-  if (!samePaths(capturedPaths.sort(), options.expectedPaths)) {
+  if (!samePaths(capturedPaths.toSorted(), options.expectedPaths)) {
     throw new Error(
       `${options.config.displayName} screenshot files for ${options.locale} do not exactly match the current capture manifest.`,
     );
@@ -247,7 +247,7 @@ export function validateAndroidScreenshotSet(options: ValidateAndroidScreenshotS
       rootDir,
     });
   }
-  return { locales: [...screenshots.keys()].sort() };
+  return { locales: [...screenshots.keys()].toSorted() };
 }
 
 function usage(): string {

@@ -11,7 +11,7 @@ export type AndroidReleaseArtifactRecord = {
   sha256: string;
 };
 
-export type AndroidReleaseArtifactManifest = {
+type AndroidReleaseArtifactManifest = {
   artifacts: Partial<Record<AndroidReleaseArtifactFlavor, { file: string; sha256: string }>>;
   buildTimestamp: string;
   gitCommit: string;
@@ -142,7 +142,7 @@ function validateManifestShape(manifest: AndroidReleaseArtifactManifest): void {
   ) {
     throw new Error("Android release artifact manifest has an invalid artifacts map.");
   }
-  for (const [flavor, artifact] of Object.entries(manifest.artifacts).sort(([left], [right]) =>
+  for (const [flavor, artifact] of Object.entries(manifest.artifacts).toSorted(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,
   )) {
     if (!ALLOWED_FLAVORS.has(flavor as AndroidReleaseArtifactFlavor)) {
