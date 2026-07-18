@@ -120,31 +120,14 @@ describe("createRawChannelSendResultAdapter", () => {
       sendMedia: async () => ({ ok: false, error: "boom" }),
     });
 
-    const sendCases = [
-      {
-        name: "sendText",
-        run: () => adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" }),
-        expected: {
-          channel: "zalo",
-          ok: true,
-          messageId: "m1",
-          error: undefined,
-        },
-      },
-      {
-        name: "sendMedia",
-        run: () => adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" }),
-        expected: {
-          channel: "zalo",
-          ok: false,
-          messageId: "",
-          error: new Error("boom"),
-        },
-      },
-    ];
-
-    for (const testCase of sendCases) {
-      await expect(testCase.run()).resolves.toEqual(testCase.expected);
-    }
+    await expect(adapter.sendText!({ cfg: {} as never, to: "x", text: "hi" })).resolves.toEqual({
+      channel: "zalo",
+      ok: true,
+      messageId: "m1",
+      error: undefined,
+    });
+    await expect(adapter.sendMedia!({ cfg: {} as never, to: "x", text: "hi" })).rejects.toThrow(
+      "boom",
+    );
   });
 });
