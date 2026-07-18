@@ -1,15 +1,54 @@
 // Covers gateway TLS loading, fingerprint reporting, generated certificate
 // paths, and error handling for missing or invalid material.
 import { X509Certificate } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { normalizeFingerprint } from "./fingerprint.js";
+
+const { resolveSystemBinMock, runExecMock } = vi.hoisted(() => ({
+  resolveSystemBinMock: vi.fn(() => "/usr/bin/openssl"),
+  runExecMock: vi.fn(),
+}));
+
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runExec: runExecMock,
+}));
+
+vi.mock("../resolve-system-bin.js", () => ({ resolveSystemBin: resolveSystemBinMock }));
+
 import { loadGatewayTlsRuntime } from "./gateway.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-gateway-tls-test-");
+
+function resolveOpenSslOutput(args: string[], flag: "-keyout" | "-out"): string {
+  const outputPath = args.at(args.indexOf(flag) + 1);
+  if (!outputPath) {
+    throw new Error(`missing ${flag} output path`);
+  }
+  return outputPath;
+}
+
+async function writeGeneratedTlsPair(args: string[]): Promise<void> {
+  await Promise.all([
+    fs.writeFile(resolveOpenSslOutput(args, "-out"), CERT_PEM, "utf8"),
+    fs.writeFile(resolveOpenSslOutput(args, "-keyout"), KEY_PEM, "utf8"),
+  ]);
+}
+
+function requireSingleRecoveryDir(entries: string[]): string {
+  const recoveryDirs = entries.filter((entry) => entry.startsWith(".openclaw-gateway-tls-"));
+  expect(recoveryDirs).toHaveLength(1);
+  const recoveryDir = recoveryDirs[0];
+  if (!recoveryDir) {
+    throw new Error("missing gateway TLS recovery directory");
+  }
+  expect(recoveryDir).toMatch(/^\.openclaw-gateway-tls-cert-/);
+  return recoveryDir;
+}
 
 const KEY_PEM = [
   "-----BEGIN PRIVATE KEY-----", // pragma: allowlist secret
@@ -63,6 +102,8 @@ r1USnb+wUdA7Zoj/mQ==
 -----END CERTIFICATE-----`;
 
 afterEach(async () => {
+  resolveSystemBinMock.mockClear();
+  runExecMock.mockReset();
   await tempDirs.cleanup();
 });
 
@@ -83,9 +124,9 @@ describe("loadGatewayTlsRuntime", () => {
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
     const caPath = path.join(dir, "gateway-ca.pem");
-    await writeFile(certPath, CERT_PEM, "utf8");
-    await writeFile(keyPath, KEY_PEM, "utf8");
-    await writeFile(caPath, CERT_PEM, "utf8");
+    await fs.writeFile(certPath, CERT_PEM, "utf8");
+    await fs.writeFile(keyPath, KEY_PEM, "utf8");
+    await fs.writeFile(caPath, CERT_PEM, "utf8");
 
     const result = await loadGatewayTlsRuntime({
       enabled: true,
@@ -129,12 +170,423 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.error).toBe("gateway tls: cert/key missing");
   });
 
+  it.each(["key", "cert"] as const)(
+    "bounds generation and cleans a partial staged %s",
+    async (partialOutput) => {
+      const dir = await createTempDir();
+      const certPath = path.join(dir, "gateway-cert.pem");
+      const keyPath = path.join(dir, "gateway-key.pem");
+      runExecMock.mockImplementationOnce(async (_command: string, args: string[]) => {
+        const outputPath = resolveOpenSslOutput(args, partialOutput === "key" ? "-keyout" : "-out");
+        await fs.writeFile(outputPath, partialOutput === "key" ? KEY_PEM : CERT_PEM, "utf8");
+        throw new Error("openssl timed out");
+      });
+
+      const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+      expect(runExecMock).toHaveBeenCalledOnce();
+      const [command, args, options] = runExecMock.mock.calls[0] as [
+        string,
+        string[],
+        { logOutput: boolean; timeoutMs: number },
+      ];
+      expect(command).toBe("/usr/bin/openssl");
+      expect(resolveOpenSslOutput(args, "-keyout")).not.toBe(keyPath);
+      expect(resolveOpenSslOutput(args, "-out")).not.toBe(certPath);
+      expect(options).toEqual({ logOutput: false, timeoutMs: 30_000 });
+      expect(result).toMatchObject({ enabled: false, required: true, certPath, keyPath });
+      expect(result.error).toContain("openssl timed out");
+      await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(dir)).resolves.toEqual([]);
+    },
+  );
+
+  it("validates and publishes a generated pair with private modes", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(result.enabled).toBe(true);
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
+    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
+      "gateway-cert.pem",
+      "gateway-key.pem",
+    ]);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(certPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(keyPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("fails closed when atomic hard-link publication is unsupported", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const linkSpy = vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("publication failed");
+    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(dir)).resolves.toEqual([]);
+  });
+
+  it("preserves a file replaced during publication", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    let linkCount = 0;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      linkCount += 1;
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.unlink(certPath);
+        await fs.writeFile(certPath, "operator-owned-cert\n", { flag: "wx" });
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(linkCount).toBe(2);
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("publication failed");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe("operator-owned-cert\n");
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
+      "gateway-cert.pem",
+      "gateway-key.pem",
+    ]);
+  });
+
+  it("preserves a published file modified in place during publication", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.writeFile(certPath, "operator-owned-cert\n");
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("concurrent output backup preserved under");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe("operator-owned-cert\n");
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    const entries = await fs.readdir(dir);
+    const recoveryDir = requireSingleRecoveryDir(entries);
+    await expect(fs.readFile(path.join(dir, recoveryDir, "cert.pem"), "utf8")).resolves.toBe(
+      "operator-owned-cert\n",
+    );
+  });
+
+  it("contains output-inspection close failures during rollback", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+    const realOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      if (path.resolve(String(filePath)) === certPath && typeof flags === "number") {
+        vi.spyOn(handle, "close").mockRejectedValueOnce(
+          Object.assign(new Error("close failed"), { code: "EIO" }),
+        );
+      }
+      return handle;
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      openSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("concurrent output backup preserved under");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    expect(requireSingleRecoveryDir(await fs.readdir(dir))).toContain("gateway-tls-cert");
+  });
+
+  it("preserves writes through an open descriptor after rollback inspection", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realOpen = fs.open.bind(fs);
+    let writerHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      if (path.basename(String(filePath)).startsWith("published-gateway-cert")) {
+        const realClose = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+          await realClose();
+          await writerHandle?.truncate(0);
+          await writerHandle?.writeFile("operator-after-check\n");
+          await writerHandle?.sync();
+        });
+      }
+      return handle;
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      if (path.resolve(String(newPath)) === keyPath) {
+        writerHandle = await fs.open(certPath, "r+");
+        throw Object.assign(new Error("key publication failed"), { code: "EEXIST" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      await writerHandle?.close();
+      linkSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("concurrent output backup preserved under");
+    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const recoveryDir = requireSingleRecoveryDir(await fs.readdir(dir));
+    await expect(
+      fs.readFile(path.join(dir, recoveryDir, "published-gateway-cert.pem"), "utf8"),
+    ).resolves.toBe("operator-after-check\n");
+  });
+
+  it("restores a protected file replaced after the rollback ownership check", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    const realRename = fs.rename.bind(fs);
+    let linkCount = 0;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      linkCount += 1;
+      if (
+        path.resolve(String(newPath)) === certPath &&
+        path.basename(String(existingPath)).startsWith("published-")
+      ) {
+        throw Object.assign(new Error("protected hard link"), { code: "EPERM" });
+      }
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (path.resolve(String(oldPath)) === certPath) {
+        await fs.unlink(certPath);
+        await fs.writeFile(certPath, "operator-owned-cert\n", { flag: "wx" });
+      }
+      return await realRename(oldPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      renameSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(linkCount).toBe(3);
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("publication failed");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe("operator-owned-cert\n");
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    const entries = await fs.readdir(dir);
+    const recoveryDir = requireSingleRecoveryDir(entries);
+    await expect(
+      fs.readdir(path.join(dir, recoveryDir)).then((items) => items.toSorted()),
+    ).resolves.toEqual(["cert.pem", "published-gateway-cert.pem"]);
+  });
+
+  it("restores a directory replaced after the rollback ownership check", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    const realRename = fs.rename.bind(fs);
+    let linkCount = 0;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      linkCount += 1;
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (path.resolve(String(oldPath)) === certPath) {
+        await fs.unlink(certPath);
+        await fs.mkdir(certPath);
+        await fs.writeFile(path.join(certPath, "operator-owned.txt"), "operator directory\n");
+      }
+      return await realRename(oldPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      renameSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(linkCount).toBe(2);
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("publication failed");
+    await expect(fs.readFile(path.join(certPath, "operator-owned.txt"), "utf8")).resolves.toBe(
+      "operator directory\n",
+    );
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    const entries = await fs.readdir(dir);
+    const recoveryDir = requireSingleRecoveryDir(entries);
+    await expect(
+      fs.readFile(
+        path.join(dir, recoveryDir, "published-gateway-cert.pem", "operator-owned.txt"),
+        "utf8",
+      ),
+    ).resolves.toBe("operator directory\n");
+  });
+
+  it("retries a transient second-link failure", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    let linkCount = 0;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      linkCount += 1;
+      if (linkCount === 2) {
+        throw Object.assign(new Error("transient link failure"), { code: "EIO" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    linkSpy.mockRestore();
+
+    expect(linkCount).toBe(3);
+    expect(result.enabled).toBe(true);
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
+    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
+      "gateway-cert.pem",
+      "gateway-key.pem",
+    ]);
+  });
+
+  it("rolls back a generated output after transient link retries are exhausted", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    let linkCount = 0;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      linkCount += 1;
+      if (linkCount >= 2 && linkCount <= 4) {
+        throw Object.assign(new Error("persistent link failure"), { code: "EIO" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    const failedResult = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    linkSpy.mockRestore();
+
+    expect(linkCount).toBe(4);
+    expect(failedResult.enabled).toBe(false);
+    expect(failedResult.error).toContain("publication failed");
+    expect(failedResult.error).toContain("concurrent output backup preserved under");
+    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const recoveryDir = requireSingleRecoveryDir(await fs.readdir(dir));
+    await expect(
+      fs.readdir(path.join(dir, recoveryDir)).then((items) => items.toSorted()),
+    ).resolves.toEqual(["cert.pem", "published-gateway-cert.pem"]);
+
+    const retryResult = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(retryResult.enabled).toBe(true);
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
+  });
+
   it("reports load failures for invalid pem files", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
-    await writeFile(certPath, "not a certificate\n", "utf8");
-    await writeFile(keyPath, KEY_PEM, "utf8");
+    await fs.writeFile(certPath, "not a certificate\n", "utf8");
+    await fs.writeFile(keyPath, KEY_PEM, "utf8");
 
     const result = await loadGatewayTlsRuntime({
       enabled: true,
