@@ -9,6 +9,12 @@ import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/cha
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
 import { dispatchRaftWake } from "./inbound.js";
 
@@ -68,6 +74,7 @@ type RaftWakeReplayGuard = ReturnType<typeof createRaftWakeReplayGuard>;
 type RaftGatewayDeps = {
   createToken?: () => string;
   spawnBridge?: (params: { profile: string; endpoint: string; token: string }) => RaftBridgeProcess;
+  wakeBodyTimeoutMs?: number;
   wakeDedupe?: RaftWakeReplayGuard;
 };
 
@@ -122,23 +129,39 @@ function hasMatchingToken(request: IncomingMessage, expected: string): boolean {
   return safeEqualSecret(value, expected);
 }
 
-async function readWakePayload(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  let tooLarge = false;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    bytes += buffer.length;
-    if (bytes > MAX_WAKE_BODY_BYTES) {
-      tooLarge = true;
-      continue;
+async function readWakePayload(
+  request: IncomingMessage,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  // Reject declared oversized payloads before the shared reader destroys the
+  // underlying socket, so the caller can still write a proper HTTP response.
+  const contentLengthHeader = request.headers["content-length"];
+  if (typeof contentLengthHeader === "string") {
+    const contentLength = Number(contentLengthHeader);
+    if (Number.isFinite(contentLength) && contentLength > MAX_WAKE_BODY_BYTES) {
+      throw new WakeRequestError(413, "Wake payload exceeds the 16 KiB limit.");
     }
-    chunks.push(buffer);
   }
-  if (tooLarge) {
-    throw new WakeRequestError(413, "Wake payload exceeds the 16 KiB limit.");
+
+  // Route body reads through the shared Plugin SDK request-body reader so
+  // timeout, size enforcement, destruction, and typed error classification
+  // stay on the centrally hardened path used by sibling channel webhooks.
+  let raw: string;
+  try {
+    raw = await readRequestBodyWithLimit(request, {
+      maxBytes: MAX_WAKE_BODY_BYTES,
+      timeoutMs,
+    });
+  } catch (error) {
+    if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+      throw new WakeRequestError(413, requestBodyErrorToText(error.code));
+    }
+    if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      throw new WakeRequestError(408, requestBodyErrorToText(error.code));
+    }
+    throw error;
   }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
+  const text = raw.trim();
   if (!text) {
     return {};
   }
@@ -290,7 +313,10 @@ export async function startRaftGatewayAccount(
         return;
       }
 
-      const payload = await readWakePayload(request);
+      const payload = await readWakePayload(
+        request,
+        deps.wakeBodyTimeoutMs ?? WEBHOOK_BODY_READ_DEFAULTS.postAuth.timeoutMs,
+      );
       if (containsMessageContent(payload)) {
         throw new WakeRequestError(400, "Wake payload must not include message content.");
       }
