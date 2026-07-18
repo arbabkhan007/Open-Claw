@@ -119,12 +119,23 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
 
       switch (action) {
         case "present": {
-          const placement = {
-            x: readFiniteNumberParam(params, "x"),
-            y: readFiniteNumberParam(params, "y"),
-            width: readFiniteNumberParam(params, "width"),
-            height: readFiniteNumberParam(params, "height"),
-          };
+          const placement: Record<string, number> = {};
+          const px = readFiniteNumberParam(params, "x");
+          if (px !== undefined) {
+            placement.x = px;
+          }
+          const py = readFiniteNumberParam(params, "y");
+          if (py !== undefined) {
+            placement.y = py;
+          }
+          const pw = readFiniteNumberParam(params, "width");
+          if (pw !== undefined) {
+            placement.width = pw;
+          }
+          const ph = readFiniteNumberParam(params, "height");
+          if (ph !== undefined) {
+            placement.height = ph;
+          }
           const invokeParams: Record<string, unknown> = {};
           const presentTarget =
             readStringParam(params, "target", { trim: true }) ??
@@ -132,12 +143,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (presentTarget) {
             invokeParams.url = presentTarget;
           }
-          if (
-            Number.isFinite(placement.x) ||
-            Number.isFinite(placement.y) ||
-            Number.isFinite(placement.width) ||
-            Number.isFinite(placement.height)
-          ) {
+          if (Object.keys(placement).length > 0) {
             invokeParams.placement = placement;
           }
           await invoke("canvas.present", invokeParams);
