@@ -1890,6 +1890,212 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
+  it("short-circuits fallback when isSuccessfulResult overrides classifyResult false positive", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    // Simulate classifier false positive: returns non-null even for a
+    // successful result with delivery evidence.
+    const classifyResult = vi.fn(() => ({
+      message: "false positive",
+      reason: "format" as const,
+      code: "empty_result",
+    }));
+    const isSuccessfulResult = vi.fn(
+      (result: { didSendViaMessagingTool?: boolean }) => result.didSendViaMessagingTool === true,
+    );
+    const run = vi.fn().mockResolvedValue({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "successful reply" }],
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+      isSuccessfulResult,
+    });
+
+    // The fallback chain should stop at the primary despite the classifier
+    // returning a non-null value, because isSuccessfulResult guards it.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.result).toEqual({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "successful reply" }],
+    });
+    expect(result.outcome).toBe("completed");
+    expect(classifyResult).toHaveBeenCalledTimes(1);
+    expect(isSuccessfulResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("still falls back when isSuccessfulResult returns false for a classified result", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        didSendViaMessagingTool: false,
+        payloads: [],
+      })
+      .mockResolvedValueOnce({
+        didSendViaMessagingTool: true,
+        payloads: [{ text: "fallback ok" }],
+      });
+    const classifyResult = vi.fn(({ result }) =>
+      Array.isArray(result.payloads) && result.payloads.length === 0
+        ? {
+            message: "empty result",
+            reason: "format" as const,
+            code: "empty_result",
+          }
+        : null,
+    );
+    const isSuccessfulResult = vi.fn(
+      (result: { didSendViaMessagingTool?: boolean }) => result.didSendViaMessagingTool === true,
+    );
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+      isSuccessfulResult,
+    });
+
+    // First attempt has no delivery evidence, so isSuccessfulResult returns
+    // false and the classified error triggers fallback.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result).toEqual({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "fallback ok" }],
+    });
+    expect(isSuccessfulResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves embedded failure-text fallback when isSuccessfulResult finds no delivery evidence", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    // Model returns empty result — no delivery, no visible text, no payloads.
+    // The classifier flags it, and isSuccessfulResult correctly returns false.
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        didSendViaMessagingTool: false,
+        didDeliverSourceReplyViaMessageTool: false,
+        meta: {},
+        payloads: [],
+      })
+      .mockResolvedValueOnce({
+        didSendViaMessagingTool: true,
+        payloads: [{ text: "fallback reply" }],
+      });
+    const classifyResult = vi.fn(({ result }) =>
+      !result.didSendViaMessagingTool &&
+      (!Array.isArray(result.payloads) || result.payloads.length === 0)
+        ? { message: "empty result", reason: "format" as const, code: "empty_result" }
+        : null,
+    );
+    const isSuccessfulResult = vi.fn(
+      (result: {
+        didSendViaMessagingTool?: boolean;
+        didDeliverSourceReplyViaMessageTool?: boolean;
+      }) =>
+        result.didSendViaMessagingTool === true ||
+        result.didDeliverSourceReplyViaMessageTool === true,
+    );
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+      isSuccessfulResult,
+    });
+
+    // First attempt has no delivery evidence → isSuccessfulResult returns
+    // false → fallback fires → second attempt succeeds.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result).toEqual({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "fallback reply" }],
+    });
+    expect(result.outcome).toBe("completed");
+  });
+
+  it("throws on terminal abort even when isSuccessfulResult would short-circuit", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    // Run succeeds with delivery evidence, classifier false-positive flags
+    // it, and an unmasked caller abort signal is active. The abort check
+    // runs before isSuccessfulResult so the abort takes precedence.
+    const controller = new AbortController();
+    const timeoutReason = new Error("caller timed out");
+    timeoutReason.name = "TimeoutError";
+    controller.abort(timeoutReason);
+    const run = vi.fn().mockResolvedValue({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "would be successful but abort is active" }],
+    });
+    const classifyResult = vi.fn(() => ({
+      message: "false positive classification",
+      reason: "format" as const,
+      code: "empty_result",
+    }));
+    const isSuccessfulResult = vi.fn(() => true);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        classifyResult,
+        isSuccessfulResult,
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow("false positive classification");
+
+    // Even though isSuccessfulResult would return true, the abort signal
+    // takes precedence and the run result is discarded.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(isSuccessfulResult).not.toHaveBeenCalled();
+  });
+
   it("continues fallback after embedded provider business-denial payloads", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1941,6 +2147,88 @@ describe("runWithModelFallback", () => {
       code: "embedded_error_payload",
       error: rawError,
     });
+  });
+
+  it("continues fallback when finalAssistantVisibleText comes from a classified provider error payload", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "zai/glm-5.1",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    });
+    // The error text is surfaced as finalAssistantVisibleText. The old
+    // isSuccessfulResult would short-circuit because visible text is non-empty.
+    // The fix checks payloads: when every text-bearing payload is an error,
+    // the visible text is a rendered provider error, not successful output.
+    const rawError =
+      '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}';
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        payloads: [{ text: rawError, isError: true }],
+        meta: { finalAssistantVisibleText: rawError, durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult)
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+    const isSuccessfulResult = vi.fn(
+      // Matches the production isSuccessfulResult in run-embedded-attempt.ts
+      (runResult: EmbeddedAgentRunResult) => {
+        if (
+          runResult.didSendViaMessagingTool ||
+          ("didDeliverSourceReplyViaMessageTool" in runResult &&
+            (runResult as Record<string, unknown>).didDeliverSourceReplyViaMessageTool)
+        ) {
+          return true;
+        }
+        if (
+          typeof runResult.meta?.finalAssistantVisibleText === "string" &&
+          runResult.meta.finalAssistantVisibleText.trim().length > 0
+        ) {
+          const payloads = runResult.payloads ?? [];
+          const hasNonErrorPayload = payloads.some(
+            (p) =>
+              !p.isError &&
+              !p.isReasoning &&
+              typeof p.text === "string" &&
+              p.text.trim().length > 0,
+          );
+          if (payloads.length === 0 || hasNonErrorPayload) {
+            return true;
+          }
+        }
+        const payloads = runResult.payloads ?? [];
+        return payloads.some(
+          (p) =>
+            !p.isError && !p.isReasoning && typeof p.text === "string" && p.text.trim().length > 0,
+        );
+      },
+    );
+
+    const result = await runWithModelFallback<EmbeddedAgentRunResult>({
+      cfg,
+      provider: "zai",
+      model: "glm-5.1",
+      run,
+      classifyResult: ({ provider, model, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: resultLocal,
+        }),
+      isSuccessfulResult,
+    });
+
+    // Fallback should fire despite finalAssistantVisibleText being non-empty,
+    // because all payloads are error payloads.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(isSuccessfulResult).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces classified terminal results when no fallback remains", async () => {
