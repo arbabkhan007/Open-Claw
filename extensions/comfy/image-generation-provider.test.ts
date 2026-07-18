@@ -1,8 +1,11 @@
 // Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
   buildComfyConfig,
@@ -12,10 +15,13 @@ import {
   parseComfyJsonBody,
 } from "./test-helpers.js";
 import { setComfyFetchGuardForTesting } from "./test-support.js";
+import { COMFY_WORKFLOW_FILE_MAX_BYTES } from "./workflow-file.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type FetchGuardRequest = {
   url?: unknown;
@@ -379,6 +385,65 @@ describe("comfy image-generation provider", () => {
         outputNodeIds: ["9"],
       },
     });
+  });
+
+  it("submits a local workflow loaded from workflowPath", async () => {
+    const tempRoot = tempDirs.make("openclaw-comfy-workflow-");
+    const workflowPath = path.join(tempRoot, "workflow.json");
+    await writeFile(
+      workflowPath,
+      JSON.stringify({
+        "6": { inputs: { text: "" } },
+        "9": { inputs: {} },
+      }),
+      "utf8",
+    );
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalImageResponses("workflow-path-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a workflow file",
+      cfg: buildComfyConfig({
+        workflow: undefined,
+        workflowPath,
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(parseJsonBody(1)).toEqual({
+      prompt: {
+        "6": { inputs: { text: "draw a workflow file" } },
+        "9": { inputs: {} },
+      },
+    });
+    expect(result.metadata?.promptId).toBe("workflow-path-prompt-1");
+  });
+
+  it("rejects oversized local workflowPath files before Comfy HTTP calls", async () => {
+    const tempRoot = tempDirs.make("openclaw-comfy-workflow-");
+    const workflowPath = path.join(tempRoot, "oversized-workflow.json");
+    await writeFile(workflowPath, "x".repeat(COMFY_WORKFLOW_FILE_MAX_BYTES + 1), "utf8");
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw an oversized workflow file",
+        cfg: buildComfyConfig({
+          workflow: undefined,
+          workflowPath,
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      }),
+    ).rejects.toThrow(`exceeds ${COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("honors local private-network access for service-discovery hostnames", async () => {
