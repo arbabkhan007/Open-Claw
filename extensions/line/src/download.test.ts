@@ -243,7 +243,7 @@ describe("downloadLineMedia", () => {
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
   });
 
-  it("aborts a hung content request at the total readiness deadline", async () => {
+  it("aborts a hung content request at the readiness deadline", async () => {
     let requestSignal: AbortSignal | undefined;
     fetchMock.mockImplementation(
       async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -265,5 +265,95 @@ describe("downloadLineMedia", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requestSignal?.aborted).toBe(true);
     expect(saveMediaStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts a dripping content body after headers within the body deadline", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let dripTimer: ReturnType<typeof setInterval> | undefined;
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementation(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              dripTimer = setInterval(() => {
+                controller.enqueue(encoder.encode("x"));
+              }, 40);
+            },
+            cancel() {
+              if (dripTimer !== undefined) {
+                clearInterval(dripTimer);
+                dripTimer = undefined;
+              }
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    );
+
+    const pending = downloadLineMedia("mid-drip", "token", 10 * 1024 * 1024, {
+      bodyTimeoutMs: 1_000,
+    });
+    const rejection = expect(pending).rejects.toThrow(
+      /body for message mid-drip timed out after 1 seconds/i,
+    );
+
+    await vi.waitFor(() => expect(saveMediaStreamMock).toHaveBeenCalledTimes(1));
+    // Readiness signal is cleared after headers; body abort uses a fresh controller.
+    expect(requestSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+  });
+
+  it("keeps a fresh body deadline after late readiness", async () => {
+    vi.useFakeTimers();
+    const jpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const first = cancellableResponse(202);
+    fetchMock
+      .mockImplementationOnce(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 14_000);
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error("fetch aborted"));
+            },
+            { once: true },
+          );
+        });
+        return first.response;
+      })
+      .mockImplementationOnce(async () => {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              // Under a shared 15s readiness+body budget this 1.5s transfer would
+              // only have ~1s left after late readiness and fail; a fresh body
+              // wall-clock of 2s still succeeds.
+              setTimeout(() => {
+                controller.enqueue(jpegHeader);
+                controller.close();
+              }, 1_500);
+            },
+          }),
+          { status: 200 },
+        );
+      });
+
+    const pending = downloadLineMedia("mid-late-ready", "token", 10 * 1024 * 1024, {
+      bodyTimeoutMs: 2_000,
+    });
+    await vi.advanceTimersByTimeAsync(14_000);
+    await vi.advanceTimersByTimeAsync(1_500);
+    const result = await pending;
+
+    expect(first.cancel).toHaveBeenCalledTimes(1);
+    expect(result.size).toBe(jpegHeader.length);
+    expect(result.contentType).toBe("image/jpeg");
   });
 });
