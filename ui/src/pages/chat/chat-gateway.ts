@@ -21,6 +21,7 @@ import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   hasVisibleStreamParts,
+  visibleAssistantStreamTextParts,
 } from "./stream-reconciliation.ts";
 import {
   authoritativeHistoryAppliedForRun,
@@ -193,16 +194,25 @@ function resolveExtendedErrorAssistantMessage(
   ) {
     return null;
   }
-  const streamedText = assembledVisibleChatStreamText(state);
   const messageText = extractText(message)?.trim();
-  const normalizedStreamedText = streamedText?.replace(/\s+/gu, " ").trim();
   const normalizedMessageText = messageText?.replace(/\s+/gu, " ").trim();
-  if (
-    !normalizedStreamedText ||
-    !normalizedMessageText ||
-    normalizedMessageText.length <= normalizedStreamedText.length ||
-    !normalizedMessageText.startsWith(normalizedStreamedText)
-  ) {
+  if (!normalizedMessageText) {
+    return null;
+  }
+  const streamParts = visibleAssistantStreamTextParts(state, isHiddenAssistantStreamText)
+    .map((part) => part.replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+  let searchIndex = 0;
+  let matchedLength = 0;
+  for (const part of streamParts) {
+    const partIndex = normalizedMessageText.indexOf(part, searchIndex);
+    if (partIndex < 0) {
+      return null;
+    }
+    searchIndex = partIndex + part.length;
+    matchedLength += part.length;
+  }
+  if (streamParts.length === 0 || normalizedMessageText.length <= matchedLength) {
     return null;
   }
   return message;
@@ -367,7 +377,8 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatRunError(
       state,
       hadActiveRunBeforeEvent
-        ? payloadMessageProjectsStream && !legacyErrorMessageProjectsStream
+        ? extendedAssistantMessage ||
+          (payloadMessageProjectsStream && !legacyErrorMessageProjectsStream)
           ? resolveGatewayErrorText(payload)
           : resolveChatErrorText(payload)
         : payload.message
