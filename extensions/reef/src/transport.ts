@@ -17,6 +17,7 @@ const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 // Stalled TCP peers that never complete the HTTP upgrade would otherwise hang
 // forever — ws defaults to no handshakeTimeout. Match sibling channel WS budgets.
 const REEF_WS_HANDSHAKE_MS = 30_000;
+const REEF_WS_CLOSE_MS = 5_000;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -205,6 +206,7 @@ export interface WebSocketLike {
   addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
   addEventListener(type: "open" | "close" | "error", listener: () => void): void;
   close(): void;
+  terminate?(): void;
 }
 
 export function createReefWebSocket(
@@ -286,13 +288,16 @@ export class ReefInboxConnection {
       // invocation settles, so late events from an abandoned socket cannot
       // overwrite the lifecycle state of its replacement (or of a stopped channel).
       let settled = false;
-      const settle = (error?: Error, closeSocket = false) => {
+      let closing = false;
+      let terminalError: Error | undefined;
+      let closeTimer: ReturnType<typeof setTimeout> | undefined;
+      const settle = (error?: Error) => {
         if (settled) {
           return;
         }
         settled = true;
-        if (closeSocket) {
-          socket.close();
+        if (closeTimer) {
+          clearTimeout(closeTimer);
         }
         // The channel signal outlives each reconnect generation. Release this
         // generation before replacement so abort only closes the active socket.
@@ -304,8 +309,23 @@ export class ReefInboxConnection {
           resolve();
         }
       };
+      const closeAndSettle = (error?: Error) => {
+        if (settled || closing) {
+          return;
+        }
+        closing = true;
+        terminalError ??= error;
+        // Do not let a stale generation observe a later channel abort while
+        // its asynchronous WebSocket close handshake is still in flight.
+        signal?.removeEventListener("abort", onAbort);
+        closeTimer = setTimeout(() => {
+          socket.terminate?.();
+          settle(terminalError);
+        }, REEF_WS_CLOSE_MS);
+        socket.close();
+      };
       const onAbort = () => {
-        settle(undefined, true);
+        closeAndSettle();
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       socket.addEventListener("open", () => {
@@ -321,14 +341,14 @@ export class ReefInboxConnection {
           }
           this.cursor = Math.max(this.cursor, frame.entry.seq);
           void this.onEntries([frame.entry]).catch((error: unknown) =>
-            settle(error instanceof Error ? error : new Error(String(error)), true),
+            closeAndSettle(error instanceof Error ? error : new Error(String(error))),
           );
         } catch (error) {
-          settle(error instanceof Error ? error : new Error(String(error)), true);
+          closeAndSettle(error instanceof Error ? error : new Error(String(error)));
         }
       });
-      socket.addEventListener("close", () => settle());
-      socket.addEventListener("error", () => settle(new Error("reef inbox socket error"), true));
+      socket.addEventListener("close", () => settle(terminalError));
+      socket.addEventListener("error", () => closeAndSettle(new Error("reef inbox socket error")));
     });
   }
 }

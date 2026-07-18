@@ -44,6 +44,9 @@ class ControlledWebSocket implements WebSocketLike {
 
   close(): void {
     this.closeCalls++;
+    for (const listener of this.listeners.get("close") ?? []) {
+      (listener as () => void)();
+    }
   }
 
   emitMessage(data: unknown): void {
