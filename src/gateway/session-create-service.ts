@@ -203,6 +203,14 @@ export async function createGatewaySession(params: {
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
+  /**
+   * Caller-declared succession disposition. `true` rolls the parent over with a
+   * terminal `session_end`; `false` opts out (parallel). Only an explicit
+   * non-dashboard successor is eligible — forks and detached/dashboard children
+   * always run parallel. When omitted, an eligible successor preserves the legacy
+   * rollover (#106778/#106932).
+   */
+  succeedsParent?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
@@ -266,6 +274,54 @@ export async function createGatewaySession(params: {
         "catalog sessions require a generated dashboard key",
       ),
     };
+  }
+
+  // Succession (`succeedsParent`) is a caller-declared replacement of the parent
+  // as the current session, so the parent rolls over with a terminal
+  // `session_end`. It must name a real successor key. A fork runs in parallel; a
+  // keyless/minted child and a dashboard-namespaced child are auto-managed,
+  // detached, and never succeed their parent (a dashboard session is replaced via
+  // `sessions.reset`, which retires its binding in place). Reject the
+  // contradiction loudly rather than silently retiring a still-active parent's
+  // Codex binding (#106778/#106932).
+  if (params.succeedsParent === true) {
+    if (params.fork === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
+        ),
+      };
+    }
+    if (
+      explicitTargetKey === undefined ||
+      explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
+    ) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent requires an explicit non-dashboard successor key",
+        ),
+      };
+    }
+    // Succession rolls the parent over, so it must actually name a parent and
+    // opt into lifecycle hooks. An explicit `succeedsParent` that omits either
+    // would silently perform no rollover — reject the incomplete declaration at
+    // the boundary instead (#106932).
+    if (params.parentSessionKey === undefined) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires parentSessionKey"),
+      };
+    }
+    if (params.emitCommandHooks !== true) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires emitCommandHooks"),
+      };
+    }
   }
 
   const authorizedHarnessCreation = Boolean(
@@ -731,21 +787,45 @@ export async function createGatewaySession(params: {
       storePath: target.storePath,
     };
 
+    // The parent only rolls over — receiving a terminal `session_end` while the
+    // new session receives `session_start` — when the new session *succeeds* it.
+    // A detached child runs in *parallel*: the parent stays the channel's current
+    // session, and emitting `session_end` on it retires its still-active Codex
+    // binding — the Codex extension treats reason "new" as terminal
+    // (`ENDED_SESSION_REASONS`) — permanently breaking the parent with "Codex
+    // binding generation was retired" (#106778).
+    //
+    // Only an explicit, non-dashboard successor key is *eligible* to succeed; a
+    // fork, a keyless/minted child, and a dashboard-namespaced child are detached
+    // and never succeed (an explicit `succeedsParent` on one is rejected up
+    // front). For an eligible successor the caller declares the disposition:
+    // `succeedsParent: false` opts out (parallel), `true` opts in, and omission
+    // preserves the legacy rollover so an existing caller that passed an explicit
+    // non-dashboard key + emitCommandHooks keeps its parent `session_end`
+    // (#106932). The child is created in every case and always receives its own
+    // `session_start`; main reset-in-place emits its own hooks earlier.
+    const succeedsParentEligible =
+      params.fork !== true &&
+      parseAgentSessionKey(target.canonicalKey)?.rest.startsWith("dashboard:") !== true;
+    const childSucceedsParent = succeedsParentEligible && params.succeedsParent !== false;
+
     if (canonicalParentSessionKey && parentSessionTarget && params.emitCommandHooks === true) {
       const parentEntry = currentParentSessionEntry;
       const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
         await loadSessionLifecycleRuntime();
-      emitGatewaySessionEndPluginHook({
-        cfg: params.cfg,
-        sessionKey: canonicalParentSessionKey,
-        sessionId: parentEntry?.sessionId,
-        storePath: parentSessionTarget.storePath,
-        sessionFile: parentEntry?.sessionFile,
-        agentId: parentSessionTarget.agentId,
-        reason: "new",
-        nextSessionId: created.entry.sessionId,
-        nextSessionKey: target.canonicalKey,
-      });
+      if (childSucceedsParent) {
+        emitGatewaySessionEndPluginHook({
+          cfg: params.cfg,
+          sessionKey: canonicalParentSessionKey,
+          sessionId: parentEntry?.sessionId,
+          storePath: parentSessionTarget.storePath,
+          sessionFile: parentEntry?.sessionFile,
+          agentId: parentSessionTarget.agentId,
+          reason: "new",
+          nextSessionId: created.entry.sessionId,
+          nextSessionKey: target.canonicalKey,
+        });
+      }
       emitGatewaySessionStartPluginHook({
         cfg: params.cfg,
         sessionKey: target.canonicalKey,

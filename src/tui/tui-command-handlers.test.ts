@@ -1025,7 +1025,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledWith({
       key: expect.stringMatching(/^tui-/),
       agentId: currentAgentId,
-      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+      ...(expectedParent ? { parentSessionKey: expectedParent, succeedsParent: true } : {}),
     });
   });
 

@@ -16,6 +16,12 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
+  succeedsParent: Type.Optional(
+    Type.Boolean({
+      description:
+        "Whether the new session succeeds the parent as the current session, rolling the parent over with a terminal `session_end`. Only an explicit non-dashboard successor key is eligible; forks and detached/dashboard children always run in parallel. `true` requires parentSessionKey and emitCommandHooks; `false` opts an eligible successor out; when omitted, an eligible successor preserves the legacy rollover.",
+    }),
+  ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),
