@@ -7,7 +7,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
-import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
+import {
+  type ReadResponseTextPrefixOptions,
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -38,21 +42,44 @@ function redactProviderErrorBody(body: string): string {
 export async function readResponseTextLimited(
   response: Response,
   limitBytes = 16 * 1024,
+  opts?: ReadResponseTextPrefixOptions,
 ): Promise<string> {
   if (limitBytes <= 0) {
     return "";
   }
-  return (await readResponseTextPrefix(response, limitBytes)).text;
+  return (
+    await readResponseTextPrefix(response, limitBytes, {
+      chunkTimeoutMs: opts?.chunkTimeoutMs ?? 10_000,
+      onIdleTimeout:
+        opts?.onIdleTimeout ??
+        (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
+      timeoutMs: opts?.timeoutMs,
+      onTimeout: opts?.onTimeout,
+    })
+  ).text;
 }
 
 /** Reads a successful provider text response under a byte cap. */
 export async function readProviderTextResponse(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
+  opts?: {
+    maxBytes?: number;
+    chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+    timeoutMs?: number;
+    onTimeout?: (params: { timeoutMs: number }) => Error;
+  },
 ): Promise<string> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
+    onIdleTimeout:
+      opts?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) =>
+        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
+    timeoutMs: opts?.timeoutMs,
+    onTimeout: opts?.onTimeout,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
   });
@@ -270,10 +297,23 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
 export async function readProviderJsonResponse<T>(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
+  opts?: {
+    maxBytes?: number;
+    chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+    timeoutMs?: number;
+    onTimeout?: (params: { timeoutMs: number }) => Error;
+  },
 ): Promise<T> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
+    onIdleTimeout:
+      opts?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) =>
+        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
+    timeoutMs: opts?.timeoutMs,
+    onTimeout: opts?.onTimeout,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
   });
@@ -342,11 +382,19 @@ export async function readProviderBinaryResponse(
   kind = "binary",
   opts?: {
     maxBytes?: number;
+    chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+    timeoutMs?: number;
+    onTimeout?: (params: { timeoutMs: number }) => Error;
   },
 ): Promise<Uint8Array> {
   assertProviderBinaryResponseContent(response, label, kind);
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs: opts?.chunkTimeoutMs,
+    onIdleTimeout: opts?.onIdleTimeout,
+    timeoutMs: opts?.timeoutMs,
+    onTimeout: opts?.onTimeout,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
   });
