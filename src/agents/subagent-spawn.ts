@@ -37,7 +37,11 @@ import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routi
 import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveAgentThinkingDefaultOverride,
+} from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   inheritedToolAllowPatch,
@@ -399,7 +403,7 @@ function readRequesterThinkingLevel(params: {
     return entry.thinkingLevel.trim();
   }
   const requesterAgentThinking = params.requesterAgentId
-    ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
+    ? resolveAgentThinkingDefaultOverride(params.cfg, params.requesterAgentId)
     : undefined;
   if (requesterAgentThinking) {
     return requesterAgentThinking;

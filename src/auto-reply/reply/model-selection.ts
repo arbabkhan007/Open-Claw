@@ -1,8 +1,6 @@
+import { resolveAgentThinkingDefaultOverride } from "../../agents/agent-scope-config.js";
 /** Model selection state for reply runs, including catalog and override handling. */
-import {
-  hasLegacyAutoFallbackWithoutOrigin,
-  resolveAgentConfig,
-} from "../../agents/agent-scope.js";
+import { hasLegacyAutoFallbackWithoutOrigin } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
@@ -215,7 +213,9 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | undefined;
-  const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
+  const agentThinkingDefaultOverride = params.agentId
+    ? resolveAgentThinkingDefaultOverride(cfg, params.agentId)
+    : undefined;
   const normalizedDirectStoredOverride = normalizeStoredOverrideModel({
     providerOverride: sessionEntry?.providerOverride,
     modelOverride: sessionEntry?.modelOverride,
@@ -550,7 +550,7 @@ export async function createModelSelectionState(params: {
     if (cached) {
       return cached;
     }
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const agentThinkingDefault = agentThinkingDefaultOverride as ThinkLevel | undefined;
     if (agentThinkingDefault) {
       defaultThinkingLevels.set(cacheKey, agentThinkingDefault);
       return agentThinkingDefault;
@@ -639,7 +639,7 @@ export async function createModelSelectionState(params: {
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
   const hasConfiguredThinkingDefault =
-    agentEntry?.thinkingDefault !== undefined ||
+    agentThinkingDefaultOverride !== undefined ||
     resolveConfiguredModelThinkingDefault(configuredModelThinkingDefault) !== undefined ||
     agentCfg?.thinkingDefault !== undefined;
 
