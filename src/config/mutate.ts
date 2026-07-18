@@ -631,7 +631,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
 
   const key = expectDefined(changedKeys[0], "changed keys entry at 0");
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
-  if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
+  if (!includePath || !isRecord(nextConfig) || !Object.hasOwn(nextConfig, key)) {
     return null;
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
