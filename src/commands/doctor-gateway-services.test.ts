@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   readWindowsProcessArgsSync: vi.fn(),
   readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
+  runExec: vi.fn(),
   note: vi.fn(),
 }));
 
@@ -109,6 +110,10 @@ vi.mock("../daemon/systemd.js", () => ({
 
 vi.mock("../infra/windows-port-pids.js", () => ({
   readWindowsProcessArgsSync: mocks.readWindowsProcessArgsSync,
+}));
+
+vi.mock("../process/exec.js", () => ({
+  runExec: mocks.runExec,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -1593,6 +1598,7 @@ describe("maybeScanExtraGatewayServices", () => {
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
     mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
+    mocks.runExec.mockResolvedValue({ stdout: "", stderr: "" });
   });
 
   afterEach(() => {
@@ -1771,6 +1777,49 @@ describe("maybeScanExtraGatewayServices", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
     );
+  });
+
+  it("bounds best-effort launchctl cleanup for legacy macOS services", async () => {
+    mockProcessPlatform("darwin");
+    const plistPath = "/Users/test/Library/LaunchAgents/com.openclaw.gateway.plist";
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "darwin",
+        label: "com.openclaw.gateway",
+        detail: `plist: ${plistPath}`,
+        scope: "user",
+        legacy: true,
+      },
+    ]);
+    mocks.runExec.mockRejectedValue(new Error("timed out"));
+    const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
+    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
+
+    try {
+      await maybeScanExtraGatewayServices(
+        { deep: false },
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        makeDoctorPrompts(),
+      );
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      expect(mocks.runExec).toHaveBeenNthCalledWith(
+        1,
+        "launchctl",
+        ["bootout", domain, plistPath],
+        { logOutput: false, timeoutMs: 5_000 },
+      );
+      expect(mocks.runExec).toHaveBeenNthCalledWith(2, "launchctl", ["unload", plistPath], {
+        logOutput: false,
+        timeoutMs: 5_000,
+      });
+      expect(rename).toHaveBeenCalledTimes(1);
+    } finally {
+      mkdir.mockRestore();
+      access.mockRestore();
+      rename.mockRestore();
+    }
   });
 
   it("reports legacy services but skips cleanup when service repair policy is external", async () => {
