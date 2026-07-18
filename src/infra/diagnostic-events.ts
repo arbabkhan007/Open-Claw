@@ -24,6 +24,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   sessionId?: string;
   channel?: string;
   agentId?: string;
+  pluginId?: string;
   provider?: string;
   model?: string;
   usage: {
