@@ -35,9 +35,8 @@ type AssistantMessageNormalizationOptions = {
   allowTextField?: boolean;
 };
 
-function setChatError(state: ChatState, error: string | null) {
-  state.lastError = error;
-  state.chatError = error;
+function setChatRunError(state: ChatState, summary: string) {
+  state.chatRunError = { summary };
 }
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
@@ -278,12 +277,10 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
     if (hadActiveRunBeforeEvent) {
-      // Preserve the exact text that this error payload previously rendered as
-      // an assistant bubble, but keep real streamed output in the transcript.
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
     reconcileTerminalRun("interrupted", "failed");
-    setChatError(
+    setChatRunError(
       state,
       hadActiveRunBeforeEvent
         ? resolveChatErrorText(payload)

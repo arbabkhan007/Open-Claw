@@ -115,6 +115,7 @@ export type ChatProps = {
   canSend: boolean;
   disabledReason: string | null;
   error: string | null;
+  runError?: { summary: string } | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -160,6 +161,7 @@ export type ChatProps = {
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeVideo?: () => void;
+  onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -447,6 +449,27 @@ export function renderChat(props: ChatProps) {
       }}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
+      ${props.error
+        ? html`
+            <div class="callout danger callout--dismissible" role="alert">
+              <span class="callout__content">${props.error}</span>
+              ${props.onDismissError
+                ? html`
+                    <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
+                      <button
+                        class="callout__dismiss"
+                        type="button"
+                        @click=${props.onDismissError}
+                        aria-label=${t("chat.actions.dismissError")}
+                      >
+                        ${icons.x}
+                      </button>
+                    </openclaw-tooltip>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
             <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
@@ -532,13 +555,13 @@ export function renderChat(props: ChatProps) {
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
               ${scrollToBottomButton}
-              ${props.error
+              ${props.runError
                 ? html`
                     <div class="chat-run-error" role="alert">
                       <span class="chat-run-error__icon" aria-hidden="true"
                         >${icons.circleAlert}</span
                       >
-                      <span class="chat-run-error__content">${props.error}</span>
+                      <span class="chat-run-error__content">${props.runError.summary}</span>
                     </div>
                   `
                 : nothing}

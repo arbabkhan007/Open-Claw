@@ -91,6 +91,7 @@ import {
 } from "./chat-history.ts";
 import {
   applySelectedSessionProjection,
+  dismissChatError,
   resolveAssistantAttachmentAuthToken,
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
@@ -2336,6 +2337,7 @@ class ChatPane extends OpenClawLightDomElement {
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
       error: state.lastError,
+      runError: state.chatRunError ?? null,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -2450,6 +2452,10 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeVideo: () => void state.toggleRealtimeTalk({ video: true }),
+      onDismissError: () => {
+        dismissChatError(state as never);
+        state.requestUpdate?.();
+      },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state as never);
         state.requestUpdate?.();

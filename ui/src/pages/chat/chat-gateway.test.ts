@@ -1693,7 +1693,9 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatRunId).toBe(null);
     expect(state.chatMessages).toEqual([existingMessage]);
-    expect(state.lastError).toBe('Error: No API key found for provider "openai".');
+    expect(state.chatRunError).toEqual({
+      summary: 'Error: No API key found for provider "openai".',
+    });
   });
 
   it("keeps streamed assistant text visible when an error ends the run", () => {
@@ -1727,7 +1729,7 @@ describe("handleChatGatewayEvent", () => {
       "assistant",
       "Partial answer before gateway error.",
     );
-    expect(state.lastError).toBe("Error: gateway disconnected");
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
   });
 
   it("keeps streamed text without appending the error payload message", () => {
@@ -1787,7 +1789,9 @@ describe("handleChatGatewayEvent", () => {
       "assistant",
       "Partial answer before gateway error.",
     );
-    expect(state.lastError).toBe("Partial answer before gateway error. Final detail.");
+    expect(state.chatRunError).toEqual({
+      summary: "Partial answer before gateway error. Final detail.",
+    });
   });
 
   it("keeps stream segments visible when an error ends after a tool event", () => {
@@ -1889,7 +1893,8 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([]);
-    expect(state.lastError).toBe("Error: raw gateway error");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
   });
 
   it("uses a legacy error payload message as alert text when errorMessage is absent", () => {
@@ -1910,7 +1915,8 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([]);
-    expect(state.lastError).toBe("Error: legacy gateway failure");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "Error: legacy gateway failure" });
   });
 
   it("uses server-provided error guidance as the alert copy", () => {
@@ -1933,7 +1939,8 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([]);
-    expect(state.lastError).toBe("Configure provider auth, then try again.");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "Configure provider auth, then try again." });
   });
 
   it("does not append an orphan error bubble when no run was active", () => {
@@ -1957,7 +1964,8 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([existingMessage]);
     expect(state.chatRunId).toBe(null);
-    expect(state.lastError).toBe("request failed before start");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "request failed before start" });
   });
 
   it("uses the generic alert fallback for a blank orphan error", () => {
@@ -1972,7 +1980,8 @@ describe("handleChatGatewayEvent", () => {
       }),
     ).toBe("error");
     expect(state.chatMessages).toEqual([]);
-    expect(state.lastError).toBe("chat error");
+    expect(state.lastError).toBeNull();
+    expect(state.chatRunError).toEqual({ summary: "chat error" });
   });
 
   it("drops NO_REPLY final payload from another run", () => {

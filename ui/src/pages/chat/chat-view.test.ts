@@ -724,7 +724,7 @@ describe("chat conversation width", () => {
   it("renders chat errors as a neutral alert immediately above the composer", () => {
     const errorText = "The agent run failed before producing a reply.";
     const container = renderChatView({
-      error: errorText,
+      runError: { summary: errorText },
     });
     const alert = requireElement(container, ".chat-run-error", "chat run error");
 
@@ -735,6 +735,21 @@ describe("chat conversation width", () => {
     expect(container.querySelector(".chat-thread .chat-run-error")).toBeNull();
 
     expect(alert.querySelector("button")).toBeNull();
+  });
+
+  it("keeps generic chat errors in the dismissible callout", () => {
+    const onDismissError = vi.fn();
+    const container = renderChatView({
+      error: "Could not store this message.",
+      onDismissError,
+    });
+
+    expect(container.querySelector(".chat-run-error")).toBeNull();
+    const callout = requireElement(container, ".callout--dismissible", "generic chat error");
+    const dismiss = requireElement<HTMLButtonElement>(callout, "button", "dismiss error");
+    dismiss.click();
+
+    expect(onDismissError).toHaveBeenCalledOnce();
   });
 });
 

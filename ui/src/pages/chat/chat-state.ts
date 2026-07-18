@@ -531,6 +531,7 @@ export function resetChatStateForRouteSession(
   state.chatSideChatHidden = false;
   state.lastError = null;
   state.chatError = null;
+  state.chatRunError = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
@@ -1251,6 +1252,7 @@ export function createPageState(
     chatStreamStartedAt: null,
     lastError: null,
     chatError: null,
+    chatRunError: null,
     agentsError: null,
     chatStreamSegments: [] as Array<{ text: string; ts: number }>,
     chatSideChatTurns: [] as ChatSideResult[],
