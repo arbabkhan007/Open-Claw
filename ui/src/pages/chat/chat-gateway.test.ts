@@ -1762,6 +1762,33 @@ describe("handleChatGatewayEvent", () => {
     );
   });
 
+  it("uses the gateway error when the payload message repeats the streamed text", () => {
+    const partialText = "Partial answer before gateway error.";
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: partialText,
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "gateway disconnected",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: partialText }],
+          timestamp: 101,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", partialText);
+    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected" });
+  });
+
   it("preserves terminal assistant content that extends the streamed text", () => {
     const message = {
       role: "assistant",

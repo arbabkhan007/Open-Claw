@@ -152,6 +152,23 @@ function resolveChatErrorText(payload: ChatEventPayload): string {
   return resolveGatewayErrorText(payload);
 }
 
+function errorPayloadMessageProjectsVisibleStream(
+  state: ChatState,
+  payload: ChatEventPayload,
+): boolean {
+  const message = normalizeFinalAssistantMessage(payload.message);
+  if (!message || shouldHideAssistantChatMessage(message)) {
+    return false;
+  }
+  const streamedText = assembledVisibleChatStreamText(state)?.replace(/\s+/gu, " ").trim();
+  const messageText = extractText(message)?.replace(/\s+/gu, " ").trim();
+  return Boolean(
+    streamedText &&
+    messageText &&
+    (messageText.startsWith(streamedText) || streamedText.startsWith(messageText)),
+  );
+}
+
 function resolveExtendedErrorAssistantMessage(
   state: ChatState,
   payload: ChatEventPayload,
@@ -315,6 +332,8 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const extendedAssistantMessage = hadActiveRunBeforeEvent
       ? resolveExtendedErrorAssistantMessage(state, payload)
       : null;
+    const payloadMessageProjectsStream =
+      hadActiveRunBeforeEvent && errorPayloadMessageProjectsVisibleStream(state, payload);
     if (extendedAssistantMessage) {
       // A terminal payload may complete genuine prose that only partially
       // streamed. Preserve that fuller answer before presenting the run error.
@@ -329,7 +348,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatRunError(
       state,
       hadActiveRunBeforeEvent
-        ? extendedAssistantMessage
+        ? payloadMessageProjectsStream
           ? resolveGatewayErrorText(payload)
           : resolveChatErrorText(payload)
         : payload.errorMessage?.trim() || "chat error",
