@@ -112,8 +112,12 @@ type SessionWithAgentPrompt = {
   };
 };
 
+// Marks a streamFn already wrapped to pin the in-lock SDK retry default to 0.
+// The window default is a fixed 0 (not configurable), so the wrapper carries no
+// mutable state; the marker only guards against re-wrapping on repeated installs.
 type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
+  __openclawEmbeddedPromptRetryDefaultInstalled?: boolean;
 };
 
 type SessionFileFingerprint =
@@ -1198,9 +1202,21 @@ function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerp
 async function waitForSessionEventQueue(_session: unknown): Promise<void> {}
 
 export class EmbeddedAttemptSessionTakeoverError extends Error {
-  constructor(sessionFile: string) {
-    super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
+  readonly sessionFile: string;
+  readonly phase?: "prompt_reacquire" | "cleanup" | "write" | "fence_check";
+
+  constructor(
+    sessionFile: string,
+    phase?: "prompt_reacquire" | "cleanup" | "write" | "fence_check",
+  ) {
+    super(
+      `session file changed while embedded prompt lock was released: ${sessionFile}${
+        phase ? ` (phase: ${phase})` : ""
+      }`,
+    );
     this.name = "EmbeddedAttemptSessionTakeoverError";
+    this.sessionFile = sessionFile;
+    this.phase = phase;
   }
 }
 
@@ -1483,7 +1499,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
-  async function assertSessionFileFence(): Promise<void> {
+  async function assertSessionFileFence(
+    phase: "prompt_reacquire" | "cleanup" | "write" | "fence_check" = "fence_check",
+  ): Promise<void> {
     if (!fenceActive) {
       return;
     }
@@ -1589,7 +1607,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     takeoverDetected = true;
-    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile, phase);
   }
 
   async function refreshSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
@@ -2116,7 +2134,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         try {
           heldLock = lock;
-          await assertSessionFileFence();
+          await assertSessionFileFence("prompt_reacquire");
         } catch (err) {
           heldLock = undefined;
           await lock.release();
@@ -2140,7 +2158,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           return noopLock;
         }
         try {
-          await assertSessionFileFence();
+          await assertSessionFileFence("cleanup");
         } catch (err) {
           await cleanupLock.release();
           if (err instanceof EmbeddedAttemptSessionTakeoverError) {
@@ -2211,6 +2229,46 @@ export function installPromptSubmissionLockRelease(params: {
     }
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
+  // Both installers wrap agent.streamFn and each is idempotent via its own marker.
+  // The outermost wrapper hides inner markers, so carry the retry-default marker
+  // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
+  if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
+    wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
+  }
   agent.streamFn = wrappedStreamFn;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+// Pin SDK retries to 0 for calls made inside the embedded prompt lock window.
+// The in-window default is always 0, never the configured provider retry: the
+// lock is released across the model call, model-fallback owns the one whole-attempt
+// retry, and an in-window SDK retry would race session takeover and silently lose
+// the message (#87180). Only an explicit per-call options.maxRetries overrides it,
+// because the caller-provided options spread last over the injected default.
+export function installEmbeddedPromptRetryDefault(session: unknown): void {
+  const agent = (session as SessionWithAgentPrompt).agent;
+  if (typeof agent?.streamFn !== "function") {
+    return;
+  }
+  const currentStreamFn = agent.streamFn;
+  if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
+    // Repeated installs are no-ops; the fixed 0 default carries no mutable state
+    // to refresh, so a second wrap would only stack redundant wrappers.
+    return;
+  }
+  const innerStreamFn = currentStreamFn;
+  const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
+    const [model, context, callOptions] = args;
+    const requestOptions = callOptions as { maxRetries?: number } | undefined;
+    // Inject maxRetries:0 as the in-window default; caller-provided options spread
+    // last so an explicit maxRetries still wins.
+    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });
+  };
+  wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
+  // The outermost wrapper hides inner markers, so carry the lock-release marker
+  // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
+  if (currentStreamFn["__openclawSessionLockPromptReleaseInstalled"] === true) {
+    wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
+  }
+  agent.streamFn = wrappedStreamFn;
+}
