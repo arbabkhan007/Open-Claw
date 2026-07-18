@@ -170,6 +170,7 @@ type UpdateRunnerOptions = {
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
+  commandEnv?: NodeJS.ProcessEnv;
 };
 
 type UpdateInstallSurface =
@@ -733,8 +734,9 @@ function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRun
 
 async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
+  commandEnv?: NodeJS.ProcessEnv,
 ): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
-  const defaultCommandEnv = await createGlobalInstallEnv();
+  const defaultCommandEnv = commandEnv ?? (await createGlobalInstallEnv());
   if (runCommand) {
     return {
       defaultCommandEnv,
@@ -810,7 +812,10 @@ export async function resolveUpdateInstallSurface(
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
-  const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(opts.runCommand);
+  const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(
+    opts.runCommand,
+    opts.commandEnv,
+  );
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const progress = opts.progress;
   const steps: UpdateStepResult[] = [];

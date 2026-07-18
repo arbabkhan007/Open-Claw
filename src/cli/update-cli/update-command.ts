@@ -1,4 +1,5 @@
 // Main update orchestration for source checkouts and package installs.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,6 +22,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
   isGatewayExternallySupervised,
@@ -68,18 +70,21 @@ import {
   resolveUpdateDoctorExecutionPolicy,
   runGatewayUpdate,
   type UpdateRunResult,
+  type UpdateStepResult,
 } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
+import { completeManagedGitCheckout, isManagedGitCheckoutRetry } from "./managed-checkout.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript } from "./restart-helper.js";
 import {
   DEFAULT_PACKAGE_NAME,
   createGlobalCommandRunner,
-  ensureGitCheckout,
+  createGitCheckout,
+  createSanitizedGitEnv,
   normalizeTag,
   parseTimeoutMsOrExit,
   readPackageName,
@@ -420,17 +425,49 @@ async function runGitUpdate(params: {
   const updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const installEnv = await createGlobalInstallEnv();
+  const freshCheckoutEnv = params.switchToGit ? createSanitizedGitEnv(installEnv) : undefined;
+  const managedCheckoutRetry = params.switchToGit
+    ? await isManagedGitCheckoutRetry(updateRoot, installEnv)
+    : false;
+  let managedRetryPreparation: {
+    allowGatewayServiceRepair?: boolean;
+    allowGatewayActivation?: boolean;
+  } | void = undefined;
+  const cleanupCreatedCheckout = async (primaryError?: unknown): Promise<void> => {
+    if (!params.switchToGit) {
+      return;
+    }
+    try {
+      await fs.rm(updateRoot, { recursive: true, force: true });
+      await completeManagedGitCheckout(updateRoot, installEnv);
+    } catch (cleanupError) {
+      if (primaryError !== undefined) {
+        throw createAggregateErrorWithCause(
+          [primaryError, cleanupError],
+          `Package-to-dev conversion failed (${formatErrorMessage(primaryError)}) and its new checkout could not be removed (${formatErrorMessage(cleanupError)})`,
+          primaryError,
+        );
+      }
+      throw cleanupError;
+    }
+  };
 
   const cloneStep = params.switchToGit
-    ? await ensureGitCheckout({
+    ? await createGitCheckout({
         dir: updateRoot,
         env: installEnv,
         timeoutMs: effectiveTimeout,
         progress: params.progress,
+        beforeReplaceManagedCheckout: async () => {
+          managedRetryPreparation = await params.beforeGitMutation?.();
+        },
       })
     : null;
 
   if (cloneStep && cloneStep.exitCode !== 0) {
+    if (!managedCheckoutRetry) {
+      await cleanupCreatedCheckout();
+    }
     const result: UpdateRunResult = {
       status: "error",
       mode: "git",
@@ -456,7 +493,11 @@ async function runGitUpdate(params: {
     deferConfiguredPluginInstallRepair: true,
     allowGatewayServiceRepair: params.allowGatewayServiceRepair,
     allowGatewayActivation: params.allowGatewayActivation,
-    beforeGitMutation: params.beforeGitMutation,
+    beforeGitMutation:
+      managedRetryPreparation === undefined
+        ? params.beforeGitMutation
+        : async () => managedRetryPreparation,
+    commandEnv: freshCheckoutEnv,
   });
   const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
 
@@ -477,9 +518,19 @@ async function runGitUpdate(params: {
       installTarget.manager === "pnpm"
         ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
         : null;
-    const installStep = await runUpdateStep({
+    const installArgv = globalInstallArgs(
+      installTarget,
+      updateRoot,
+      undefined,
+      installLocation,
+      updateRoot,
+    );
+    // From this point onward the package manager may already have persisted a
+    // symlink to updateRoot even when it later reports failure. Preserve the
+    // checkout so a failed install never leaves the global CLI dangling.
+    const installStep: UpdateStepResult = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation, updateRoot),
+      argv: installArgv,
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -488,12 +539,24 @@ async function runGitUpdate(params: {
     steps.push(installStep);
 
     const failedStep = installStep.exitCode !== 0 ? installStep : null;
+    if (!failedStep) {
+      await completeManagedGitCheckout(updateRoot, installEnv);
+    }
     return {
       ...updateResult,
-      status: updateResult.status === "ok" && !failedStep ? "ok" : "error",
+      status: failedStep ? "error" : "ok",
       steps,
       durationMs: Date.now() - params.startedAt,
     };
+  }
+
+  if (params.switchToGit) {
+    const doctorMayHaveRewrittenService = updateResult.steps.some(
+      (step) => step.name === "openclaw doctor",
+    );
+    if (!managedCheckoutRetry && !doctorMayHaveRewrittenService) {
+      await cleanupCreatedCheckout();
+    }
   }
 
   return {
