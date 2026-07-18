@@ -665,12 +665,23 @@ sips_bin() {
 normalize_capture_for_play() {
   local input_path="$1"
   local output_path="$2"
+  local intermediate_path="${input_path%.png}.tiff"
   local sips
   local description
 
   sips="$(sips_bin)"
-  "$sips" -s format jpeg -s formatOptions best "$input_path" --out "$output_path" >/dev/null
-  rm -f "$input_path"
+  # Direct RGBA PNG-to-JPEG conversion can drop image bands in macOS sips.
+  # A TIFF intermediate flattens the ADB frame before the final store encoding.
+  rm -f "$intermediate_path" "$output_path"
+  if ! "$sips" -s format tiff "$input_path" --out "$intermediate_path" >/dev/null; then
+    rm -f "$intermediate_path" "$output_path"
+    return 1
+  fi
+  if ! "$sips" -s format jpeg -s formatOptions best "$intermediate_path" --out "$output_path" >/dev/null; then
+    rm -f "$intermediate_path" "$output_path"
+    return 1
+  fi
+  rm -f "$input_path" "$intermediate_path"
 
   description="$(file "$output_path")"
   if [[ "$description" != *"${SCREENSHOT_SIZE/x/x}"* || "$description" != *"JPEG image data"* ]]; then

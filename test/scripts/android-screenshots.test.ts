@@ -47,6 +47,7 @@ function createBehaviorHarness() {
   const adbLogPath = path.join(root, "adb.log");
   const emulatorLogPath = path.join(root, "emulator.log");
   const gitLogPath = path.join(root, "git.log");
+  const sipsLogPath = path.join(root, "sips.log");
   const gitStatusPath = path.join(root, "git-status.txt");
   const fakeAdbPath = path.join(binDir, "adb");
   writeExecutable(
@@ -98,7 +99,20 @@ exit 1
   writeExecutable(
     path.join(binDir, "sips"),
     `#!/bin/sh
-cp "$7" "$9"
+printf '%s\n' "$*" >> "$FAKE_SIPS_LOG"
+previous=""
+input=""
+output=""
+for argument in "$@"; do
+  if [ "$previous" = "--out" ]; then
+    output="$argument"
+  fi
+  if [ "$argument" = "--out" ]; then
+    input="$previous"
+  fi
+  previous="$argument"
+done
+cp "$input" "$output"
 `,
   );
   writeExecutable(
@@ -130,6 +144,7 @@ exit 0
     writeFileSync(adbLogPath, "");
     writeFileSync(emulatorLogPath, "");
     writeFileSync(gitLogPath, "");
+    writeFileSync(sipsLogPath, "");
     writeFileSync(gitStatusPath, gitStatus);
     const result = spawnSync("bash", [path.join(scriptsDir, "android-screenshots.sh"), ...args], {
       encoding: "utf8",
@@ -144,6 +159,7 @@ exit 0
         FAKE_EMULATOR_LOG: emulatorLogPath,
         FAKE_GIT_STATUS_FILE: gitStatusPath,
         FAKE_GIT_LOG: gitLogPath,
+        FAKE_SIPS_LOG: sipsLogPath,
         FAKE_SCREENSHOT_SIZE: screenshotSize,
       },
     });
@@ -153,7 +169,8 @@ exit 0
       .filter(Boolean)
       .map((line) => JSON.parse(line) as string[]);
     const gitCalls = readFileSync(gitLogPath, "utf8").trim().split("\n").filter(Boolean);
-    return { result, adbCalls, gitCalls, root, emulatorLogPath };
+    const sipsCalls = readFileSync(sipsLogPath, "utf8").trim().split("\n").filter(Boolean);
+    return { result, adbCalls, gitCalls, sipsCalls, root, emulatorLogPath };
   };
 
   return { run };
@@ -254,7 +271,7 @@ describe("android screenshots script", () => {
 
   it("selects the exact Wear AVD while another emulator is connected", () => {
     const harness = createBehaviorHarness();
-    const { result, adbCalls, root, emulatorLogPath } = harness.run(
+    const { result, adbCalls, sipsCalls, root, emulatorLogPath } = harness.run(
       ["--form-factor", "wear", "--skip-build", "--skip-install", "--keep-emulator"],
       {
         "emulator-5554": { avd: "Unrelated_Phone", state: "device", watch: false },
@@ -282,6 +299,9 @@ describe("android screenshots script", () => {
       ),
     ).toBe(true);
     expect(starts.every((call) => !call.includes("openclaw.screenshotMode"))).toBe(true);
+    expect(sipsCalls).toHaveLength(10);
+    expect(sipsCalls.filter((call) => call.includes("-s format tiff"))).toHaveLength(5);
+    expect(sipsCalls.filter((call) => call.includes("-s format jpeg"))).toHaveLength(5);
     const outputDir = path.join(
       root,
       "apps/android/fastlane/metadata/android/en-US/images/wearScreenshots",
