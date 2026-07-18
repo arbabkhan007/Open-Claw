@@ -946,7 +946,10 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -998,6 +1001,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
+      signal,
     });
     if (loaded.ok) {
       result.push({
@@ -1132,6 +1136,7 @@ async function resolveExtraBootstrapPatternPaths(
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  signal?: AbortSignal,
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -1171,6 +1176,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,
+      signal,
     });
     if (loaded.ok) {
       files.push({
