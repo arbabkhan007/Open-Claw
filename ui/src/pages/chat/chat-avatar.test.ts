@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
-import { renderChatAvatar } from "./chat-avatar.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");
@@ -51,5 +51,66 @@ describe("renderChatAvatar", () => {
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
+  });
+});
+
+describe("refreshChatAvatar error handling", () => {
+  function createMockHost(
+    overrides?: Partial<Parameters<typeof refreshChatAvatar>[0]>,
+  ): Parameters<typeof refreshChatAvatar>[0] {
+    return {
+      connected: true,
+      basePath: "",
+      sessionKey: "agent:main:web:g1",
+      hello: null,
+      chatAvatarUrl: null,
+      chatAvatarSource: null,
+      chatAvatarStatus: null,
+      chatAvatarReason: null,
+      password: "test-pw",
+      ...overrides,
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("clears avatar state on fetch timeout (catch block handles TimeoutError)", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new DOMException("The operation timed out", "TimeoutError"));
+    const host = createMockHost();
+    host.chatAvatarSource = "previous";
+    host.chatAvatarStatus = "remote";
+
+    await refreshChatAvatar(host);
+
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBeNull();
+    expect(host.chatAvatarStatus).toBeNull();
+  });
+
+  it("clears avatar state on generic fetch failure", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network failure"));
+    const host = createMockHost();
+    host.chatAvatarUrl = "http://stale";
+    host.chatAvatarSource = "previous";
+
+    await refreshChatAvatar(host);
+
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBeNull();
+  });
+
+  it("skips fetch when disconnected", async () => {
+    globalThis.fetch = vi.fn();
+    const host = createMockHost({ connected: false });
+
+    await refreshChatAvatar(host);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBeNull();
   });
 });

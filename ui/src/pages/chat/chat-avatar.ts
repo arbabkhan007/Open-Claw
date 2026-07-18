@@ -281,7 +281,11 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const headers = buildControlUiAuthHeaders(authHeader);
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
-    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
+    const res = await fetch(url, {
+      method: "GET",
+      signal: AbortSignal.timeout(5_000),
+      ...(headers ? { headers } : {}),
+    });
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
