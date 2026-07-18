@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
+  readDirectDeliveryFallbackText,
   resolveSendableOutboundReplyParts,
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -135,6 +136,45 @@ type CreateTelegramOutboundAdapterOptions = {
   targetsMatchForReplySuppression?: ChannelOutboundAdapter["targetsMatchForReplySuppression"];
   preferFinalAssistantVisibleText?: boolean;
 };
+
+function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPayload | null {
+  const telegramData = payload.channelData?.telegram as
+    | {
+        buttons?: TelegramInlineButtons;
+        quoteText?: string;
+        reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
+      }
+    | undefined;
+  if (!telegramData) {
+    return payload;
+  }
+  const text = resolveTelegramInteractiveTextFallback({
+    text: payload.text,
+    interactive: payload.interactive,
+    presentation: payload.presentation,
+  });
+  if (
+    text?.trim() ||
+    resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0 ||
+    payload.location ||
+    payload.audioAsVoice === true ||
+    payload.videoAsNote === true
+  ) {
+    return payload;
+  }
+  const buttons = resolveTelegramInlineButtons({
+    buttons: telegramData.buttons,
+    presentation: payload.presentation,
+    interactive: payload.interactive,
+  });
+  const hasQuoteText = typeof telegramData.quoteText === "string" && telegramData.quoteText.trim();
+  const hasReaction = Boolean(telegramData.reaction);
+  if (!buttons?.length && !hasQuoteText) {
+    return hasReaction ? payload : null;
+  }
+  const fallbackText = readDirectDeliveryFallbackText(payload);
+  return fallbackText ? { ...payload, text: fallbackText } : null;
+}
 
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
@@ -299,6 +339,7 @@ export function createTelegramOutboundAdapter(
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
     targetsMatchForReplySuppression: options.targetsMatchForReplySuppression,
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
+    normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
     presentationCapabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
     deliveryCapabilities: {
       pin: true,

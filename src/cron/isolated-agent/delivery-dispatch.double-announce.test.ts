@@ -397,6 +397,215 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
+  it("uses non-empty summary text when structured direct payloads are textless", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- One task needs attention.";
+    params.outputText = "Pablo Daily Summary\n- One task needs attention.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "   " }, {}] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Pablo Daily Summary\n- One task needs attention." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("adds a generic summary fallback hint to metadata-only direct payloads", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        text: "   ",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("leaves channel metadata payload text decisions to the channel adapter", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "👍", replyToId: "123" },
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
+            telegram: {
+              reaction: { emoji: "👍", replyToId: "123" },
+            },
+          },
+        },
+      ],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("preserves separate metadata-only direct payloads for channel-owned normalization", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "👍", replyToId: "123" },
+          },
+        },
+      },
+      {
+        text: "   ",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
+            telegram: {
+              reaction: { emoji: "👍", replyToId: "123" },
+            },
+          },
+        },
+        {
+          channelData: {
+            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("does not attach fallback hints when the direct summary is silent", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = SILENT_REPLY_TOKEN;
+    params.outputText = SILENT_REPLY_TOKEN;
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        text: SILENT_REPLY_TOKEN,
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("uses summary fallback for non-Telegram direct payloads that normalize away", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.resolvedDelivery = makeResolvedDelivery({
+      channel: "discord",
+      to: "channel-123",
+    }) as never;
+    params.summary = "Pablo Daily Summary\n- Non-Telegram fallback.";
+    params.outputText = "Pablo Daily Summary\n- Non-Telegram fallback.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "   " }] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "discord",
+      to: "channel-123",
+      payloads: [{ text: "Pablo Daily Summary\n- Non-Telegram fallback." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
   it("skips announce fallback after verified message-tool source delivery", async () => {
     const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
     params.sourceDeliveryOutcome = {

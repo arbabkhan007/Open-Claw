@@ -1,7 +1,10 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  withDirectDeliveryFallbackText,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -453,6 +456,25 @@ function resolveCronAwarenessText(params: {
     ? pickLastNonEmptyTextFromPayloads(params.deliveryPayloads)
     : (normalizeOptionalString(params.outputText) ??
         normalizeOptionalString(params.synthesizedText));
+}
+
+function resolveDirectCronSummaryFallbackText(params: {
+  outputText?: string;
+  summary?: string;
+  synthesizedText?: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.outputText) ??
+    normalizeOptionalString(params.summary) ??
+    normalizeOptionalString(params.synthesizedText)
+  );
+}
+
+function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
+  return (
+    Boolean(payload.channelData) &&
+    !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
+  );
 }
 
 function formatTargetCronDeliveryAwarenessText(text: string): string {
@@ -1096,23 +1118,41 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const rawPayloads =
-        deliveryPayloads.length > 0
-          ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [];
-      const normalizedPayloads = rawPayloads
-        .map((p) => {
-          if (!p.text) {
-            return p;
-          }
-          const normalized = normalizeSilentReplyText(p.text);
-          return Object.assign({}, p, {
-            text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          });
-        })
-        .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      const summaryFallbackText = resolveDirectCronSummaryFallbackText({
+        outputText,
+        summary,
+        synthesizedText,
+      });
+      const normalizedSummaryFallback = summaryFallbackText
+        ? normalizeSilentReplyText(summaryFallbackText)
+        : undefined;
+      const normalizedSummaryFallbackText =
+        normalizedSummaryFallback?.strippedTrailingSilentToken === true
+          ? undefined
+          : normalizedSummaryFallback?.text;
+      const fallbackPayloads = normalizedSummaryFallbackText
+        ? [{ text: normalizedSummaryFallbackText }]
+        : [];
+      const normalizeDirectPayloads = (payloads: ReplyPayload[]) =>
+        payloads
+          .map((p) => {
+            const normalized = p.text ? normalizeSilentReplyText(p.text) : undefined;
+            const payload = normalized
+              ? Object.assign({}, p, {
+                  text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+                })
+              : p;
+            return shouldAttachDirectCronFallbackText(payload)
+              ? withDirectDeliveryFallbackText(payload, normalizedSummaryFallbackText)
+              : payload;
+          })
+          .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      let normalizedPayloads = normalizeDirectPayloads(
+        deliveryPayloads.length > 0 ? deliveryPayloads : fallbackPayloads,
+      );
+      if (normalizedPayloads.length === 0 && deliveryPayloads.length > 0) {
+        normalizedPayloads = normalizeDirectPayloads(fallbackPayloads);
+      }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
