@@ -543,6 +543,7 @@ export async function getReplyFromConfig(
     sessionKey,
     sessionId,
     storePath,
+    isFirstTurnInSession: isNewSession || !systemSent,
   });
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
