@@ -161,9 +161,12 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     const exit = await exitPromise;
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
+    const expectedTimeoutSignal = process.platform === "win32" ? "SIGKILL" : "SIGTERM";
+    expect(adapter.killMock).toHaveBeenCalledWith(expectedTimeoutSignal);
+    if (process.platform !== "win32") {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
+    }
     expect(exit.reason).toBe("no-output-timeout");
     expect(exit.noOutputTimedOut).toBe(true);
     expect(exit.timedOut).toBe(true);
@@ -263,7 +266,9 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     const exit = await exitPromise;
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(adapter.killMock).toHaveBeenCalledWith(
+      process.platform === "win32" ? "SIGKILL" : "SIGTERM",
+    );
     expect(exit.reason).toBe("overall-timeout");
     expect(exit.timedOut).toBe(true);
   });

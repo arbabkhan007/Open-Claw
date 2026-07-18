@@ -227,8 +227,18 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
       };
 
-      cancelAdapter = (_reason: TerminationReason) => {
+      cancelAdapter = (reason: TerminationReason) => {
         if (settled || forceKillTimer) {
+          return;
+        }
+        // Windows has no catchable SIGTERM equivalent: the adapter implements it
+        // with asynchronous taskkill, so waiting the cleanup grace only delays an
+        // already-expired deadline before the same forced tree termination.
+        if (
+          process.platform === "win32" &&
+          (reason === "overall-timeout" || reason === "no-output-timeout")
+        ) {
+          adapter.kill("SIGKILL");
           return;
         }
         adapter.kill("SIGTERM");
