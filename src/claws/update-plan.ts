@@ -35,7 +35,11 @@ import {
   type ClawUpdatePlan,
 } from "./update-plan-types.js";
 
-export { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan-types.js";
+export {
+  CLAW_UPDATE_PLAN_SCHEMA_VERSION,
+  type ClawUpdateAction,
+  type ClawUpdatePlan,
+} from "./update-plan-types.js";
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
@@ -350,6 +354,7 @@ export async function buildClawUpdatePlan(params: {
                       ? "Managed workspace content already matches the target source."
                       : "Target source changes or restores managed workspace content.",
         ...(current ? { currentDigest: current.contentDigest } : {}),
+        ...(current ? { currentPresent: current.state !== "missing" } : {}),
         desiredDigest: target.digest,
       });
     }
@@ -371,6 +376,7 @@ export async function buildClawUpdatePlan(params: {
           ? "Target removes this file, but local drift must be preserved manually."
           : "Target manifest removes this managed workspace file.",
         currentDigest: current.contentDigest,
+        currentPresent: current.state !== "missing",
       });
     }
 

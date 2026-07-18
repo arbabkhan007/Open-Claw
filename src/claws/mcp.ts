@@ -9,7 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan, ClawMcpServer } from "./types.js";
 
-const CLAW_MCP_REF_SCHEMA_VERSION = "openclaw.clawMcpServerRef.v1" as const;
+export const CLAW_MCP_REF_SCHEMA_VERSION = "openclaw.clawMcpServerRef.v1" as const;
 
 export type PersistedClawMcpServerRef = {
   schemaVersion: typeof CLAW_MCP_REF_SCHEMA_VERSION;
@@ -165,7 +165,11 @@ function updateRef(
 export async function installClawMcpServers(
   plan: ClawAddPlan,
   options: OpenClawStateDatabaseOptions & {
-    setMcpServer?: typeof setConfiguredMcpServer;
+    setMcpServer?: (params: {
+      name: string;
+      server: ClawMcpServer;
+      createOnly?: boolean;
+    }) => ReturnType<typeof setConfiguredMcpServer>;
     listMcpServers?: typeof listConfiguredMcpServers;
     nowMs?: number;
   } = {},
@@ -342,5 +346,41 @@ export function deleteClawMcpServerRef(
     db /* sqlite-allow-raw: delete one released Claw MCP ownership row. */
       .prepare("DELETE FROM claw_mcp_server_refs WHERE agent_id = ? AND name = ?")
       .run(agentId, name);
+  }, options);
+}
+
+export function upsertClawMcpServerRef(
+  ref: PersistedClawMcpServerRef,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db /* sqlite-allow-raw: Claw MCP lifecycle provenance write. */
+      .prepare(
+        `INSERT INTO claw_mcp_server_refs (
+         agent_id, name, schema_version, config_digest, ownership, status, error,
+         created_at_ms, updated_at_ms
+       ) VALUES (
+         @agent_id, @name, @schema_version, @config_digest, @ownership, @status, @error,
+         @created_at_ms, @updated_at_ms
+       )
+       ON CONFLICT(agent_id, name) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         config_digest = excluded.config_digest,
+         ownership = excluded.ownership,
+         status = excluded.status,
+         error = excluded.error,
+         updated_at_ms = excluded.updated_at_ms`,
+      )
+      .run({
+        agent_id: ref.agentId,
+        name: ref.name,
+        schema_version: ref.schemaVersion,
+        config_digest: ref.configDigest,
+        ownership: ref.ownership,
+        status: ref.status,
+        error: ref.error ?? null,
+        created_at_ms: ref.createdAtMs,
+        updated_at_ms: ref.updatedAtMs,
+      });
   }, options);
 }

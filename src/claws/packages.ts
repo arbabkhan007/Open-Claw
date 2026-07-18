@@ -21,7 +21,7 @@ export class ClawPackageInstallError extends Error {
   }
 }
 
-type PackageInstallerDeps = {
+export type PackageInstallerDeps = {
   installPlugin?: typeof runPluginInstallCommand;
   preflightPlugin?: typeof preflightPluginInstall;
   persistPackageRef?: typeof persistClawPackageRef;
@@ -105,6 +105,7 @@ export async function installClawPackages(
     deps?: PackageInstallerDeps;
     runtime?: RuntimeEnv;
     nowMs?: number;
+    onExternalMutation?: (pkg: ClawPackage) => void;
   } = {},
 ): Promise<PersistedClawPackageRef[]> {
   const deps = options.deps ?? {};
@@ -176,10 +177,12 @@ export async function installClawPackages(
       });
       installedPackages.push(packageRef);
 
+      options.onExternalMutation?.(pkg);
       await installPlugin({
         raw: `clawhub:${pkg.ref}@${pkg.version}`,
         opts: {},
         invalidateRuntimeCache: false,
+        clawManaged: true,
         runtime: installerRuntime(runtime),
       });
       packageRef = completePackageRef(packageRef, "complete", options);
