@@ -55,6 +55,14 @@ If the same person contacts you from multiple channels, use
 they share a session.
 </Tip>
 
+<Warning>
+`per-peer` keys are channel-agnostic by design, so peer ids that differ only by
+case always resolve to one session. On channels with opaque, case-sensitive user
+ids (Matrix MXIDs), two case-distinct users therefore share one DM session under
+`per-peer`. Use `per-channel-peer` or `per-account-channel-peer`, which keep such
+ids distinct.
+</Warning>
+
 ### Dock linked channels
 
 Dock commands move the current direct-chat session's reply route to another

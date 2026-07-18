@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
+  parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   requiresFoldedSessionKeyAliasProof,
 } from "../../sessions/session-key-utils.js";
@@ -36,7 +37,7 @@ function normalizeEntryTarget(value: unknown): string {
     return "";
   }
   const trimmed = value.trim();
-  const sigilIndexes = ["!", "#"]
+  const sigilIndexes = ["!", "#", "@"]
     .map((sigil) => trimmed.indexOf(sigil))
     .filter((index) => index >= 0);
   if (sigilIndexes.length === 0) {
@@ -54,6 +55,19 @@ function entryDeliveryTargets(entry: SessionEntry | undefined): string[] {
     entry?.groupId,
   ];
   return candidates.map(normalizeEntryTarget).filter(Boolean);
+}
+
+/** A DM key embeds the peer id, not the room it was delivered in, so its folded
+ *  alias must be proven against the peer identity. Room targets never appear in a
+ *  direct key and would reject every legitimate DM session. */
+function entryProofTargets(entry: SessionEntry | undefined, normalizedBaseKey: string): string[] {
+  const peerKind = parseSessionDeliveryRoute(normalizedBaseKey)?.peerKind;
+  if (peerKind !== "direct" && peerKind !== "dm") {
+    return entryDeliveryTargets(entry);
+  }
+  return [entry?.origin?.nativeDirectUserId, entry?.origin?.from]
+    .map(normalizeEntryTarget)
+    .filter(Boolean);
 }
 
 function normalizeEntryThreadId(value: unknown): string {
@@ -87,7 +101,7 @@ export function isConfirmedLowercasedLegacyAlias(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targetMatches = entryDeliveryTargets(entry).some((target) =>
+  const targetMatches = entryProofTargets(entry, normalizedBaseKey).some((target) =>
     normalizedBaseKey.includes(target),
   );
   if (!targetMatches) {
@@ -108,7 +122,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targets = entryDeliveryTargets(entry);
+  const targets = entryProofTargets(entry, normalizedBaseKey);
   // Existing delivery metadata is treated as proof against folding to a different opaque target.
   if (targets.length > 0 && !targets.some((target) => normalizedBaseKey.includes(target))) {
     return true;

@@ -77,14 +77,19 @@ describe("normalizeSessionPeerId (construction)", () => {
     );
   });
 
-  it("lowercases non-enrolled channels and Matrix DM (direct) peers", () => {
+  it("lowercases non-enrolled channels", () => {
     expect(
       normalizeSessionPeerId({ channel: "telegram", peerKind: "group", peerId: "MixedHandle" }),
     ).toBe("mixedhandle");
-    // DM goes through the direct branch elsewhere, but the predicate must not enroll it.
+    expect(
+      normalizeSessionPeerId({ channel: "telegram", peerKind: "direct", peerId: "MixedHandle" }),
+    ).toBe("mixedhandle");
+  });
+
+  it("preserves Matrix DM (direct) MXID case", () => {
     expect(
       normalizeSessionPeerId({ channel: "matrix", peerKind: "direct", peerId: "@Bob:X" }),
-    ).toBe("@bob:x");
+    ).toBe("@Bob:X");
   });
 
   it("still preserves Signal group ids", () => {
@@ -195,10 +200,31 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     ).toBe(`matrix:channel:${ROOM_A}:thread:${EVENT}`);
   });
 
-  it("lowercases Matrix DM (direct) keys — out of scope by decision", () => {
+  it("preserves Matrix DM (direct) MXID case in channel-scoped keys", () => {
     expect(
       normalizeSessionKeyPreservingOpaquePeerIds("agent:main:matrix:direct:@Bob:Example.Org"),
-    ).toBe("agent:main:matrix:direct:@bob:example.org");
+    ).toBe("agent:main:matrix:direct:@Bob:Example.Org");
+  });
+
+  it("preserves Matrix DM (direct) MXID case behind an account segment", () => {
+    expect(
+      normalizeSessionKeyPreservingOpaquePeerIds("agent:main:matrix:Acct1:direct:@Bob:Example.Org"),
+    ).toBe("agent:main:matrix:acct1:direct:@Bob:Example.Org");
+  });
+
+  it("folds channel-agnostic per-peer DM keys, which carry no channel to enroll", () => {
+    expect(normalizeSessionKeyPreservingOpaquePeerIds("agent:main:direct:@Bob:Example.Org")).toBe(
+      "agent:main:direct:@bob:example.org",
+    );
+  });
+
+  it("keeps Signal DM (direct) peers folded, not enrolled by this change", () => {
+    expect(normalizeSessionKeyPreservingOpaquePeerIds("agent:ops:signal:direct:+15550001")).toBe(
+      "agent:ops:signal:direct:+15550001",
+    );
+    expect(normalizeSessionPeerId({ channel: "signal", peerKind: "direct", peerId: "AbC" })).toBe(
+      "abc",
+    );
   });
 
   it("preserves Signal group id segment (scoped and unscoped), unchanged behavior", () => {
@@ -497,5 +523,125 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
 
     expect(r.legacyKeys).toContain(legacyAliasKey);
     expect(r.existing).toBe(freshAlias);
+  });
+});
+
+describe("Matrix DM (direct) peer isolation under per-peer dmScope (#102313)", () => {
+  const dmEntry = (mxid: string, updatedAt: number): SessionEntry =>
+    ({
+      updatedAt,
+      deliveryContext: { channel: "matrix", to: "room:!dmroom:hs.example" },
+      origin: { from: `matrix:${mxid}`, nativeChannelId: "!dmroom:hs.example" },
+    }) as unknown as SessionEntry;
+  const MXID_UPPER = "@Alice:hs.example";
+  const MXID_LOWER = "@alice:hs.example";
+  const dmKey = (
+    peerId: string,
+    dmScope: "per-channel-peer" | "per-account-channel-peer",
+  ): string =>
+    buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "matrix",
+      accountId: "acct1",
+      peerKind: "direct",
+      peerId,
+      dmScope,
+    });
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "builds distinct %s keys for case-distinct MXIDs",
+    (dmScope) => {
+      expect(dmKey(MXID_UPPER, dmScope)).not.toBe(dmKey(MXID_LOWER, dmScope));
+      expect(dmKey(MXID_UPPER, dmScope)).toContain(MXID_UPPER);
+      expect(dmKey(MXID_LOWER, dmScope)).toContain(MXID_LOWER);
+    },
+  );
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "keeps %s keys distinct through store canonicalization",
+    (dmScope) => {
+      expect(normalizeSessionKeyPreservingOpaquePeerIds(dmKey(MXID_UPPER, dmScope))).not.toBe(
+        normalizeSessionKeyPreservingOpaquePeerIds(dmKey(MXID_LOWER, dmScope)),
+      );
+    },
+  );
+
+  it("does NOT return another peer's DM session for a case-distinct MXID", () => {
+    const store: Record<string, SessionEntry> = {
+      [dmKey(MXID_LOWER, "per-channel-peer")]: dmEntry(MXID_LOWER, 999),
+    };
+    const r = resolveSessionStoreEntry({
+      store,
+      sessionKey: dmKey(MXID_UPPER, "per-channel-peer"),
+    });
+    expect(r.existing).toBeUndefined();
+    expect(r.legacyKeys).toEqual([]);
+  });
+
+  it("keeps two case-distinct peers on separate persisted DM sessions", () => {
+    const store: Record<string, SessionEntry> = {
+      [dmKey(MXID_UPPER, "per-channel-peer")]: dmEntry(MXID_UPPER, 100),
+      [dmKey(MXID_LOWER, "per-channel-peer")]: dmEntry(MXID_LOWER, 999),
+    };
+    const upper = resolveSessionStoreEntry({
+      store,
+      sessionKey: dmKey(MXID_UPPER, "per-channel-peer"),
+    });
+    expect(upper.existing?.origin?.from).toBe(`matrix:${MXID_UPPER}`);
+    expect(upper.legacyKeys).toEqual([]);
+    const lower = resolveSessionStoreEntry({
+      store,
+      sessionKey: dmKey(MXID_LOWER, "per-channel-peer"),
+    });
+    expect(lower.existing?.origin?.from).toBe(`matrix:${MXID_LOWER}`);
+  });
+
+  const LEGACY_LOWERCASE_KEY = {
+    "per-channel-peer": "agent:main:matrix:direct:@alice:hs.example",
+    "per-account-channel-peer": "agent:main:matrix:acct1:direct:@alice:hs.example",
+  } as const;
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "requires folded-alias proof for %s DM keys",
+    (dmScope) => {
+      expect(requiresFoldedSessionKeyAliasProof(dmKey(MXID_UPPER, dmScope))).toBe(true);
+    },
+  );
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "adopts the same peer's own lowercased legacy %s row on upgrade",
+    (dmScope) => {
+      const store: Record<string, SessionEntry> = {
+        [LEGACY_LOWERCASE_KEY[dmScope]]: dmEntry(MXID_UPPER, 50),
+      };
+      const r = resolveSessionStoreEntry({ store, sessionKey: dmKey(MXID_UPPER, dmScope) });
+      expect(r.normalizedKey).toBe(dmKey(MXID_UPPER, dmScope));
+      expect(r.legacyKeys).toContain(LEGACY_LOWERCASE_KEY[dmScope]);
+      expect(r.existing?.origin?.from).toBe(`matrix:${MXID_UPPER}`);
+    },
+  );
+
+  it.each(["per-channel-peer", "per-account-channel-peer"] as const)(
+    "rejects a case-distinct sibling's lowercased %s row instead of adopting or deleting it",
+    (dmScope) => {
+      const store: Record<string, SessionEntry> = {
+        [LEGACY_LOWERCASE_KEY[dmScope]]: dmEntry(MXID_LOWER, 50),
+      };
+      const r = resolveSessionStoreEntry({ store, sessionKey: dmKey(MXID_UPPER, dmScope) });
+      expect(r.existing).toBeUndefined();
+      expect(r.legacyKeys).toEqual([]);
+    },
+  );
+
+  it("keeps non-enrolled channel DMs folded to one session", () => {
+    const telegramKey = (peerId: string): string =>
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "telegram",
+        peerKind: "direct",
+        peerId,
+        dmScope: "per-channel-peer",
+      });
+    expect(telegramKey("MixedHandle")).toBe(telegramKey("mixedhandle"));
   });
 });

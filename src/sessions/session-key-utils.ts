@@ -61,7 +61,14 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   // #82853 — Signal group IDs (opaque). Encoded to match prior behavior exactly.
   { channel: "signal", peerKinds: new Set(["group"]), span: "segment", unscoped: true },
   // #75670 — Matrix room IDs (opaque, embedded `:server`) plus thread event suffix.
-  { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
+  // #102313 — Matrix MXIDs on DM keys that carry the channel (per-channel-peer,
+  // per-account-channel-peer). Channel-agnostic per-peer keys cannot enroll here.
+  {
+    channel: "matrix",
+    peerKinds: new Set(["channel", "group", "direct"]),
+    span: "tail",
+    unscoped: true,
+  },
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
@@ -81,6 +88,26 @@ function findCasePreservingPeerDescriptor(
   const c = normalizeLowercaseStringOrEmpty(channel);
   const k = normalizeLowercaseStringOrEmpty(peerKind);
   return CASE_PRESERVING_PEERS.find((d) => d.channel === c && d.peerKinds.has(k));
+}
+
+/** Resolve the descriptor for a key body, allowing the account-scoped DM shape
+ *  `<channel>:<account>:<direct|dm>:<peer>` that parseSessionDeliveryRoute also
+ *  disambiguates. Without it an account-scoped DM key claims no proof is needed
+ *  and a folded sibling peer's session is adopted and deleted. */
+function findKeyBodyCasePreservingPeerDescriptor(
+  channel: string | undefined,
+  peerKindOrAccount: string | undefined,
+  accountScopedPeerKind: string | undefined,
+): CasePreservingPeerDescriptor | undefined {
+  const direct = findCasePreservingPeerDescriptor(channel, peerKindOrAccount);
+  if (direct) {
+    return direct;
+  }
+  const scopedKind = normalizeOptionalLowercaseString(accountScopedPeerKind);
+  if (scopedKind !== "direct" && scopedKind !== "dm") {
+    return undefined;
+  }
+  return findCasePreservingPeerDescriptor(channel, scopedKind);
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
@@ -103,9 +130,10 @@ export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefine
       bodyStartIndex += 1;
     }
   }
-  const descriptor = findCasePreservingPeerDescriptor(
+  const descriptor = findKeyBodyCasePreservingPeerDescriptor(
     parts[bodyStartIndex],
     parts[bodyStartIndex + 1],
+    parts[bodyStartIndex + 2],
   );
   return descriptor?.span === "tail";
 }
@@ -203,7 +231,8 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
         };
         // Preserve tails behind nested or malformed ownership wrappers without
         // treating an inner channel-shaped identity as a runtime route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
+        const scopedKind = peerKind === "direct" ? `(?:[^:]*:)?${kind}` : kind;
+        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${scopedKind}:`, "i");
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
