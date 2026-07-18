@@ -749,16 +749,6 @@ export function applyJobResult(
     replayFailureAlertAtMs?: number;
   },
 ): boolean {
-  const prevLastRunAtMs = job.state.lastRunAtMs;
-  const computeNextWithPreservedLastRun = (nowMs: number) => {
-    const saved = job.state.lastRunAtMs;
-    job.state.lastRunAtMs = prevLastRunAtMs;
-    try {
-      return computeJobNextRunAtMs(job, nowMs);
-    } finally {
-      job.state.lastRunAtMs = saved;
-    }
-  };
   job.state.queuedAtMs = undefined;
   // Timer polling and the gateway on-exit watcher both consume the run and own
   // scheduler state; a manual `cron run` (operator) records the outcome only and
@@ -978,7 +968,7 @@ export function applyJobResult(
                 (retryDecision.retryable || previousConsecutiveErrors > 0) &&
                 job.schedule.kind === "every"
                   ? computeNextRunAtMs(job.schedule, result.endedAt)
-                  : computeNextWithPreservedLastRun(result.endedAt);
+                  : computeJobNextRunAtMs(job, result.endedAt);
             } catch (err) {
               // If the schedule expression/timezone throws (croner edge cases),
               // record the schedule error (auto-disables after repeated failures)
@@ -1051,7 +1041,7 @@ export function applyJobResult(
           naturalNext =
             previousConsecutiveErrors > 0 && job.schedule.kind === "every"
               ? computeNextRunAtMs(job.schedule, result.endedAt)
-              : computeNextWithPreservedLastRun(result.endedAt);
+              : computeJobNextRunAtMs(job, result.endedAt);
         } catch (err) {
           // If the schedule expression/timezone throws (croner edge cases),
           // record the schedule error (auto-disables after repeated failures)
