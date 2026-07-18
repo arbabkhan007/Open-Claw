@@ -1,6 +1,7 @@
-// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
+import type { Stats } from "node:fs";
+import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -28,6 +29,7 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { readFileDescriptorBounded } from "../infra/file-descriptor-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -195,12 +197,52 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
   return `Unable to read message file ${messageFile}: ${message}`;
 }
 
+// Agent messages are prompt text; a 4 MiB cap gives generous headroom for
+// long system prompts while preventing a symlink/huge-file path from OOMing
+// the CLI before dispatch.
+const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
+
 async function readAgentMessageFile(messageFile: string): Promise<string> {
-  let buffer: Buffer;
+  // Preserve the legacy fs.readFile behavior of following symlinks by resolving
+  // the full chain first, then stat the final target. The byte cap applies to
+  // the resolved target, not the symlink path.
+  let resolvedPath: string;
+  let stat: Stats;
   try {
-    buffer = await readFile(messageFile);
+    resolvedPath = await fs.realpath(messageFile);
+    stat = await fs.stat(resolvedPath);
   } catch (err) {
     throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  }
+  if (stat.isDirectory()) {
+    // Keep the legacy fs.readFile directory UX; a generic non-regular-file
+    // rejection would regress the EISDIR message callers see today.
+    throw Object.assign(new Error(`Message file is a directory: ${messageFile}`), {
+      code: "EISDIR",
+    });
+  }
+  // Regular files fail fast on the recorded size. FIFOs and other streaming
+  // targets report size 0, so the bounded descriptor read below enforces the
+  // same cap byte-by-byte; without it, --message-file would stop accepting
+  // FIFOs the pre-PR fs.readFile path could drain until EOF.
+  if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
+    throw new Error(
+      `Unable to read message file ${messageFile}: File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${resolvedPath}`,
+    );
+  }
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(resolvedPath, "r");
+  } catch (err) {
+    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await readFileDescriptorBounded(handle.fd, AGENT_MESSAGE_FILE_MAX_BYTES);
+  } catch (err) {
+    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  } finally {
+    await handle.close().catch(() => undefined);
   }
   try {
     return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
