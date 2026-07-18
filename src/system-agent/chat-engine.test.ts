@@ -556,6 +556,54 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("rejects non-decimal menu numbers in hosted wizard choices", async () => {
+    useTempStateDir();
+    const wizardRuns: unknown[] = [];
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        const mode = await prompter.select({
+          message: "DM mode",
+          options: [
+            { value: "pair", label: "Pairing" },
+            { value: "open", label: "Open" },
+          ],
+        });
+        wizardRuns.push(mode);
+        const features = await prompter.multiselect({
+          message: "Features",
+          options: [
+            { value: "alerts", label: "Alerts" },
+            { value: "logs", label: "Logs" },
+          ],
+        });
+        wizardRuns.push(features);
+      },
+    });
+
+    const modeStep = await engine.handle("connect telegram");
+    expect(modeStep.text).toContain("1. Pairing");
+
+    const rejectedSelect = await engine.handle("1e0");
+    expect(rejectedSelect.text).toContain("I could not match that answer.");
+    expect(rejectedSelect.text).toContain("1. Pairing");
+    expect(wizardRuns).toEqual([]);
+
+    const featureStep = await engine.handle("1");
+    expect(featureStep.text).toContain("1. Alerts");
+
+    const rejectedMultiselect = await engine.handle("0x1");
+    expect(rejectedMultiselect.text).toContain("I could not match that answer.");
+    expect(rejectedMultiselect.text).toContain("1. Alerts");
+    expect(wizardRuns).toEqual(["pair"]);
+
+    const done = await engine.handle("1,2");
+    expect(done.text).toContain("telegram is configured");
+    expect(wizardRuns).toEqual(["pair", ["alerts", "logs"]]);
+  });
+
   it("rejects a hosted channel commit after a concurrent inference-route change", async () => {
     useTempStateDir();
     const baseConfig: OpenClawConfig = {
