@@ -749,6 +749,22 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (!text) {
     return;
   }
+
+  // When text is selected inside the right-clicked bubble, defer to the
+  // browser's native context menu (Copy, Search, spell-check, etc.) instead
+  // of the custom Reply menu.
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    const container =
+      range.commonAncestorContainer instanceof Element
+        ? range.commonAncestorContainer
+        : range.commonAncestorContainer.parentElement;
+    if (container && bubble.contains(container)) {
+      return;
+    }
+  }
+
   event.preventDefault();
   event.stopPropagation();
   const messageId =
