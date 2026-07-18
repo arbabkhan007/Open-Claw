@@ -205,7 +205,7 @@ export function runCliRespawnPlan(
   runtime: CliRespawnRuntime = {
     spawn,
     attachChildProcessBridge,
-    exit: process.exit.bind(process) as (code?: number) => never,
+    exit: (code?: number) => process.exit(code),
     writeError: (message, error) => console.error(message, error),
   },
 ): ChildProcess {
