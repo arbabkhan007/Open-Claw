@@ -189,7 +189,7 @@ describe("shouldUpdateMattermostDraftToolProgress", () => {
         },
       },
       accountId: "default",
-      allowUnresolvedSecretRef: true,
+      mode: "inspect",
     });
     return shouldUpdateMattermostDraftToolProgress(account);
   }
@@ -236,7 +236,7 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
         },
       },
       accountId: "default",
-      allowUnresolvedSecretRef: true,
+      mode: "inspect",
     });
     return shouldSuppressMattermostDefaultToolProgressMessages(account);
   }
