@@ -11,13 +11,14 @@ import {
   describeFailoverError,
   FailoverError,
   findCliMaxTurnsError,
-  isNonProviderRuntimeCoordinationError,
+  isNonProviderRuntimeError,
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "./failover-error.js";
+import { SandboxProvisioningError } from "./sandbox/errors.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -1333,7 +1334,7 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("openai");
   });
 
-  describe("isNonProviderRuntimeCoordinationError", () => {
+  describe("isNonProviderRuntimeError", () => {
     const makeSessionLockError = () =>
       new SessionWriteLockTimeoutError({
         timeoutMs: 10_000,
@@ -1349,28 +1350,55 @@ describe("failover-error", () => {
     };
 
     it("returns true for direct session write-lock timeout errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeSessionLockError())).toBe(true);
+      expect(isNonProviderRuntimeError(makeSessionLockError())).toBe(true);
     });
 
     it("returns true for direct embedded attempt session takeover errors", () => {
-      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+      expect(isNonProviderRuntimeError(makeEmbeddedTakeoverError())).toBe(true);
     });
 
     it("returns true when the coordination error is nested via cause", () => {
       const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
-      expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
+      expect(isNonProviderRuntimeError(wrapped)).toBe(true);
 
       const wrappedTakeover = new Error("wrapper", { cause: makeEmbeddedTakeoverError() });
-      expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
+      expect(isNonProviderRuntimeError(wrappedTakeover)).toBe(true);
+    });
+
+    it("returns true for sandbox provisioning errors without parsing their messages", () => {
+      const provisioningError = new SandboxProvisioningError(
+        "docker",
+        new Error("Sandbox image not found"),
+      );
+      expect(isNonProviderRuntimeError(provisioningError)).toBe(true);
+      expect(isNonProviderRuntimeError(new Error("wrapper", { cause: provisioningError }))).toBe(
+        true,
+      );
+      expect(resolveFailoverReasonFromError(provisioningError)).toBeNull();
+    });
+
+    it("preserves explicit provider classification over a nested provisioning error", () => {
+      const providerError = Object.assign(
+        new Error("upstream quota pressure", {
+          cause: new SandboxProvisioningError("docker", new Error("image missing")),
+        }),
+        { status: 429, code: "RESOURCE_EXHAUSTED" },
+      );
+
+      expect(isNonProviderRuntimeError(providerError)).toBe(false);
+      expect(resolveModelFallbackError(providerError)).toMatchObject({
+        kind: "failover",
+        error: { reason: "rate_limit" },
+      });
     });
 
     it("returns true for Codex missing tool-result local execution failures", () => {
       const missingToolResultMessage =
         "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
-      expect(isNonProviderRuntimeCoordinationError(new Error(missingToolResultMessage))).toBe(true);
-      expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
+      expect(isNonProviderRuntimeError(new Error(missingToolResultMessage))).toBe(true);
+      expect(isNonProviderRuntimeError({ reason: "missing_tool_result" })).toBe(true);
       expect(
-        isNonProviderRuntimeCoordinationError({
+        isNonProviderRuntimeError({
           message: "codex app-server turn failed",
           cause: { result: { reason: "missing_tool_result" } },
         }),
@@ -1380,12 +1408,10 @@ describe("failover-error", () => {
 
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
-        false,
-      );
+      expect(isNonProviderRuntimeError(timeoutErr)).toBe(false);
+      expect(isNonProviderRuntimeError({ status: 429, message: "rate limit" })).toBe(false);
       expect(
-        isNonProviderRuntimeCoordinationError({
+        isNonProviderRuntimeError({
           status: 429,
           code: "RESOURCE_EXHAUSTED",
           message: "upstream quota pressure",
@@ -1393,20 +1419,20 @@ describe("failover-error", () => {
         }),
       ).toBe(false);
       expect(
-        isNonProviderRuntimeCoordinationError({
+        isNonProviderRuntimeError({
           status: 503,
           message: "upstream overloaded",
           cause: { result: { reason: "missing_tool_result" } },
         }),
       ).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
+      expect(isNonProviderRuntimeError(null)).toBe(false);
+      expect(isNonProviderRuntimeError(undefined)).toBe(false);
     });
 
     it("does not suppress provider fallback for unrelated free text mentioning the marker", () => {
-      expect(isNonProviderRuntimeCoordinationError("reason=missing_tool_result")).toBe(false);
+      expect(isNonProviderRuntimeError("reason=missing_tool_result")).toBe(false);
       expect(
-        isNonProviderRuntimeCoordinationError(
+        isNonProviderRuntimeError(
           new Error("provider returned diagnostic text: reason=missing_tool_result"),
         ),
       ).toBe(false);
@@ -1422,7 +1448,7 @@ describe("failover-error", () => {
         name: "EmbeddedAttemptSessionTakeoverError",
         promptError: timeoutPromptErr,
       });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+      expect(isNonProviderRuntimeError(wrapper)).toBe(false);
     });
 
     it("returns false when takeover wrapper holds rate_limit in promptError", () => {
@@ -1435,7 +1461,7 @@ describe("failover-error", () => {
         name: "EmbeddedAttemptSessionTakeoverError",
         promptError: rateLimitPromptErr,
       });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+      expect(isNonProviderRuntimeError(wrapper)).toBe(false);
       const resolution = resolveModelFallbackError(wrapper);
       expect(resolution).toMatchObject({
         kind: "failover",
@@ -1455,7 +1481,7 @@ describe("failover-error", () => {
         name: "EmbeddedAttemptSessionTakeoverError",
         promptError: unknownPromptErr,
       });
-      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(true);
+      expect(isNonProviderRuntimeError(wrapper)).toBe(true);
     });
 
     it("returns true for pure takeover error without promptError (regression)", () => {
@@ -1463,9 +1489,9 @@ describe("failover-error", () => {
         new Error("session file changed while embedded prompt lock was released"),
         { name: "EmbeddedAttemptSessionTakeoverError" },
       );
-      expect(isNonProviderRuntimeCoordinationError(pureTakeover)).toBe(true);
+      expect(isNonProviderRuntimeError(pureTakeover)).toBe(true);
       expect(
-        isNonProviderRuntimeCoordinationError(
+        isNonProviderRuntimeError(
           Object.assign(new Error("provider rejected request: rate limit"), {
             name: "EmbeddedAttemptSessionTakeoverError",
           }),
