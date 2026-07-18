@@ -262,6 +262,7 @@ const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -1571,24 +1572,46 @@ async function resolveManagedOutgoingImageBlobUrl(
       if (requesterSessionKey) {
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
-      const res = await fetch(fetchUrl, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
+      const controller = new AbortController();
+      let deadlineFired = false;
+      const timeout = setTimeout(() => {
+        deadlineFired = true;
+        controller.abort(
+          new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
+        );
+      }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch(fetchUrl, {
+          method: "GET",
+          headers,
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        const blob = await res.blob();
+        if (!blob.type.startsWith("image/")) {
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+        managedImageBlobUrlMissCache.delete(cacheKey);
+        return blobUrl;
+      } catch (err) {
+        // After the deadline fires, both the initial fetch and the body read can
+        // reject with a native AbortError instead of our custom TimeoutError.
+        // Treat any post-deadline rejection as a timeout so the UI falls back.
+        if (deadlineFired) {
+          managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+          return null;
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeout);
       }
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) {
-        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-        return null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-      managedImageBlobUrlMissCache.delete(cacheKey);
-      return blobUrl;
     })().finally(() => {
       managedImageBlobUrlCache.delete(cacheKey);
     });
