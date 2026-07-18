@@ -6,10 +6,16 @@ import {
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+  type ReplyOperation,
+  createReplyOperation,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { resetDiagnosticRunActivityForTest } from "./diagnostic-run-activity.js";
+import { diagnosticLogger } from "./diagnostic-runtime.js";
 import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,
@@ -29,6 +35,21 @@ async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promi
     setImmediate(resolve);
   });
   expect(settled).toBe(false);
+}
+
+/** Patches diagnosticLogger.warn to capture messages as console.log for E2E proof output. */
+function captureDiagWarn(): () => string[] {
+  const captured: string[] = [];
+  const originalWarn = diagnosticLogger.warn.bind(diagnosticLogger);
+  diagnosticLogger.warn = (msg: string) => {
+    captured.push(msg);
+    // Still emit to the real warn so vitest can surface failures
+    originalWarn(msg);
+  };
+  return () => {
+    diagnosticLogger.warn = originalWarn;
+    return captured;
+  };
 }
 
 describe("stuck session recovery integration", () => {
@@ -302,5 +323,126 @@ describe("stuck session recovery integration", () => {
 
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
+  });
+
+  describe("terminal-phase reclaim (#105712)", () => {
+    // Phantom terminal-phase reply operations stay in the registry when:
+    // - fail() + retainFailureUntilComplete (failed phase, retained until complete())
+    // - abortByUser() on a running operation (aborted phase, 60s settle window)
+    // complete() calls clearState() immediately on current main, so "completed"
+    // phantoms are never in the registry at recovery time. Only "failed" (with
+    // retainFailureUntilComplete) and "aborted" (post-backend abortByUser)
+    // remain registered.
+    // The recovery sees isEmbeddedAgentRunActive=true via the reply-run registry.
+    //
+    // E2E reclaim proof: clears diagnostic activity to simulate a stale phantom
+    // (no recent progress events). The terminal settle window guard then falls
+    // back to params.ageMs (> 60s), allowing the reclaim path to fire.
+
+    async function runReclaimProof(
+      label: string,
+      setup: (op: ReplyOperation) => void,
+    ): Promise<void> {
+      const stopCapture = captureDiagWarn();
+      const sessionKey = `agent:main:e2e-${label}`;
+      const sessionId = `e2e-${label}-session`;
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId,
+        resetTriggered: false,
+      });
+
+      setup(operation);
+
+      // Simulate stale diagnostic state: clear activity so the settle window
+      // guard falls back to params.ageMs (> 60s → reclaim).
+      resetDiagnosticRunActivityForTest();
+
+      // Queue a message that should be delivered after reclaim
+      const queued = enqueueCommandInLane(lane, async () => "drained", {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        ageMs: REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS + 1000,
+        queueDepth: 1,
+      });
+
+      // Type-narrow the discriminated union before accessing variant-only fields
+      expect(outcome.status).toBe("aborted");
+      expect(outcome.action).toBe("abort_embedded_run");
+      if (outcome.status === "aborted") {
+        expect(outcome.aborted).toBe(true);
+        expect(outcome.drained).toBe(true);
+      }
+
+      const result = await Promise.race([
+        queued,
+        new Promise<string>((r) => {
+          setTimeout(() => r("TIMEOUT"), 5000);
+        }),
+      ]);
+      expect(result).toBe("drained");
+
+      // Print captured diagnostic warn output as terminal proof
+      const captured = stopCapture();
+      console.log(`\n[E2E/${label}] === Captured diagnostic warnings ===`);
+      for (const line of captured) {
+        console.log(`  ${line}`);
+      }
+      console.log(`[E2E/${label}] === Queued message: ${result} ===\n`);
+    }
+
+    it("reclaims a terminal failed phantom (retainFailureUntilComplete) and delivers queued messages", async () => {
+      await runReclaimProof("failed", (op) => {
+        op.retainFailureUntilComplete();
+        op.fail("run_failed", new Error("e2e phantom"));
+      });
+    });
+
+    it("reclaims a terminal aborted phantom (running → abortByUser) and delivers queued messages", async () => {
+      await runReclaimProof("aborted", (op) => {
+        op.setPhase("running");
+        op.abortByUser();
+      });
+    });
+
+    it("keeps the lane when a terminal reply operation is still within the settle window", async () => {
+      const sessionKey = "agent:main:terminal-settle";
+      const sessionId = "terminal-settle-session";
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId,
+        resetTriggered: false,
+      });
+      // fail with retainFailureUntilComplete keeps the operation in the registry
+      operation.retainFailureUntilComplete();
+      operation.fail("run_failed", new Error("simulated failure"));
+
+      // Block the lane with an unresponsive task
+      void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      const queued = enqueueCommandInLane(lane, async () => "drained", {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      expect(getQueueSize(lane)).toBe(2);
+
+      // Session age is well within the 60s settle window → recovery should NOT reclaim
+      await recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        ageMs: 30_000,
+        queueDepth: 1,
+      });
+
+      // Lane should still be blocked (settle window not expired)
+      await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
+      expect(getQueueSize(lane)).toBe(2);
+    });
   });
 });
