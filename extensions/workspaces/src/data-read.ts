@@ -137,7 +137,7 @@ async function resolveFileBinding(
   }
   const extension = path.extname(logicalPath).toLowerCase();
   if (extension === ".md" || extension === ".csv") {
-    return content;
+    return applyJsonPointer(content, binding.pointer);
   }
   try {
     return applyJsonPointer(JSON.parse(content), binding.pointer);
