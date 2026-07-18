@@ -754,6 +754,7 @@ describe("handleChatGatewayEvent", () => {
     const state = createState({
       sessionKey: "agent:main:feishu:direct:peer-1",
       chatRunId: null,
+      chatRunError: { summary: "Previous run failed" },
       chatStream: null,
       chatStreamStartedAt: null,
     });
@@ -769,6 +770,7 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
     expect(state.chatRunId).toBe("run-feishu-1");
+    expect(state.chatRunError).toBeNull();
     expect(state.chatStream).toBe("Observed reply");
     expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
   });

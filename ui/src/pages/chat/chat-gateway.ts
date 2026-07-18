@@ -253,6 +253,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
   if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
     state.chatRunId = payload.runId;
+    state.chatRunError = null;
     state.chatStreamStartedAt ??= Date.now();
   }
 
