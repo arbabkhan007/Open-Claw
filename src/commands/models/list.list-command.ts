@@ -124,6 +124,9 @@ export async function modelsListCommand(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  // When models.mode is "replace", only show explicitly configured providers.
+  const modelsModeReplace = cfg.models?.mode === "replace";
+  // --all and --provider-filtered browse work regardless of models.mode.
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
   // Full/provider-filtered lists may need runtime, manifest, and registry rows.
   // Defer that planning so default configured-only output stays cheap.
@@ -187,6 +190,7 @@ export async function modelsListCommand(
     skipRuntimeModelSuppression,
     metadataSnapshot,
     workspaceDir,
+    modelsModeReplace,
   });
   const rows: ModelRow[] = [];
 
