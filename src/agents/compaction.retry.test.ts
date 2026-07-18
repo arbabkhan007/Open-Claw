@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { generateSummary, type ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { retryAsync } from "../infra/retry.js";
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", { spy: true });
@@ -162,5 +163,35 @@ describe("compaction retry integration", () => {
     expect(delays[1]).toBe(1000);
 
     vi.useRealTimers();
+  });
+
+  it("aborts promptly during retry backoff when the caller signal fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      mockGenerateSummary
+        .mockRejectedValueOnce(new Error("transient provider error"))
+        .mockResolvedValueOnce("should not be reached");
+
+      const promise = runSummaryRetry({
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 5000,
+        jitter: 0,
+        label: "compaction/generateSummary",
+        shouldRetry: () => !controller.signal.aborted,
+        sleep: (ms) => sleepWithAbort(ms, controller.signal),
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
+      controller.abort();
+
+      await expect(promise).rejects.toThrow("aborted");
+      expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
