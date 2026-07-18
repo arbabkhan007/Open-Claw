@@ -128,6 +128,26 @@ describe("pinAndroidVersion", () => {
     expect(resolveAndroidVersion(rootDir).versionCode).toBe(2026060202);
   });
 
+  it("rejects explicit versionCodes reserved for the matching Wear build", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+      prefix: "openclaw-android-pin-",
+    });
+
+    for (const explicitVersionCode of [2026060250, 2026060299]) {
+      expect(() =>
+        pinAndroidVersion({
+          explicitVersion: "2026.6.2",
+          explicitVersionCode,
+          fromGateway: false,
+          rootDir,
+          sync: false,
+        }),
+      ).toThrow("Expected 2026060201 through 2026060249 for version 2026.6.2");
+    }
+  });
+
   it("can skip syncing checked-in artifacts when requested", () => {
     const rootDir = writeAndroidFixture({
       version: "2026.6.2",

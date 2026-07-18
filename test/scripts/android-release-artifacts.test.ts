@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import {
   androidBuildMetadataGradleArgs,
   resolveAndroidBuildMetadata,
-  verifyAndroidReleaseSource,
 } from "../../apps/android/scripts/build-release-artifacts.ts";
+import { verifyAndroidReleaseSource } from "../../scripts/lib/android-release-source.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "apps/android/scripts/build-release-artifacts.ts";

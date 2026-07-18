@@ -321,16 +321,34 @@ def play_metadata_path
   File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
 end
 
-def play_screenshot_paths
-  Dir[File.join(play_metadata_path, "**", "images", "**", "*.{png,jpg,jpeg}")]
+def android_screenshot_manifest_script
+  File.join(repo_root, "scripts", "android-screenshot-manifest.ts")
 end
 
-def validate_android_screenshots!
-  return unless play_screenshot_upload_requested?
+def validate_current_screenshot_set!(form_factor:, expected_git_sha:)
+  sh(
+    shell_join(
+      [
+        "node",
+        "--import",
+        "tsx",
+        android_screenshot_manifest_script,
+        "--root",
+        repo_root,
+        "--form-factor",
+        form_factor,
+        "--expected-git-sha",
+        expected_git_sha,
+      ]
+    )
+  )
+end
 
-  if play_screenshot_paths.empty?
-    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no screenshots were found under apps/android/fastlane/metadata/android/*/images.")
-  end
+def validate_android_screenshots!(upload_screenshots:, expected_git_sha:)
+  return unless upload_screenshots
+
+  validate_current_screenshot_set!(form_factor: "phone", expected_git_sha: expected_git_sha)
+  validate_current_screenshot_set!(form_factor: "wear", expected_git_sha: expected_git_sha)
 end
 
 def release_artifact_path(version)
@@ -345,12 +363,35 @@ def play_release_artifact_paths(version)
   [release_artifact_path(version), wear_release_artifact_path(version)]
 end
 
+def validate_android_release_artifact_manifest!(version_metadata, expected_git_sha)
+  sh(
+    shell_join(
+      [
+        "node",
+        "--import",
+        "tsx",
+        File.join(repo_root, "scripts", "android-release-artifact-manifest.ts"),
+        "validate",
+        "--root",
+        repo_root,
+        "--expected-git-sha",
+        expected_git_sha,
+        "--version",
+        version_metadata.fetch(:version),
+        "--phone-version-code",
+        version_metadata.fetch(:version_code).to_s,
+      ]
+    )
+  )
+end
+
 def build_release_artifacts!
   sh(shell_join(["bun", File.join(android_root, "scripts", "build-release-artifacts.ts")]))
 end
 
 def capture_android_screenshots!
-  sh(shell_join(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")]))
+  screenshot_script = File.join(repo_root, "scripts", "android-screenshots.sh")
+  sh(shell_join(["bash", screenshot_script, "--form-factor", "all"]))
 end
 
 def mobile_release_ref_script
@@ -471,7 +512,10 @@ def validate_android_release_preflight!(version_metadata)
 end
 
 def upload_play_store_metadata!(version_metadata)
-  validate_android_screenshots!
+  upload_screenshots = play_screenshot_upload_requested?
+  if upload_screenshots
+    validate_android_screenshots!(upload_screenshots: true, expected_git_sha: release_git_sha)
+  end
   sync_android_changelog!(version_metadata.fetch(:version_code))
 
   upload_to_play_store(
@@ -485,27 +529,27 @@ def upload_play_store_metadata!(version_metadata)
     skip_upload_metadata: !play_metadata_upload_requested?,
     skip_upload_changelogs: false,
     skip_upload_images: !play_image_upload_requested?,
-    skip_upload_screenshots: !play_screenshot_upload_requested?,
+    skip_upload_screenshots: !upload_screenshots,
     validate_only: play_validate_only?
   )
 end
 
 def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
   release_sha = release_git_sha
+  validate_android_screenshots!(upload_screenshots: upload_screenshots, expected_git_sha: release_sha)
+  artifact_paths = play_release_artifact_paths(version_metadata.fetch(:version))
+  missing_artifacts = artifact_paths.reject { |path| File.exist?(path) }
+  unless missing_artifacts.empty?
+    UI.user_error!("Missing Play release artifacts at #{missing_artifacts.join(', ')}. Run pnpm android:release:archive first.")
+  end
+  validate_android_release_artifact_manifest!(version_metadata, release_sha)
   ensure_mobile_release_ref_available!(
     platform: "android",
     version: version_metadata.fetch(:version),
     version_code: version_metadata.fetch(:version_code),
     sha: release_sha
   )
-  ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1" if upload_screenshots
-  validate_android_screenshots!
   sync_android_changelog!(version_metadata.fetch(:version_code))
-  artifact_paths = play_release_artifact_paths(version_metadata.fetch(:version))
-  missing_artifacts = artifact_paths.reject { |path| File.exist?(path) }
-  unless missing_artifacts.empty?
-    UI.user_error!("Missing Play release artifacts at #{missing_artifacts.join(', ')}. Run pnpm android:release:archive first.")
-  end
 
   phone_artifact_path, wear_artifact_path = artifact_paths
   upload_play_builds_atomically!(

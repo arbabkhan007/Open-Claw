@@ -157,8 +157,23 @@ describe("resolveAndroidVersion", () => {
     });
 
     expect(() => resolveAndroidVersion(rootDir)).toThrow(
-      "Expected 2026060201 through 2026060299 for version 2026.6.2",
+      "Expected 2026060201 through 2026060249 for version 2026.6.2",
     );
+  });
+
+  it("accepts the final phone build number and rejects Wear-reserved version codes", () => {
+    const acceptedRoot = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060249,
+    });
+    expect(resolveAndroidVersion(acceptedRoot).versionCode).toBe(2026060249);
+
+    for (const versionCode of [2026060250, 2026060299]) {
+      const rejectedRoot = writeAndroidFixture({ version: "2026.6.2", versionCode });
+      expect(() => resolveAndroidVersion(rejectedRoot)).toThrow(
+        "Expected 2026060201 through 2026060249 for version 2026.6.2",
+      );
+    }
   });
 });
 

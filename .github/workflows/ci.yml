@@ -524,7 +524,7 @@ jobs:
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
-          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
+          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v3");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;

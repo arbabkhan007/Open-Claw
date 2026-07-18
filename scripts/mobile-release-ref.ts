@@ -30,6 +30,7 @@ type RemoteRefState = {
 const REF_PREFIX = "refs/openclaw/mobile-releases";
 const VERSION_RE = /^20\d{2}\.(?:[1-9]\d?)\.(?:[1-9]\d*)$/u;
 const POSITIVE_INTEGER_RE = /^[1-9]\d*$/u;
+const ANDROID_PHONE_BUILD_NUMBER_MAX = 49;
 
 function git(args: string[], rootDir: string, deps: GitDeps = {}): string {
   const exec = deps.execFileSync ?? execFileSync;
@@ -187,10 +188,10 @@ function validateAndroidVersionCode(version: string, versionCode: string | null)
     code.length !== prefix.length + 2 ||
     !Number.isInteger(suffix) ||
     suffix < 1 ||
-    suffix > 99
+    suffix > ANDROID_PHONE_BUILD_NUMBER_MAX
   ) {
     throw new Error(
-      `Invalid Android versionCode '${code}'. Expected ${prefix}01 through ${prefix}99 for version ${version}.`,
+      `Invalid Android versionCode '${code}'. Expected ${prefix}01 through ${prefix}49 for version ${version}.`,
     );
   }
   return code;

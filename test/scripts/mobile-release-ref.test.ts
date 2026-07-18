@@ -57,9 +57,9 @@ describe("mobile-release-ref", () => {
       mobileReleaseRefFor({
         platform: "android",
         version: "2026.6.10",
-        versionCode: "2026061008",
+        versionCode: "2026061049",
       }),
-    ).toBe("refs/openclaw/mobile-releases/android/2026.6.10-2026061008");
+    ).toBe("refs/openclaw/mobile-releases/android/2026.6.10-2026061049");
   });
 
   it("validates platform-specific numeric identities", () => {
@@ -73,13 +73,15 @@ describe("mobile-release-ref", () => {
         versionCode: "not-a-code",
       }),
     ).toThrow("Invalid Android versionCode");
-    expect(() =>
-      mobileReleaseRefFor({
-        platform: "android",
-        version: "2026.6.10",
-        versionCode: "2026061101",
-      }),
-    ).toThrow("Expected 2026061001 through 2026061099");
+    for (const versionCode of ["2026061050", "2026061099", "2026061101"]) {
+      expect(() =>
+        mobileReleaseRefFor({
+          platform: "android",
+          version: "2026.6.10",
+          versionCode,
+        }),
+      ).toThrow("Expected 2026061001 through 2026061049");
+    }
     expect(() =>
       mobileReleaseRefFor({ platform: "ios", version: "2026.06.10", build: "8" }),
     ).toThrow("Invalid mobile release version");

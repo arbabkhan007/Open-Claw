@@ -80,6 +80,10 @@ android {
     lintConfig = rootProject.file("app/lint.xml")
     warningsAsErrors = true
   }
+
+  testOptions {
+    unitTests.isIncludeAndroidResources = true
+  }
 }
 
 kotlin {

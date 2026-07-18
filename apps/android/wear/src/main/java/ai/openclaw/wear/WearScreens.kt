@@ -74,7 +74,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val PAGE_COUNT = 5
 private const val CHAT_PAGE = 0
 private const val VOICE_PAGE = 1
 private const val AGENTS_PAGE = 2
@@ -83,6 +82,16 @@ private const val CONTROLS_PAGE = 4
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
+
+internal enum class WearAppPage(
+  val pagerIndex: Int,
+) {
+  Chat(CHAT_PAGE),
+  Voice(VOICE_PAGE),
+  Agents(AGENTS_PAGE),
+  Sessions(SESSIONS_PAGE),
+  Controls(CONTROLS_PAGE),
+}
 
 @Composable
 internal fun OpenClawWearScreens(
@@ -101,6 +110,7 @@ internal fun OpenClawWearScreens(
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
+  initialPage: WearAppPage = WearAppPage.Chat,
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -126,11 +136,15 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState = rememberPagerState(pageCount = { PAGE_COUNT })
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPage.pagerIndex,
+      pageCount = { WearAppPage.entries.size },
+    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
-  var showVoiceSwipeHint by remember { mutableStateOf(true) }
+  var showVoiceSwipeHint by remember { mutableStateOf(initialPage != WearAppPage.Voice) }
   var realtimeStartedAtMillis by remember { mutableLongStateOf(0L) }
   var realtimeElapsedSeconds by remember { mutableLongStateOf(0L) }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {

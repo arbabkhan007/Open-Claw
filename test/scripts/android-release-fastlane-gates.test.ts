@@ -46,11 +46,24 @@ describe("Android Fastlane release upload gates", () => {
     expect(fastfile).toContain('"--sha"');
     expect(fastfile).toContain("repo_root");
     expect(uploadBuild).toContain("release_sha = release_git_sha");
+    expect(uploadBuild).toContain("upload_screenshots: false");
+    expect(uploadBuild).toContain(
+      "validate_android_screenshots!(upload_screenshots: upload_screenshots, expected_git_sha: release_sha)",
+    );
+    expect(uploadBuild).not.toContain("play_screenshot_upload_requested?");
+    expect(uploadBuild).not.toContain('ENV["SUPPLY_UPLOAD_SCREENSHOTS"]');
     expect(uploadBuild).toContain("ensure_mobile_release_ref_available!");
+    expect(uploadBuild).toContain("validate_android_release_artifact_manifest!");
     expect(uploadBuild).toContain("record_mobile_release_ref!");
-    expect(uploadBuild.match(/sha: release_sha/g)).toHaveLength(2);
+    expect(uploadBuild.match(/^\s+sha: release_sha$/gmu)).toHaveLength(2);
     expect(uploadBuild.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
       uploadBuild.indexOf("upload_play_builds_atomically!("),
+    );
+    expect(uploadBuild.indexOf("validate_android_screenshots!")).toBeLessThan(
+      uploadBuild.indexOf("upload_play_builds_atomically!("),
+    );
+    expect(uploadBuild.indexOf("validate_android_release_artifact_manifest!")).toBeLessThan(
+      uploadBuild.indexOf("ensure_mobile_release_ref_available!"),
     );
     expect(uploadBuild.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
       uploadBuild.indexOf("upload_play_builds_atomically!("),
@@ -72,7 +85,10 @@ describe("Android Fastlane release upload gates", () => {
   });
 
   it("generates fresh screenshots before building and uploading a release", () => {
-    const releaseUpload = laneBody(readFastfile(), "release_upload");
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+    const screenshotCapture = functionBody(fastfile, "capture_android_screenshots!");
+    const playStore = laneBody(fastfile, "play_store");
 
     expect(releaseUpload).toContain("screenshots");
     expect(releaseUpload.indexOf("screenshots")).toBeLessThan(
@@ -82,6 +98,32 @@ describe("Android Fastlane release upload gates", () => {
       releaseUpload.indexOf("upload_play_store_build!"),
     );
     expect(releaseUpload).toContain('ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"');
-    expect(readFastfile()).toContain("*.{png,jpg,jpeg}");
+    expect(releaseUpload).toContain("upload_screenshots: true");
+    expect(screenshotCapture.match(/--form-factor/g)).toHaveLength(1);
+    expect(screenshotCapture).toContain('"all"');
+    expect(playStore).toContain("upload_play_store_build!(version_metadata)");
+    expect(playStore).not.toContain("upload_screenshots: true");
+  });
+
+  it("requires current phone and Wear evidence only when screenshot upload is explicit", () => {
+    const fastfile = readFastfile();
+    const validateScreenshots = functionBody(fastfile, "validate_android_screenshots!");
+    const validateSet = functionBody(fastfile, "validate_current_screenshot_set!");
+    const metadataUpload = functionBody(fastfile, "upload_play_store_metadata!");
+
+    expect(validateScreenshots).toContain("return unless upload_screenshots");
+    expect(validateScreenshots.match(/validate_current_screenshot_set!/g)).toHaveLength(2);
+    expect(validateScreenshots).toContain('form_factor: "phone"');
+    expect(validateScreenshots).toContain('form_factor: "wear"');
+    expect(validateSet).toContain('"node"');
+    expect(validateSet).toContain('"--import"');
+    expect(validateSet).toContain('"tsx"');
+    expect(validateSet).toContain("android_screenshot_manifest_script");
+    expect(validateSet).toContain('"--form-factor"');
+    expect(validateSet).toContain('"--expected-git-sha"');
+    expect(metadataUpload).toContain("if upload_screenshots");
+    expect(metadataUpload).toContain(
+      "validate_android_screenshots!(upload_screenshots: true, expected_git_sha: release_git_sha)",
+    );
   });
 });
