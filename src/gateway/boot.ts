@@ -21,6 +21,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { preserveTemporarySessionMapping } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { clearBootEchoContextForSession, setBootEchoContextForSession } from "./boot-echo-guard.js";
@@ -72,21 +73,46 @@ function resolveBootSessionKey(sessionKey: string): string {
   return `agent:${agentId}:boot`;
 }
 
+const MAX_BOOT_FILE_BYTES = 16 * 1024 * 1024;
+
 async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
   const bootPath = path.join(workspaceDir, BOOT_FILENAME);
+
+  // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
+  // while keeping directory/permission/size-limit failures surfaced to the
+  // operator. A realpath ENOENT (missing BOOT.md or a dangling symlink) keeps
+  // the established readFile ENOENT contract: treat as missing, not failure.
+  let resolvedPath: string;
   try {
-    const content = await fs.readFile(bootPath, "utf-8");
+    resolvedPath = await fs.realpath(bootPath);
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code === "ENOENT") {
+      return { status: "missing" };
+    }
+    throw err;
+  }
+
+  try {
+    const { buffer } = await readRegularFile({
+      filePath: resolvedPath,
+      maxBytes: MAX_BOOT_FILE_BYTES,
+    });
+    const content = buffer.toString("utf-8");
     const trimmed = content.trim();
     if (!trimmed) {
       return { status: "empty" };
     }
     return { status: "ok", content: trimmed };
   } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code === "ENOENT") {
-      return { status: "missing" };
+    const anyErr = err as { message?: string };
+    // Only an explicit size overflow should skip the boot check; directories,
+    // permission errors, and path races keep the current failed startup behavior
+    // so operators notice misconfigured BOOT.md paths.
+    if (anyErr.message?.startsWith("File exceeds")) {
+      return { status: "empty" };
     }
     throw err;
   }
