@@ -104,6 +104,10 @@ private struct AppearanceSettingsScreen: View {
 }
 
 extension SettingsProTab {
+    var appearanceSettingsDestination: some View {
+        AppearanceSettingsScreen()
+    }
+
     var appearanceRow: some View {
         AppearanceSettingsRow()
     }
