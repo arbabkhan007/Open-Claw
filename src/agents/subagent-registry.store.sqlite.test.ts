@@ -11,6 +11,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  loadSubagentRunsForChildSessionFromSqlite,
+  loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
@@ -208,6 +210,86 @@ describe("subagent registry sqlite store", () => {
       expect(
         openOpenClawStateDatabase().db.prepare("SELECT COUNT(*) AS count FROM subagent_runs").get(),
       ).toEqual({ count: 0 });
+    });
+  });
+
+  it("loads explicit controller rows and null-controller requester fallbacks", async () => {
+    await withTempStateEnv(async () => {
+      const explicit = createRun({
+        runId: "explicit",
+        controllerSessionKey: "agent:main:controller",
+        requesterSessionKey: "agent:main:other",
+      });
+      const fallback = createRun({
+        runId: "fallback",
+        controllerSessionKey: undefined,
+        requesterSessionKey: "agent:main:controller",
+      });
+      const other = createRun({
+        runId: "other",
+        controllerSessionKey: "agent:main:other-controller",
+        requesterSessionKey: "agent:main:controller",
+      });
+
+      saveSubagentRegistryToSqlite(
+        new Map([
+          [explicit.runId, explicit],
+          [fallback.runId, fallback],
+          [other.runId, other],
+        ]),
+      );
+
+      expect(
+        loadSubagentRunsForControllerFromSqlite("agent:main:controller").map((run) => run.runId),
+      ).toEqual(["explicit", "fallback"]);
+      expect(loadSubagentRunsForControllerFromSqlite("   ")).toEqual([]);
+    });
+  });
+
+  it("loads only one child session in deterministic generation-compatible order", async () => {
+    await withTempStateEnv(async () => {
+      const childSessionKey = "agent:main:subagent:restarted";
+      const legacy = createRun({
+        runId: "legacy",
+        childSessionKey,
+        createdAt: 300,
+        generation: 1,
+      });
+      const latestGeneration = createRun({
+        runId: "latest-generation",
+        childSessionKey,
+        createdAt: 100,
+        generation: 2,
+      });
+      const sameGenerationEarlier = createRun({
+        runId: "same-generation-alpha",
+        childSessionKey,
+        createdAt: 200,
+        generation: 2,
+      });
+      const sameGenerationLater = createRun({
+        runId: "same-generation-zulu",
+        childSessionKey,
+        createdAt: 200,
+        generation: 2,
+      });
+      const otherChild = createRun({
+        runId: "other-child",
+        childSessionKey: "agent:main:subagent:other",
+      });
+
+      saveSubagentRegistryToSqlite(
+        new Map(
+          [legacy, latestGeneration, sameGenerationLater, sameGenerationEarlier, otherChild].map(
+            (run) => [run.runId, run],
+          ),
+        ),
+      );
+
+      expect(
+        loadSubagentRunsForChildSessionFromSqlite(childSessionKey).map((run) => run.runId),
+      ).toEqual(["legacy", "latest-generation", "same-generation-alpha", "same-generation-zulu"]);
+      expect(loadSubagentRunsForChildSessionFromSqlite("   ")).toEqual([]);
     });
   });
 });

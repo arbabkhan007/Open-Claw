@@ -20,6 +20,7 @@ import type {
   SubagentExecutionState,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
@@ -321,6 +322,64 @@ function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
       .orderBy("created_at", "asc")
       .orderBy("run_id", "asc"),
   ).rows;
+}
+
+/** Loads runs for a controller, including older rows whose requester is the controller. */
+export function loadSubagentRunsForControllerFromSqlite(
+  controllerSessionKey: string,
+): SubagentRunRecord[] {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where((eb) =>
+        eb.or([
+          eb("controller_session_key", "=", key),
+          eb.and([eb("controller_session_key", "is", null), eb("requester_session_key", "=", key)]),
+        ]),
+      )
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
+}
+
+/** Loads all generations for one child session through the child-session index. */
+export function loadSubagentRunsForChildSessionFromSqlite(
+  childSessionKey: string,
+): SubagentRunRecord[] {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where("child_session_key", "=", key)
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  const runs = rows
+    .flatMap((row) => {
+      const run = rowToSubagentRunRecord(row);
+      return run ? [run] : [];
+    })
+    .toSorted(compareSubagentRunGeneration);
+  return runs;
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */
