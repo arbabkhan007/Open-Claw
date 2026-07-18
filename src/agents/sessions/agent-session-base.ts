@@ -43,6 +43,7 @@ import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
+import { cleanupInboundMediaStaging } from "./tools/read.js";
 
 interface ToolDefinitionEntry {
   definition: ToolDefinition;
@@ -573,6 +574,8 @@ export abstract class AgentSessionBase {
     this.disconnectFromAgent();
     this.eventListeners = [];
     cleanupSessionResources(this.sessionId);
+    // Clean up inbound media staging directories (best-effort).
+    cleanupInboundMediaStaging().catch(() => {});
   }
 
   // =========================================================================

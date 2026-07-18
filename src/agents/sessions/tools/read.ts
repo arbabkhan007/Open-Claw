@@ -1,6 +1,22 @@
 import { constants } from "node:fs";
-import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import {
+  access as fsAccess,
+  copyFile,
+  mkdir,
+  readFile as fsReadFile,
+  rm,
+  stat,
+} from "node:fs/promises";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve as resolvePath,
+  sep,
+} from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
@@ -9,6 +25,7 @@ import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
+  parseInboundMediaUri,
   resolveMediaReferenceLocalPath,
 } from "../../../media/media-reference.js";
 /**
@@ -78,6 +95,8 @@ export interface ReadToolOptions {
   autoResizeImages?: boolean;
   /** Custom operations for file reading. Default: local filesystem */
   operations?: ReadOperations;
+  /** Whether the agent runs in sandbox mode. When true, inbound media staging is skipped (sandbox has proactive staging). */
+  sandboxMode?: boolean;
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
@@ -169,10 +188,30 @@ function getCompactReadClassification(
   return undefined;
 }
 
-async function resolveLocalReadPath(filePath: string, cwd: string): Promise<string> {
+async function resolveLocalReadPath(
+  filePath: string,
+  cwd: string,
+  sandboxMode = false,
+): Promise<string> {
   const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
-    return await resolveMediaReferenceLocalPath(normalizedMediaSource);
+    const physicalPath = await resolveMediaReferenceLocalPath(normalizedMediaSource);
+
+    // Persist inbound media to workspace so image tool can locate files
+    // across turns. This is a best-effort side effect; failure does not
+    // block the read itself.
+    try {
+      await persistInboundMediaToWorkspace({
+        normalizedSource: normalizedMediaSource,
+        physicalPath,
+        workspaceDir: cwd,
+        sandboxMode,
+      });
+    } catch {
+      // Staging is best-effort — read still succeeds with base64 payload.
+    }
+
+    return physicalPath;
   }
   return resolveReadPath(filePath, cwd);
 }
@@ -183,6 +222,83 @@ async function resolveReadToolPath(
   cwd: string,
 ): Promise<string> {
   return await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
+}
+
+// ──── Inbound media staging ────────────────────────────────────────────────
+
+/** Max bytes for inbound media workspace staging, aligned with STAGED_MEDIA_MAX_BYTES. */
+const INBOUND_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Tracked staging directories for cleanup. */
+const trackedInboundDirs = new Set<string>();
+
+async function persistInboundMediaToWorkspace(params: {
+  normalizedSource: string;
+  physicalPath: string;
+  workspaceDir: string;
+  sandboxMode: boolean;
+}): Promise<void> {
+  const { normalizedSource, physicalPath, workspaceDir, sandboxMode } = params;
+
+  // Sandbox mode already has proactive staging — skip duplicate copy.
+  if (sandboxMode) {
+    return;
+  }
+
+  // Only handle media://inbound/<id> URIs. parseInboundMediaUri throws for
+  // other media:// locations (store, etc.), so we catch those and return early.
+  let uri: ReturnType<typeof parseInboundMediaUri>;
+  try {
+    uri = parseInboundMediaUri(normalizedSource);
+  } catch {
+    return;
+  }
+  if (!uri) {
+    return;
+  }
+
+  // Size guard: skip files larger than 10MB.
+  const fileStat = await stat(physicalPath);
+  if (fileStat.size > INBOUND_MEDIA_MAX_BYTES) {
+    return;
+  }
+
+  const inboundDir = join(workspaceDir, "media", "inbound");
+  await mkdir(inboundDir, { recursive: true });
+  trackedInboundDirs.add(inboundDir);
+
+  // Destination: media/inbound/<id><ext>
+  const ext = extname(physicalPath);
+  const destPath = join(inboundDir, `${uri.id}${ext}`);
+
+  // Skip if already staged with identical size (same-session re-read).
+  try {
+    const destStat = await stat(destPath);
+    if (destStat.size === fileStat.size) {
+      return;
+    }
+  } catch {
+    // File does not exist yet, continue.
+  }
+
+  await copyFile(physicalPath, destPath);
+}
+
+/**
+ * Clean up all inbound media staging directories created by this process.
+ * Best-effort: failures are silently ignored.
+ *
+ * Future work: L2 (time-based) and L3 (LRU hard cap) cleanup strategies.
+ */
+export async function cleanupInboundMediaStaging(): Promise<void> {
+  for (const inboundDir of trackedInboundDirs) {
+    try {
+      await rm(inboundDir, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+  }
+  trackedInboundDirs.clear();
 }
 
 function formatCompactReadCall(
@@ -253,7 +369,12 @@ export function createReadToolDefinition(
   options?: ReadToolOptions,
 ): ToolDefinition<typeof readSchema, ReadToolDetails | undefined> {
   const autoResizeImages = options?.autoResizeImages ?? true;
-  const ops = options?.operations ?? defaultReadOperations;
+  const sandboxMode = options?.sandboxMode ?? false;
+  const ops = options?.operations ?? {
+    ...defaultReadOperations,
+    resolvePath: (filePath: string, dir: string) =>
+      resolveLocalReadPath(filePath, dir, sandboxMode),
+  };
   return {
     name: "read",
     label: "read",
