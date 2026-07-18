@@ -118,7 +118,7 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     }
   });
 
-  it("separates internal control-surface error guidance from raw details", async () => {
+  it("keeps raw failure details out of the internal control surface in verbose mode", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
@@ -146,7 +146,7 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      resolvedVerboseLevel: "full",
     });
 
     expect(result.kind).toBe("final");

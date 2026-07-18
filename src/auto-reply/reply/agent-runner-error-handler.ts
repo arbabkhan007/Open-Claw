@@ -445,8 +445,11 @@ export async function handleAgentExecutionError(params: {
       ? buildExternalRunFailureReply(
           { message, error: err },
           {
-            includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
-            includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+            includeAuthProfileId:
+              !params.shouldSurfaceToControlUi && !isNonDirectConversationContext(turn.sessionCtx),
+            includeDetails:
+              !params.shouldSurfaceToControlUi &&
+              isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
             replayPrevented: params.overloadRetryState.unsafeToReplay,
           },
