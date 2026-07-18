@@ -5,6 +5,7 @@ import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/fi
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readChunkWithIdleTimeout,
@@ -98,6 +99,8 @@ type FetchMediaOptions = {
    * hostname-policy checks instead of forcing local pinned-DNS first.
    */
   trustExplicitProxyDns?: boolean;
+  /** AbortSignal that interrupts the retry backoff between fetch attempts. */
+  signal?: AbortSignal;
 };
 
 /** Options for validating and saving an existing Response body into the media store. */
@@ -544,6 +547,7 @@ async function withMediaFetchRetry<T>(
   const callerShouldRetry = retry.shouldRetry;
   return await retryAsync(fn, {
     label: "media:fetch",
+    ...(options.signal ? { sleep: (ms: number) => sleepWithAbort(ms, options.signal) } : {}),
     ...retry,
     shouldRetry: (err, attempt) =>
       callerShouldRetry ? callerShouldRetry(err, attempt) : shouldRetryMediaFetch(err),

@@ -1,6 +1,8 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { sleepWithAbort } from "../infra/backoff.js";
+import { retryAsync } from "../infra/retry.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -1283,4 +1285,38 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("media fetch retry abort", () => {
+  it("aborts promptly during retry backoff when the caller signal fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      let calls = 0;
+      const fn = async () => {
+        calls++;
+        throw new Error("transient fetch error");
+      };
+
+      const promise = retryAsync(fn, {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 500,
+        jitter: 0,
+        shouldRetry: () => !controller.signal.aborted,
+        sleep: (ms) => sleepWithAbort(ms, controller.signal),
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+      controller.abort();
+
+      await expect(promise).rejects.toThrow();
+      expect(calls).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
