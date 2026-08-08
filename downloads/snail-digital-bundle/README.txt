@@ -1,20 +1,25 @@
-MEADOW COIL SNAIL DIGITAL PRODUCT BUNDLE
+MEADOW COIL SNAIL — DIGITAL ETSY PRODUCT BUNDLE
 
-This bundle contains original AI-generated promotional images, an original crochet pattern PDF, a narrated audio tutorial, and an animated GIF tutorial preview.
+This folder contains an original crochet pattern PDF, 12 original promotional images, an animated tutorial GIF, spoken tutorial audio, and Etsy listing copy.
 
-Files:
-- meadow-coil-snail-pattern.pdf — printable customer instruction PDF
-- snail-hero.png — Etsy listing main image
-- snail-colorways.png — Etsy colorways image
-- snail-shell-detail.png — Etsy detail image
-- snail-materials.png — Etsy materials image
-- meadow-coil-snail-tutorial.gif — short visual tutorial/preview
-- snail-tutorial-narration.mp3 — spoken tutorial narration
-- snail-product-launch-kit.md — listing copy, tags, FAQ, and launch checklist
+IMAGE ORDER FOR ETSY:
+01 snail-hero.png — main listing photo
+02 snail-colorways.png — four colorways
+03 snail-shell-detail.png — shell detail
+04 snail-materials.png — materials flat lay
+05 snail-side-profile.png — side profile and tail
+06 snail-front-face.png — embroidered face close-up
+07 snail-handmade-scale.png — palm-sized scale
+08 snail-pattern-preview.png — digital pattern preview
+09 snail-leaf-accessory.png — optional accessory
+10 snail-gift-box.png — gift presentation
+11 snail-stitch-detail.png — stitch texture
+12 snail-seasonal-palette.png — seasonal variations
 
-Before selling:
-1. Crochet and test the sample yourself.
-2. Have another crocheter test every round.
-3. Replace AI promotional images with photos of your own finished sample when possible.
-4. Confirm Etsy's current digital-file size and content rules.
-5. Make clear that the listing is for a digital PDF, not a physical plush.
+Also included:
+- meadow-coil-snail-pattern.pdf
+- meadow-coil-snail-tutorial.gif
+- snail-tutorial-narration.mp3
+- snail-product-launch-kit.md
+
+Before selling: make and photograph your own physical sample, have a second crocheter test the pattern, and clearly state that the Etsy listing is for a digital PDF. The generated images are promotional concepts and should not be presented as photographs of a product you have not made.
